@@ -30,6 +30,7 @@ what you measured rather than from a table.
 | [docs/13-assembly.md](docs/13-assembly.md) | **Arrange, stitch, drop** — lay the pattern pieces around the body, pull the seams together with gravity off, then weld and let it fall. Why that beats placing the finished garment, and why it works for any number of pieces of any shape. |
 | [docs/14-editing.md](docs/14-editing.md) | **Editing the pattern** — taking a wedge out and letting a wedge in, the two operations most of pattern making is made of; why a dart is a seam inside a piece; and the cutting table, a 2D editor inside the 3D scene. |
 | [docs/15-manual-sewing.md](docs/15-manual-sewing.md) | **Sewing by hand** — selecting pieces and sewing only those, progressively; why a seam that cannot close shows tension and stays open rather than being forced shut; and the stored rigid placement that makes the transform buttons exact. |
+| [docs/16-solvers.md](docs/16-solvers.md) | **Which solver does what, and why** — arranging is geometry and needs none; sewing stays here because it beats the ready-made one by a factor of four hundred; drape goes to a side-car because contact here is a point query per vertex and that is not fixable by tuning. What was evaluated and rejected, with the numbers. |
 | [docs/08-local-toolchain.md](docs/08-local-toolchain.md) | What is actually installable on this machine: `colmap` for photogrammetry, what is missing, and the pictures-to-mesh pipeline for a duct-tape dress form. |
 
 ## The code
@@ -40,7 +41,13 @@ and an XPBD cloth simulation for the questions that a static solver cannot answe
 
 ```bash
 cd app && python3 -m http.server 8777     # then open http://127.0.0.1:8777/
+python3 sim/server.py                      # the drape side-car (needs blender)
 node test/run.mjs                          # headless checks of the whole pipeline
+node tools/trace.mjs                       # arrange -> sew -> weld -> drape, as numbers
+node tools/trace.mjs --sidecar             # the same, draped by the side-car
+node tools/check_sidecar.mjs               # round-trip a garment over HTTP
+node tools/drape_blender.mjs               # this solver against Blender's, same metric
+node tools/sew_blender.mjs                 # this project's sewing against Blender's
 node tools/sweep.mjs                       # module size vs seam length vs fit
 node tools/ease_sweep.mjs                  # how much ease chord sag forces on you
 node tools/make_pattern.mjs                # -> out/pattern.svg, a printable 8-gore pattern
@@ -93,6 +100,16 @@ yoke or ends on the floor is decided by gravity, contact and friction. See
 No build step, no `npm`: three.js is vendored and loaded through an import map.
 Every geometry module is three.js-free so the whole pipeline runs under plain node,
 which is what makes the claims in the documents checkable rather than asserted.
+
+**Drape is the one exception, and it is deliberate.** Contact in `cloth.js` is a
+point query per vertex: it holds the cloth off the body at its vertices and says
+nothing about the triangle between them, so the figure shows through. Measured on a
+settled skirt, 1.26 % of the cloth area is inside the body. That is structural, not a
+tuning problem, so **X** hands the welded garment over HTTP to a side-car running
+Blender's C solver, which does triangle-against-triangle contact and reaches 0 %.
+Arranging, sewing and welding all still happen here — the sewing in particular,
+because it closes 76 of 76 seams to 0.024 cm where Blender's native sewing springs
+leave 9.2 cm. See [docs/16-solvers.md](docs/16-solvers.md).
 
 The bodice model is the **MakeHuman base mesh** (CC0, September 2020), cropped to a
 torso band by `tools/prep_bodice.py`; the default body is a **parametric torso driven

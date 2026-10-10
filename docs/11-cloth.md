@@ -17,13 +17,21 @@ the answer worth having.
 
 ---
 
-## 1 — Three solvers, and why there had to be a third
+## 1 — Three solvers, and why there had to be a third (and then a fourth)
 
 | | what it does | what it answers |
 |---|---|---|
 | `relax.js` | constraint projection *with* an attraction term pulling the shell onto the body | "what shape does the body impose?" |
 | `patternio.drape()` | the same, attraction removed, shoulders pinned | "does this pattern fit?" |
 | `cloth.js` | real time integration: mass from areal density, gravity as an acceleration, velocity carried between steps, Coulomb friction, self-collision | "where does the cloth **go**?" |
+| `sim/` (side-car) | Blender's C solver, over HTTP: triangle-against-triangle contact, edge–edge self-collision | "where does the cloth go **without passing through the body**?" |
+
+The fourth was not planned. `cloth.js` answers its question well — it sews, it
+settles, it strains correctly — but its contact is a point query per vertex,
+and that is a structural limit rather than a tuning one (§8). Drape therefore
+runs elsewhere now; everything up to and including the weld still runs here.
+[16-solvers.md](16-solvers.md) sets out which does what, and the measurements
+that decided it.
 
 The third is needed the moment nothing is pinned. `drape()` pins the top 2 cm of the
 garment because a bodice hangs from the shoulders — a perfectly good assumption when
@@ -247,8 +255,21 @@ Read it carefully, because it says three things a pattern book states as rules:
 
 ## 8 — Limits
 
+The first two of these are why drape no longer runs here at all. See
+[16-solvers.md](16-solvers.md).
+
+- **Contact is a point query per VERTEX.** This is the big one, and it was
+  mis-stated for a long time as being only about self-collision. The solver
+  keeps every vertex outside the body and says nothing about the triangle
+  between them, so a facet spanning a convex bulge dips below it and the body
+  shows through the cloth. Measured on a half-sewn skirt: 0 vertices inside,
+  40 edge midpoints inside at up to 0.42 cm; on a settled skirt, 1.26 % of the
+  cloth area. Sampling more points narrows it without bounding it, and costs
+  the drop test its settle. **Drape is therefore handed to a side-car**
+  (`sim/`), which does triangle-against-triangle contact and reaches zero.
 - **Self-collision is vertex–vertex, not edge–edge.** Two folds can cross if they do it
-  between vertices. For deep folds in a coarse mesh that happens.
+  between vertices. For deep folds in a coarse mesh that happens. The side-car
+  does this properly too.
 - **The level set is as sharp as its grid.** 0.3 cm at the neck/shoulder crease; halve
   `cell` and pay for it as the cube in build time.
 - **Drag is isotropic.** Real drag on a sheet is mostly normal to the surface, so a
@@ -262,8 +283,13 @@ Read it carefully, because it says three things a pattern book states as rules:
 - **A stiff heavy cloth rocks as it settles.** Denim on a shoulder registers 0.7 cm of
   centre-of-mass rise, which is a nearly rigid plate finding its three contact points
   rather than an elastic rebound. Soft cloths do not do it.
-- **Nothing is validated against real fabric.** The presets are plausible, not measured.
-  The right next step is a Blender `bpy` side-car — its cloth solver is C, with proper
-  edge–edge self-collision and anisotropic wovens — run offline on the same mesh and
-  body, to *check* this one rather than to replace it. Kawabata or FAST measurements of
-  a real cloth would give the presets a footing.
+- **Nothing is validated against real fabric.** The presets are plausible, not
+  measured. The side-car proposed here has since been built (`sim/`, and
+  [16-solvers.md](16-solvers.md)) — and it turned out to be needed as a
+  *replacement* for the drape rather than only as a check on it, because the
+  vertex-only contact above is not fixable by tuning. It does not fix the
+  presets, though. Kawabata or FAST measurements of a real cloth would give
+  them a footing; failing that, C-IPC ships a table of five measured cloths
+  (150–240 gsm, with Young's moduli, Poisson's ratios and strain limits of
+  0.5–13.4 %) that is worth adopting on its own even though that solver does
+  not build here.

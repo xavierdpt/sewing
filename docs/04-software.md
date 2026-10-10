@@ -20,9 +20,20 @@ three.js over Babylon.js: three has the larger ecosystem of geometry-processing
 examples and a smaller surface area. Babylon's built-in gizmos and inspector are nicer
 but you do not need a scene editor here.
 
-**When to reach for C++:** only if you need libigl or geometry-central directly (for
-boundary-first flattening, intrinsic triangulations, or a proper ARAP solver) and the
-JS ports are not good enough. Note `libigl-dev` is **not** packaged for this machine —
+**When to reach for something else:** this held for the geometry and broke for
+the physics. Contact resolution written here as a point query per vertex let
+the body through the cloth, and no amount of tuning fixed it; drape now goes
+over HTTP to a side-car running Blender's C solver (`sim/`, and
+[16-solvers.md](16-solvers.md)). The rule that survives is narrower than the
+original one: **geometry here, hard contact elsewhere.** Everything up to the
+weld — drafting, arranging, sewing, welding, measuring — is still JavaScript
+that runs under plain node, and the sewing stayed because it measurably beats
+the ready-made alternative.
+
+For geometry specifically, reach for C++ only if you need libigl or
+geometry-central directly (for boundary-first flattening, intrinsic
+triangulations, or a proper ARAP solver) and the JS ports are not good
+enough. Note `libigl-dev` is **not** packaged for this machine —
 see [08-local-toolchain.md](08-local-toolchain.md). A Python side-car using
 `scipy` plus a hand-rolled LSCM is the cheaper escape hatch, and all the heavy parts
 here are sparse linear algebra you can hand to `scipy.sparse.linalg`.
@@ -44,13 +55,33 @@ app/
   js/
     geom.js             vectors, Catmull-Rom, triangle trigonometry. No deps.
     tiles.js            the tile library; flat-vertex enumeration
-    torso.js            parametric measurement-driven body
+    body.js             parametric measurement-driven body
     meshsurface.js      the same interface, backed by an arbitrary OBJ
     assembly.js         THE JOINING ENGINE: vertices, tiles, edges, attach(), welding
     lattice.js          grid tiling, library quantisation, greedy growth
     relax.js            static constraint projection ("let it fall")
+    sdf.js              signed distance field of the body
+    cloth.js            XPBD: mass, gravity, friction, force-limited seams
+    panels.js           shell -> flattenable panels
+    patternio.js        the pattern file format, sew(), drape(), fitReport()
+    patternedit.js      darts and spreads
+    skirt.js            flared and gathered skirts
+    assemble.js         arrange -> stitch -> weld
+    arrange.js          STORED RIGID PLACEMENTS: the transform buttons
+    clearance.js        how far the cloth is from the skin, everywhere
+    drapejob.js         builds a side-car job; shared with node
+    remote.js           posts the garment to the side-car
+    table.js            the cutting table
     main.js             the only file that imports three.js
+sim/                    THE DRAPE SIDE-CAR -- see docs/16-solvers.md
+  server.py             stdlib HTTP: POST /drape, GET /health
+  blender_drape.py      the job, run inside headless Blender
+  drape.mjs             the same, driven from node
 tools/
+  trace.mjs             arrange -> sew -> weld -> drape, as numbers
+  check_sidecar.mjs     round-trip a garment over HTTP
+  drape_blender.mjs     this solver against Blender's, same metric
+  sew_blender.mjs       this project's sewing against Blender's
   prep_bodice.py        extract the bodice band from the MakeHuman mesh
   sweep.mjs             module size vs seam length vs fit
   ease_sweep.mjs        how much ease the chord sag forces on you
@@ -59,15 +90,20 @@ test/
 ```
 
 **The one architectural rule:** every geometry module is plain JavaScript with no
-three.js import, so the whole pipeline runs under node. `test/run.mjs` exercises the
+three.js import, so the whole pipeline runs under node. That now includes the
+modules the side-car needs (`drapejob.js`, `clearance.js`), which is why they
+live in `app/js` rather than in `sim/`: the browser has to fetch them, and the
+headless checks have to exercise the same code the viewer does. `test/run.mjs` exercises the
 tile library, the closure rule, both body sources, explicit joining, grid tiling,
 relaxation, the settle loop, greedy growth and the exporters — with no browser. That
 is what makes the geometry claims in [01-geometry.md](01-geometry.md) checkable rather
 than asserted.
 
 ```
-node test/run.mjs     # the whole pipeline, ~40 assertions
-node tools/sweep.mjs  # module size trade-off table
+node test/run.mjs          # the whole pipeline, 259 assertions
+node tools/trace.mjs       # arrange -> sew -> weld -> drape, as a table
+python3 sim/server.py      # the drape side-car the viewer talks to
+node tools/sweep.mjs       # module size trade-off table
 node tools/ease_sweep.mjs
 ```
 

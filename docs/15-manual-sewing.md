@@ -480,7 +480,13 @@ The risk was concentrated in one number, so it went first.
 | **M** / **F** / **0** | mirror, flip, reset to the placement hints |
 | drag / shift-drag / alt-drag | the same as the buttons, by hand |
 | **W** | start sewing the seams between the selected pieces — **or stop where they have got to** |
-| **X** | weld what closed, and drop |
+| **X** | weld what closed, and hand the drape to the side-car |
+
+**X does not drape here.** It welds, starts a local fall as a preview, and
+posts the garment to the side-car (`python3 sim/server.py`), which replaces it
+a minute later with a drape that has nothing of the body through it — 0 % of
+the cloth area against 1.26 % locally. See [16-solvers.md](16-solvers.md). If
+the side-car is not running, you get the preview and a warning.
 
 **W is a toggle**, because sewing takes time at a known rate rather than being
 an event. Press it and the seams begin closing at `sewSpeedCmPerSec` (the
