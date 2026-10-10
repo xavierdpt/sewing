@@ -29,6 +29,7 @@ what you measured rather than from a table.
 | [docs/12-flare.md](docs/12-flare.md) | **Flare, gathers, and how the pieces go together** — more cloth at the hem than the waist; the circle-skirt family by the fraction of a circle it spans; how shared vertex ids make four panels one mesh with no seam code; and how to edit a pattern. |
 | [docs/13-assembly.md](docs/13-assembly.md) | **Arrange, stitch, drop** — lay the pattern pieces around the body, pull the seams together with gravity off, then weld and let it fall. Why that beats placing the finished garment, and why it works for any number of pieces of any shape. |
 | [docs/14-editing.md](docs/14-editing.md) | **Editing the pattern** — taking a wedge out and letting a wedge in, the two operations most of pattern making is made of; why a dart is a seam inside a piece; and the cutting table, a 2D editor inside the 3D scene. |
+| [docs/15-manual-sewing.md](docs/15-manual-sewing.md) | **Sewing by hand** (proposal) — selecting pieces and sewing only those, progressively; why a seam that cannot close should show tension and stay open rather than be forced shut; and the stored rigid placement that makes the transform buttons exact. |
 | [docs/08-local-toolchain.md](docs/08-local-toolchain.md) | What is actually installable on this machine: `colmap` for photogrammetry, what is missing, and the pictures-to-mesh pipeline for a duct-tape dress form. |
 
 ## The code
