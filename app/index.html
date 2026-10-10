@@ -8,6 +8,7 @@
   :root {
     --bg: #14161a; --panel: #1d2026; --ink: #e8e6e1; --dim: #9aa0aa;
     --line: #2d313a; --accent: #d98b4a;
+    --bar-h: 36px;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink);
@@ -18,7 +19,7 @@
     border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
     backdrop-filter: blur(6px); max-width: 52ch;
   }
-  #hud { left: 12px; top: 12px; }
+  #hud { left: 12px; top: var(--bar-h); margin-top: 12px; }
   #help { left: 12px; bottom: 12px; color: var(--dim); font-size: 12px; }
   h1 { font-size: 13px; margin: 0 0 8px; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
   table { border-collapse: collapse; }
@@ -51,6 +52,52 @@
   #hud { font-size: 15px; }
   #hud h1 { font-size: 16px; }
   #help { font-size: 14px; }
+
+
+  /* ------------------------------------------------ menubar and dialogs */
+  .menubar {
+    position: fixed; left: 0; top: 0; right: 0; height: var(--bar-h); z-index: 5000;
+    display: flex; align-items: stretch; gap: 2px; padding: 0 6px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    border-bottom: 1px solid var(--line); backdrop-filter: blur(6px);
+    overflow-x: auto; scrollbar-width: thin;
+  }
+  .menubar-brand {
+    display: flex; align-items: center; padding: 0 12px 0 4px; color: var(--accent);
+    font-size: 15px; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
+  }
+  .menubar-item {
+    background: none; border: 0; border-bottom: 2px solid transparent; color: var(--ink);
+    font: inherit; font-size: 15px; padding: 0 12px; white-space: nowrap; cursor: pointer;
+  }
+  .menubar-item:hover { background: #262a33; }
+  .menubar-item.on { border-bottom-color: var(--accent); color: var(--accent); }
+
+  .dlg {
+    position: fixed; z-index: 1100; border: 1px solid var(--line); border-radius: 6px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    backdrop-filter: blur(6px); box-shadow: 0 8px 24px rgba(0,0,0,.45); overflow: hidden;
+  }
+  .dlg-bar {
+    display: flex; align-items: center; gap: 6px; padding: 6px 8px; cursor: move;
+    background: #22262e; border-bottom: 1px solid var(--line); user-select: none;
+  }
+  .dlg.collapsed .dlg-bar { border-bottom: 0; }
+  .dlg-title { flex: 1; font-size: 15px; color: var(--accent); letter-spacing: .03em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dlg-fold, .dlg-close {
+    background: none; border: 0; color: var(--dim); font: inherit; font-size: 16px;
+    line-height: 1; padding: 2px 6px; cursor: pointer; border-radius: 3px;
+  }
+  .dlg-fold:hover, .dlg-close:hover { background: #343a45; color: var(--ink); }
+  .dlg-body { overflow-y: auto; }   /* the height is set as it is placed */
+  /* a lil-gui living inside a dialog: the dialog already has the title bar */
+  .dlg-body .lil-gui.root { width: 100% !important; }
+  .dlg-body .lil-gui.root > .title { display: none; }
+  .dlg-body .lil-gui > .children { border: 0; }
+
+  /* the autoplaced panel starts below the bar */
+  .lil-gui.autoPlace { top: var(--bar-h); max-height: calc(100vh - var(--bar-h)); }
 
   @media (max-width: 760px) { #help { display: none; } #hud { font-size: 12px; max-width: 30ch; } }
 </style>

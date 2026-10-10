@@ -29,6 +29,8 @@ import { clearance } from './clearance.js';
 import { PatternTable } from './table.js';
 import { LIBRARY, byId } from './tiles.js';
 import { sub, add, mul, cross, norm, dist, DEG } from './geom.js';
+import { MenuBar } from './dockui.js';
+import { exportFormJSON, importFormJSON, applyForm, formFileName } from './formio.js';
 
 // ----------------------------------------------------------------- scene
 
@@ -113,6 +115,7 @@ function frameScene(reset = false) {
 
 const params = {
   source: 'parametric',       // 'parametric' | 'makehuman'
+  formName: 'form',           // what a saved dress form is called
   module: 2.0,                // u, cm
   // Ease must clear the chord sag of a flat tile over a curved region --
   // h^2/(8R), so ~1.25 cm for an 8 cm tile over a 10 cm radius bust. Less than
@@ -584,7 +587,7 @@ function startAssembly() {
     loadedName = pattern.meta && pattern.meta.test === 'flared-skirt'
       ? `skirt-${params.skirtPanels}panel` : (loadedName || 'pattern');
     params.clothColour = 'selection';      // so the selection is visible
-    gui.controllersRecursive().forEach((c) => c.updateDisplay());
+    refreshGUI();
     buildClothMesh();
     buildStitchLines();
     // Nothing moves until you say so. The pieces are laid out where the
@@ -1393,7 +1396,7 @@ function drapePattern(pattern) {
       fit = fitField(garment, surface);
       asm = garment;
       params.colour = 'fit';
-      gui.controllersRecursive().forEach((c) => c.updateDisplay());
+      refreshGUI();
       console.table(report);
       console.log(`VERDICT: ${report.verdict}`);
       buildTileMesh();
@@ -1425,6 +1428,86 @@ function importPatternFile() {
     r.readAsText(f);
   };
   input.click();
+}
+
+// ------------------------------------------------- saving and loading
+
+/**
+ * Ask for a .json file and hand its text to `use`.
+ *
+ * A file picker rather than a list of browser-local slots: a saved form or a
+ * saved pattern is a thing you want to mail to a friend, put in a repo, or
+ * still have after clearing the browser's data, and localStorage is none of
+ * those.
+ */
+function pickJSONFile(use) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.onchange = () => {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try { use(String(r.result), f.name.replace(/\.json$/i, '')); }
+      catch (err) { alert(err.message); console.error(err); }
+    };
+    r.readAsText(f);
+  };
+  input.click();
+}
+
+function saveForm() {
+  const doc = exportFormJSON(torso, { name: params.formName });
+  download(JSON.stringify(doc, null, 2), 'application/json',
+    formFileName(torso, params.formName));
+  console.log(`saved the dress form: bust ${torso.cm().bust} waist ${torso.cm().waist}`);
+}
+
+function loadForm() {
+  pickJSONFile((text, name) => {
+    const loaded = importFormJSON(text);
+    applyForm(torso, loaded);
+    params.formName = loaded.meta.name || name;
+    if (loaded.pose && POSES[loaded.pose]) params.pose = loaded.pose;
+    // the parametric body is the one a form describes; a scanned mesh is not
+    // ours to reshape, so switch back to it rather than load into nothing
+    if (params.source !== 'parametric') { params.source = 'parametric'; surface = torso; }
+    refreshBody();
+    rebuildMeasurementGUI();
+    refreshGUI();
+    console.log(`loaded the dress form "${params.formName}"`);
+  });
+}
+
+/**
+ * Save the pattern as it stands -- darts and all.
+ *
+ * The cutting table edits `loadedPattern` in place (see `openTable`), so what
+ * is written here is the edited pattern, not the draft it started as. That is
+ * the whole point: a dart taken out of a skirt panel is the work worth
+ * keeping.
+ */
+function savePattern() {
+  withBusy('saving pattern…', () => {
+    const pattern = table && table.pattern ? table.pattern : currentPattern();
+    loadedPattern = pattern;
+    const darts = pattern.panels.reduce((n, p) => n + ((p.darts || []).length), 0);
+    download(JSON.stringify(pattern), 'application/json', `${loadedName || 'pattern'}.json`);
+    console.log(`saved ${pattern.panels.length} pieces, ${darts} dart(s)`);
+  });
+}
+
+/** Load a pattern back onto the cutting table, where editing left off. */
+function loadPatternToTable() {
+  pickJSONFile((text, name) => {
+    loadedPattern = importPatternJSON(text);
+    loadedName = name;
+    openTable();
+    console.log(`${loadedName} is on the table: `
+      + `${loadedPattern.panels.length} pieces, `
+      + `${loadedPattern.panels.reduce((n, p) => n + ((p.darts || []).length), 0)} dart(s)`);
+  });
 }
 
 /** Draft a pattern for the current body and immediately try it on. */
@@ -1719,7 +1802,38 @@ function updateHUD() {
 
 // -------------------------------------------------------------------- GUI
 
+// The menubar owns the floating dialogs: one per entry, each draggable,
+// collapsible, closable, and remembering where it was left (dockui.js).
+// Sections move out of the single panel and into their own dialog one at a
+// time; what is still in `gui` has not been moved yet.
+const bar = new MenuBar({ reserveRight: 450 });
+
+/** A dialog with a lil-gui inside it, so a section reads the same as a folder. */
+function dialogGUI(opts) {
+  const dlg = bar.dialog(opts);
+  const g = new GUI({ container: dlg.body, width: opts.width ?? 430 });
+  g.domElement.style.setProperty('--width', '100%');
+  dlg.gui = g;
+  return dlg;
+}
+
+/**
+ * Push every controller's display, wherever it lives. The sections are
+ * spread over several lil-gui roots now (the main panel and one per dialog),
+ * so a programmatic change to `params` has to reach all of them -- a
+ * `gui.controllersRecursive()` alone would silently leave the dialogs stale.
+ */
+function refreshGUI() {
+  gui.controllersRecursive().forEach((c) => c.updateDisplay());
+  for (const d of bar.dialogs.values()) {
+    if (d.gui) d.gui.controllersRecursive().forEach((c) => c.updateDisplay());
+  }
+}
+
 const gui = new GUI({ title: 'bodice', width: 430 });
+// clear of the menubar
+gui.domElement.style.top = 'var(--bar-h)';
+gui.domElement.style.maxHeight = 'calc(100vh - var(--bar-h))';
 const fBody = gui.addFolder('body');
 fBody.add(params, 'source', ['parametric', 'makehuman']).onChange(async (v) => {
   busy.textContent = 'loading body…'; busy.style.display = 'grid';
@@ -1730,7 +1844,7 @@ fBody.add(params, 'source', ['parametric', 'makehuman']).onChange(async (v) => {
   } catch (err) {
     alert(err.message);
     params.source = 'parametric';
-    gui.controllersRecursive().forEach((c) => c.updateDisplay());
+    refreshGUI();
   } finally {
     busy.style.display = 'none';
   }
@@ -1829,7 +1943,7 @@ const fArms = fBody.addFolder('arms, legs and poses');
 fArms.add(params, 'pose', Object.keys(POSES)).name('pose').onChange((v) => {
   torso.applyPose(v);
   refreshBody();
-  gui.controllersRecursive().forEach((c) => c.updateDisplay());
+  refreshGUI();
   if (loadedPattern) drapePattern(loadedPattern);
 });
 fArms.add(torso.m, 'upperArmGirth', 15, 60, 0.5).name('upper arm girth').onFinishChange(refreshBody);
@@ -1894,7 +2008,7 @@ fShell.add(params, 'garment', ['bodice', 'skirt', 'dress', 'torso', 'full'])
     // bands are named landmarks, not numbers: adding the legs moved every
     // numeric v, so nothing should hold a literal
     Object.assign(params, surface.band(params.garment));
-    gui.controllersRecursive().forEach((c) => c.updateDisplay());
+    refreshGUI();
     if (params.showShell) rebuildShell();
     if (loadedPattern) loadedPattern = null;
   });
@@ -1937,7 +2051,30 @@ fTry.add({ t: tryOnCurrent }, 't').name('try the current pattern on');
 fTry.add(params, 'gravity', 0, 0.03, 0.001).name('gravity');
 fTry.add(params, 'drapeIters', 40, 400, 20).name('drape iterations');
 
-const fDrop = gui.addFolder('drop test -- real cloth physics');
+// ------------------------------------------------- files
+
+/**
+ * Saving and loading, on its own menu: the dress form and the pattern are the
+ * two things in here that are WORK -- measured with a tape, or edited piece by
+ * piece -- and everything else can be regenerated from them.
+ */
+const filesDialog = dialogGUI({
+  id: 'files', label: 'files', title: 'save and load', width: 430,
+});
+const fFiles = filesDialog.gui;
+fFiles.add(params, 'formName').name('name this dress form');
+fFiles.add({ s: saveForm }, 's').name('save the dress form');
+fFiles.add({ l: loadForm }, 'l').name('load a dress form');
+fFiles.add({ s: savePattern }, 's').name('save the pattern (darts and all)');
+fFiles.add({ l: loadPatternToTable }, 'l').name('load a pattern onto the table');
+fFiles.add({ i: importPatternFile }, 'i').name('load a pattern and try it on [I]');
+fFiles.add({ p: exportPattern }, 'p').name('print the pattern SVG [P]');
+fFiles.add({ e: exportOBJ }, 'e').name('export the garment OBJ [E]');
+
+const dropDialog = dialogGUI({
+  id: 'droptest', label: 'drop test', title: 'drop test -- real cloth physics', width: 430,
+});
+const fDrop = dropDialog.gui;
 fDrop.add(params, 'holeR', 3, 24, 0.5).name('hole radius cm');
 fDrop.add(params, 'discR', 12, 60, 1).name('disc radius cm');
 fDrop.add(params, 'discEdge', 1.2, 5, 0.1).name('triangle edge cm');
@@ -1948,8 +2085,10 @@ fDrop.add(params, 'internalDamping', 0, 1, 0.05).name('internal damping (0 = fab
 fDrop.add(params, 'terminalCmPerSec', 0, 400, 10).name('air drag: terminal cm/s');
 fDrop.add(params, 'substeps', 4, 24, 1).name('substeps / frame');
 fDrop.add(params, 'selfCollision').name('self-collision');
-fDrop.add(params, 'edgeCollision')
-  .name('collide edge midpoints (body pokes through without it)');
+// The short name is the one that fits: a lil-gui label wide enough to say
+// "the body pokes through without it" pushes its own checkbox off the panel.
+fDrop.add(params, 'edgeCollision').name('collide edge midpoints')
+  .domElement.title = 'off: the body pokes through the cloth between vertices';
 fDrop.add(params, 'slowMo', 0.1, 1, 0.1).name('slow motion');
 fDrop.add(params, 'clothColour', ['stretch', 'panel', 'selection', 'contact', 'gap', 'plain'])
   .name('colour by').onChange(updateClothMesh);
@@ -2121,7 +2260,10 @@ fView.add({ w: () => console.table(worstEdges(asm, 15)) }, 'w').name('log worst 
 let table = null;
 
 function openTable() {
-  const pattern = currentSkirtPattern();
+  // Whatever is in hand goes on the table, not just a skirt: a loaded file or
+  // a drafted bodice is exactly what someone wants to put a dart in, and
+  // `currentSkirtPattern` would have drafted a skirt over the top of it.
+  const pattern = currentArrangePattern();
   if (!table) {
     table = new PatternTable({
       scene, camera, controls, dom: renderer.domElement,
@@ -2438,7 +2580,7 @@ addEventListener('keydown', (ev) => {
   if (arrangeKey(ev)) { ev.preventDefault(); return; }
   const k = ev.key.toLowerCase();
   if (k === 'r') { params.showShell = true; rebuildShell();
-    gui.controllersRecursive().forEach((c) => c.updateDisplay()); }
+    refreshGUI(); }
   else if (k === ' ') {
     ev.preventDefault();
     if (sim) playing = !playing; else doRelax(20);
@@ -2457,7 +2599,7 @@ addEventListener('keydown', (ev) => {
   else if (k === 't') openTable();
   else if (k === 'c') {
     params.colour = COLOURS[(COLOURS.indexOf(params.colour) + 1) % COLOURS.length];
-    buildTileMesh(); gui.controllersRecursive().forEach((c) => c.updateDisplay());
+    buildTileMesh(); refreshGUI();
   }
 });
 

@@ -2,3 +2,4 @@ node_modules/
 
 # viewer telemetry
 sim/logs/
+__pycache__/

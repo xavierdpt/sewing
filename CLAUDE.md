@@ -71,5 +71,6 @@ node tools/trace.mjs --obj bad.obj   # dump the triangles the body comes through
 node tools/drape_blender.mjs      # this solver against Blender's, same metric
 python3 sim/server.py             # the drape side-car the viewer talks to
 node test/run.mjs                 # the gate
+python3 tools/viewshot.py out.png --eval 'JS'   # the viewer, headless, as a PNG
 cd app && python3 -m http.server 8777
 ```

@@ -121,7 +121,41 @@ drag them where you want them → **W** sews → it falls. The table's pattern i
 the one that gets lifted, so there is no import or round trip in between: what
 you cut is what gets sewn.
 
-## 5 — Limits
+## 5 — Keeping the work: save and load
+
+Two things in this project are *work* rather than output: the **dress form**,
+measured with a tape, and the **pattern as edited**, dart by dart. Everything
+else — the shell, the drape, the SVG, the OBJ — is regenerated from them in
+seconds. So those two are what the **files** menu saves and loads.
+
+| | file | written by | read by |
+|---|---|---|---|
+| dress form | `*-bust-waist-hip.json`, `triangulated-bodice-form/1` | `formio.exportFormJSON` | `formio.importFormJSON` → `applyForm` |
+| pattern | `*.json`, `triangulated-bodice-pattern/1` | `patternio.exportPatternJSON` | `patternio.importPatternJSON` |
+
+**The form saves the measurement set and nothing derived.** `body.m` is the
+small flat object every ring, landmark and vertex is computed from, so a form
+saved today still loads after the body model changes — which a saved mesh
+would not. A key that `DEFAULT_BODY` does not know is dropped on load and
+reported, rather than carried silently into every later save.
+
+**The pattern saves what the table edited.** The cutting table edits the
+loaded pattern in place, so "save the pattern" writes the darted pieces, not
+the draft they started as. Loading goes back *onto the table* — not onto the
+body — because that is where you left off: open it, take another wedge out,
+**J**, **W**. Loading a pattern straight onto the body is the separate,
+older gesture (**I**), and it is a fit test rather than a resumption.
+
+Files, not browser slots. A saved form is something to mail to the person it
+describes, keep in a repo beside the pattern it was drafted for, or still have
+after clearing the browser's data, and `localStorage` is none of those. What
+*is* in `localStorage` is only where the dialogs were put (docs/17-interface.md).
+
+Round-tripped in the gate: every measurement, the pose, the rebuilt body's
+landmarks, and a 15° dart's area through save and load (`test/run.mjs`,
+"saving and loading").
+
+## 6 — Limits
 
 - **Only two operations.** No grading, no truing a curve, no moving a single
   point, no adding a seam allowance to an edited edge. Point-level editing is

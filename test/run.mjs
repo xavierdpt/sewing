@@ -20,6 +20,7 @@ import { flaredSkirtPattern, placeSkirt, hemProfile, waistRing } from '../app/js
 import { layOut, weldStitched, assembleGarment } from '../app/js/assemble.js';
 import { takeOutWedge, letInWedge, check as patternCheck,
   panelArea } from '../app/js/patternedit.js';
+import { exportFormJSON, importFormJSON, applyForm, formFileName } from '../app/js/formio.js';
 import { DEG, dist, add, mul } from '../app/js/geom.js';
 import * as arrange from '../app/js/arrange.js';
 
@@ -1717,6 +1718,70 @@ line('editing a piece: taking a wedge out, letting a wedge in');
   check('letting cloth in adds no seam -- it is one piece still',
     pat2.seams.length === mk().seams.length,
     `${pat2.seams.length} seams, same as before`);
+}
+
+line('saving and loading');
+{
+  // ---- the dress form: what is saved is the measurement set, nothing derived
+  const b = new Body({ bust: 97.5, waist: 74, bellyProtuberance: 'C', units: 'cm' });
+  b.applyPose('Rest (standing)');
+  b.m.shoulderDrop = 1.5;                       // the asymmetry no size chart has
+  b.build();
+  const text = JSON.stringify(exportFormJSON(b, { name: 'tape measure' }));
+  const back = applyForm(new Body(), importFormJSON(text));
+  check('a saved dress form loads back measurement for measurement',
+    JSON.stringify(back.m) === JSON.stringify(b.m),
+    `${Object.keys(b.m).length} measurements`);
+  check('and the body it rebuilds is the same body',
+    Math.abs(back.landmarkV('waist') - b.landmarkV('waist')) < 1e-12
+    && Math.abs(back.cm().bust - 97.5) < 1e-9,
+    `waist v ${back.landmarkV('waist').toFixed(6)}, bust ${back.cm().bust} cm`);
+  check('the pose comes back with it', back.poseName === 'Rest (standing)', back.poseName);
+  check('the filename says which body it is',
+    formFileName(back, 'tape measure') === 'tape-measure-98-74-98.json',
+    formFileName(back, 'tape measure'));
+
+  let rejected = 'nothing';
+  try { importFormJSON(JSON.stringify({ format: 'something-else', m: {} })); }
+  catch (err) { rejected = err.message; }
+  check('a file that is not a dress form is refused', rejected.includes('not a dress form'),
+    rejected);
+  const sloppy = importFormJSON(JSON.stringify({
+    format: 'triangulated-bodice-form/1', m: { bust: 90, notAMeasurement: 3 },
+  }));
+  check('a key that means nothing to the body is dropped, not carried',
+    !('notAMeasurement' in sloppy.m) && sloppy.dropped[0] === 'notAMeasurement',
+    sloppy.dropped.join(', '));
+
+  // ---- a pattern with a dart in it: the edit is what is worth keeping
+  const skirt = flaredSkirtPattern({
+    panels: 4, waistCm: 72, hemCm: 180, lengthCm: 60, gather: 1.2, edge: 3,
+  });
+  const before = JSON.parse(JSON.stringify(skirt));
+  // the apex is a boundary vertex of the first piece, with the wedge aimed at
+  // the middle of it -- which is where a waist dart goes
+  const piece = skirt.panels[0];
+  const apex = piece.pts[piece.loop[0]];
+  const cx = piece.pts.reduce((a, q) => a + q.x, 0) / piece.pts.length;
+  const cy = piece.pts.reduce((a, q) => a + q.y, 0) / piece.pts.length;
+  const dart = takeOutWedge(skirt, 0, {
+    apex: [apex.x, apex.y],
+    bisectDeg: Math.atan2(cy - apex.y, cx - apex.x) * 180 / Math.PI,
+    intakeDeg: 10,
+  });
+  const reloaded = importPatternJSON(JSON.stringify(skirt));
+  const dartsOf = (p) => p.panels.reduce((n, q) => n + ((q.darts || []).length), 0);
+  check('a dart taken out survives the save and the load',
+    dartsOf(reloaded) === dartsOf(before) + 1,
+    `${dartsOf(before)} darts before, ${dartsOf(reloaded)} after`);
+  check('and the cloth it removed is what was saved',
+    Math.abs((panelArea(before.panels[0]) - panelArea(skirt.panels[0])) - dart.removedCm2) < 0.01,
+    `${dart.removedCm2} cm2 out of the piece`);
+  check('and so does the cloth the dart removed',
+    Math.abs(panelArea(reloaded.panels[0]) - panelArea(skirt.panels[0])) < 1e-9,
+    `${panelArea(reloaded.panels[0]).toFixed(2)} cm2`);
+  check('the reloaded pattern still checks out', patternCheck(reloaded).ok,
+    patternCheck(reloaded).problems.join('; ') || 'no problems');
 }
 
 line('exports');
