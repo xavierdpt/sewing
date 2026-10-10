@@ -147,8 +147,11 @@ general than vertex pairs, which is what easing a seam needs — and a table of
 *measured* fabric parameters, which §8 of docs/11-cloth.md admits this project
 does not have.
 
-**It builds**, with four patches, none of which touch the solver's
-mathematics — `bash sim/cipc/build_cipc.sh`:
+**It builds.** The source is a **git submodule** at
+`sim/cipc/Codim-IPC`, checked out on a branch `ubuntu-24.04` that carries the
+four fixes it needs, as commits rather than as a patch script — so the delta
+from upstream is a reviewable `git diff` and can be rebased when upstream
+moves. Three files, 45 lines, none of which touch the solver's mathematics:
 
 1. **MKL** is fetched from an anaconda.org URL that no longer resolves.
    SuiteSparse needs only a BLAS and a LAPACK; system OpenBLAS is both.
@@ -167,9 +170,20 @@ mathematics — `bash sim/cipc/build_cipc.sh`:
    specialisation must go at **global** scope; inside `namespace JGSL` it
    silently becomes `JGSL::pybind11::detail` and specialises nothing.
 
-Expect a long build — it compiles Kokkos, Kokkos-kernels, SuiteSparse, AMGCL
-and Boost from source, and Kokkos-kernels' several hundred generated template
-instantiations are most of the wall time.
+```bash
+git submodule update --init --depth 1 sim/cipc/Codim-IPC
+bash sim/cipc/build_cipc.sh
+```
+
+Expect twenty minutes or so — it compiles Kokkos, Kokkos-kernels, SuiteSparse,
+AMGCL and Boost from source, and Kokkos-kernels' several hundred generated
+template instantiations are most of the wall time.
+
+**One caveat about the submodule.** The parent records a commit that exists
+only in this checkout, because the fixes are committed locally and there is
+no fork to push them to. `git submodule update --init` on another machine will
+fetch upstream and fail to find it. Push the branch to a fork and change the
+`url` in `.gitmodules` if this needs to leave this machine.
 
 It is **not integrated**, because Blender already reaches zero penetration, so
 there is nothing left on that axis to win. It is here as a reference oracle —

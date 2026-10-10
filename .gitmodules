@@ -1,0 +1,3 @@
+[submodule "sim/cipc/Codim-IPC"]
+	path = sim/cipc/Codim-IPC
+	url = https://github.com/ipc-sim/Codim-IPC.git

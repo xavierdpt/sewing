@@ -77,6 +77,10 @@ sim/                    THE DRAPE SIDE-CAR -- see docs/16-solvers.md
   server.py             stdlib HTTP: POST /drape, GET /health
   blender_drape.py      the job, run inside headless Blender
   drape.mjs             the same, driven from node
+  cipc/                 C-IPC, built as a reference oracle, not integrated
+    Codim-IPC/          submodule, branch ubuntu-24.04 (four build fixes)
+    build_cipc.sh       configure and make
+    fabrics.md          its MEASURED fabric parameters vs this project's
 tools/
   trace.mjs             arrange -> sew -> weld -> drape, as numbers
   check_sidecar.mjs     round-trip a garment over HTTP

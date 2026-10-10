@@ -40,6 +40,7 @@ that joins library tiles by *relation* and settles the resulting shell onto a bo
 and an XPBD cloth simulation for the questions that a static solver cannot answer.
 
 ```bash
+git submodule update --init --depth 1      # C-IPC, the reference solver (optional)
 cd app && python3 -m http.server 8777     # then open http://127.0.0.1:8777/
 python3 sim/server.py                      # the drape side-car (needs blender)
 node test/run.mjs                          # headless checks of the whole pipeline

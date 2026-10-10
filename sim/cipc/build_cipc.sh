@@ -1,117 +1,51 @@
 #!/usr/bin/env bash
-# Build C-IPC on Ubuntu 24.04, as a reference solver to compare against.
+# Build C-IPC, the reference solver this project compares against.
 #
-# C-IPC (Li, Kaufman, Jiang, SIGGRAPH 2021) is a cloth simulator that cannot
-# produce an interpenetration: a log-barrier energy between every pair of
-# surfaces plus a CCD line search that refuses any step which would cross. It
-# is NOT integrated into this project -- Blender's side-car already reaches
-# zero penetration (docs/16-solvers.md). It is here as a reference oracle, and
-# for its table of MEASURED fabric parameters, which this project lacks.
+# C-IPC (Li, Kaufman, Jiang, SIGGRAPH 2021) is a cloth simulator in which
+# interpenetration is impossible by construction rather than unlikely: a
+# log-barrier energy between every pair of surfaces, plus a continuous
+# collision detection line search that refuses any step which would cross.
 #
-# Upstream does not build on a 2024 toolchain. Four things are wrong and all
-# four are patched below; none of them touch the solver's mathematics.
+# It is NOT integrated -- the Blender side-car already reaches zero
+# penetration (docs/16-solvers.md). It is here as a second opinion, and for
+# its measured fabric parameters (sim/cipc/fabrics.md).
 #
-# Expect a long build: it vendors and compiles Kokkos, Kokkos-kernels,
-# SuiteSparse, AMGCL and Boost from source. Kokkos-kernels alone generates
-# several hundred explicit template instantiations and is most of the time.
+# The source is a submodule, on a branch `ubuntu-24.04` carrying the four
+# fixes it needs to compile on a 2024 toolchain; see that commit for what and
+# why. Nothing is patched at build time.
 #
 #   sudo apt install -y libeigen3-dev libopenblas-dev python3-dev \
 #       python3-pybind11 zlib1g-dev libboost-all-dev libgmp3-dev freeglut3-dev
-#   bash sim/cipc/build_cipc.sh [checkout-dir]
+#   git submodule update --init --depth 1 sim/cipc/Codim-IPC
+#   bash sim/cipc/build_cipc.sh
+#
+# Expect twenty minutes or so. It compiles Kokkos, Kokkos-kernels,
+# SuiteSparse, AMGCL and Boost from source, and Kokkos-kernels' several
+# hundred generated template instantiations are most of the wall time.
 set -euo pipefail
 
-DIR="${1:-$HOME/src/Codim-IPC}"
-REPO="https://github.com/ipc-sim/Codim-IPC.git"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="$HERE/Codim-IPC"
 
-if [ ! -d "$DIR" ]; then
-  echo "cloning C-IPC into $DIR"
-  git clone --depth 1 "$REPO" "$DIR"
+if [ ! -f "$DIR/CMakeLists.txt" ]; then
+  echo "submodule not checked out. Run:" >&2
+  echo "  git submodule update --init --depth 1 sim/cipc/Codim-IPC" >&2
+  exit 1
 fi
-cd "$DIR"
 
-py() { python3 - "$@"; }
+for p in Eigen3 pybind11; do :; done
+python3 -c 'import pybind11' 2>/dev/null || {
+  echo "python3-pybind11 is missing; see the apt line at the top of this file" >&2
+  exit 1
+}
 
-# ---- 1. MKL. suitesparse.cmake fetches Intel MKL from an anaconda.org URL
-# that no longer resolves. SuiteSparse only needs a BLAS and a LAPACK, and
-# Ubuntu packages OpenBLAS, which is both.
-py <<'PY'
-import sys, pathlib
-p = pathlib.Path("CMake/suitesparse.cmake"); s = p.read_text()
-old = "if (NOT APPLE)\n    include(mkl)\nendif()"
-new = """find_package(BLAS REQUIRED)
-find_package(LAPACK REQUIRED)
-if(NOT TARGET blas)
-    add_library(blas INTERFACE IMPORTED GLOBAL)
-    target_link_libraries(blas INTERFACE ${BLAS_LIBRARIES})
-endif()
-if(NOT TARGET lapack)
-    add_library(lapack INTERFACE IMPORTED GLOBAL)
-    target_link_libraries(lapack INTERFACE ${LAPACK_LIBRARIES})
-endif()"""
-if old in s:
-    s = s.replace(old, new)
-old2 = """if (NOT APPLE)
-    target_link_libraries(cholmod PUBLIC mkl::mkl)
-else()
-    find_package(LAPACK)
-    target_link_libraries(cholmod PUBLIC LAPACK::LAPACK)
-endif()"""
-if old2 in s:
-    s = s.replace(old2, "target_link_libraries(cholmod PUBLIC ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})")
-p.write_text(s); print("  1. MKL -> system OpenBLAS")
-PY
-
-# ---- 2. pybind11. The vendored copy is 2.4, which predates Python 3.11
-# making PyFrameObject opaque, so it cannot compile against Python 3.12.
-# Ubuntu packages 2.11.1, which can.
-py <<'PY'
-import pathlib
-p = pathlib.Path("CMakeLists.txt"); s = p.read_text()
-old = "add_subdirectory(Externals/pybind11-master)"
-if old in s:
-    s = s.replace(old, "find_package(pybind11 REQUIRED)")
-    print("  2. vendored pybind11 2.4 -> system 2.11")
-# ---- 3. GCC 13 promoted -Wchanges-meaning to an error, which rejects the
-# vendored meta.hpp (2017). A name-lookup pedantry, not a correctness issue.
-anchor = "set(CMAKE_CXX_STANDARD 17)"
-if anchor in s and "-Wno-changes-meaning" not in s:
-    s = s.replace(anchor, anchor + "\nadd_compile_options(-Wno-changes-meaning)")
-    print("  3. -Wno-changes-meaning for GCC 13")
-p.write_text(s)
-PY
-
-# ---- 4. boost::property_tree against pybind11 >= 2.6. pybind11's
-# is_copy_constructible is container-aware: for a type with a `value_type` it
-# also requires THAT to be copy constructible. ptree is recursive -- its
-# value_type is std::pair<const Key, basic_ptree> -- so the trait instantiates
-# itself on an incomplete type. Short-circuit it to the plain std:: trait,
-# which is the upstream advice for recursive types and is the right answer:
-# ptree really is copy and move constructible.
-py <<'PY'
-import pathlib
-p = pathlib.Path("Library/Math/AMGCL_SOLVER.h"); s = p.read_text()
-if "is_copy_constructible<boost::property_tree::basic_ptree" not in s:
-    block = """namespace pybind11 { namespace detail {
-template <typename K, typename D, typename C>
-struct is_copy_constructible<boost::property_tree::basic_ptree<K, D, C>>
-    : std::is_copy_constructible<boost::property_tree::basic_ptree<K, D, C>> {};
-template <typename K, typename D, typename C>
-struct is_move_constructible<boost::property_tree::basic_ptree<K, D, C>>
-    : std::is_move_constructible<boost::property_tree::basic_ptree<K, D, C>> {};
-}} // namespace pybind11::detail
-
-"""
-    # GLOBAL scope: inside `namespace JGSL` this silently becomes
-    # JGSL::pybind11::detail and specialises nothing.
-    s = s.replace("namespace JGSL {", block + "namespace JGSL {", 1)
-    p.write_text(s); print("  4. ptree trait short-circuited for pybind11 2.11")
-PY
-
-mkdir -p build && cd build
+mkdir -p "$DIR/build"
+cd "$DIR/build"
 cmake -DCMAKE_BUILD_TYPE=Release \
       -Dpybind11_DIR="$(python3 -c 'import pybind11; print(pybind11.get_cmake_dir())')" ..
 make -j"$(nproc)"
 
+SO="$(ls "$DIR"/build/JGSL*.so 2>/dev/null | head -1)"
 echo
-echo "built: $(ls "$DIR"/build/JGSL*.so)"
+echo "built: ${SO:-NOTHING}"
 echo "check: PYTHONPATH=$DIR/build:$DIR/Python python3 -c 'import JGSL; print(JGSL)'"
