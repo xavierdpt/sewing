@@ -536,23 +536,46 @@ function startAssembly() {
     // Nothing moves until you say so. The pieces are laid out where the
     // placement hints put them; move them wherever you want them first.
     playing = false;
-    console.log(`${pattern.panels.length} pieces laid out, `
-      + `${laid.stitches.length} stitches waiting, widest seam gap `
-      + `${sim.maxStitchGap().toFixed(1)} cm.\n`
-      + 'Click a piece to select it, shift-click to add, A selects all. '
-      + 'Move the selection with the buttons, or drag it. '
-      + 'Then press W to sew the seams BETWEEN SELECTED PIECES only.');
+    const names = pattern.panels.map((p, i) => `${i}:${p.name}`).join('  ');
+    const widest = Math.max(...laid.stitches.map((st) => {
+      const a = laid.asm.verts[st.a], c = laid.asm.verts[st.b];
+      return Math.hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
+    }));
+    console.log(
+      `${pattern.panels.length} pieces laid out around the body, all selected. `
+      + `${laid.stitches.length} stitches waiting on `
+      + `${pattern.seams.length} seams; the widest is ${widest.toFixed(1)} cm open.\n`
+      + `pieces:  ${names}\n`
+      + '\nNEXT, to sew it two pieces at a time:\n'
+      + '  1. press N  -- deselect everything (W on all four sews the lot at once)\n'
+      + '  2. click a piece, then SHIFT-CLICK the one next to it\n'
+      + `  3. press W  -- their seam starts closing at ${params.sewSpeedCmPerSec} cm/s.`
+      + ' Press W again at any point to stop it where it is.\n'
+      + '  4. read the seam table that prints, then press G to add the next piece'
+      + ' along, and W again\n'
+      + '  5. press X when you are done -- welds whatever closed, and drops it\n'
+      + '\nMoving things: arrow keys (shift = radius), [ ] spin, ; \' tilt,'
+      + ' M mirror, F flip, 0 reset. Or just drag.');
     updateHUD();
   });
 }
 
 // ------------------------------------------------- selection and sewing
 
-/** Every stitch whose two pieces are both selected: what W will actually sew. */
+/**
+ * Every stitch whose two pieces are both selected: what W will actually sew.
+ *
+ * Read off `sim.stitches`, never `laid.stitches`. Cloth takes its own copy of
+ * the array, so the two hold DIFFERENT objects and all the live state --
+ * armed, feeding, tension -- is on the solver's. Filtering the layout's copy
+ * and handing the result to the solver matches nothing at all, which is a
+ * silent no-op: W appeared to do nothing because not one stitch was ever
+ * armed.
+ */
 function stitchesInSelection() {
-  if (!assembling) return [];
+  if (!assembling || !sim) return [];
   const sel = assembling.selected;
-  return assembling.laid.stitches.filter((st) => sel.has(st.pa) && sel.has(st.pb));
+  return sim.stitches.filter((st) => sel.has(st.pa) && sel.has(st.pb));
 }
 
 /**
@@ -638,8 +661,10 @@ function toggleSewing() {
       + 'that share a seam (shift-click, or "grow the selection").');
     return;
   }
-  const inSel = new Set(todo);
-  const n = sim.startSewing((st) => inSel.has(st));
+  // Predicated on the selection rather than on object identity, so it cannot
+  // matter which copy of the stitch array the caller happened to look at.
+  const sel = assembling.selected;
+  const n = sim.startSewing((st) => sel.has(st.pa) && sel.has(st.pb));
   armStitches();
   assembling.phase = 'stitching';
   playing = true;
@@ -1892,7 +1917,10 @@ function currentSkirtPattern() {
  *   shift-drag   spin each piece in its own surface
  *   alt-drag     push the selection away from the body or pull it in
  */
-const dragState = { verts: null, axis: null, a0: 0, y0: 0, mode: null, moved: false };
+const dragState = {
+  verts: null, axis: null, a0: 0, y0: 0, mode: null, moved: false,
+  collapseTo: null,
+};
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 
@@ -1996,14 +2024,25 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
   const pi = pieceUnderMouse(ev);
   if (pi === null || pi === undefined) return;
 
-  // selection first: a click that hits a piece outside the selection takes it,
-  // so dragging an unselected piece does the obvious thing rather than moving
-  // whatever happened to be selected before.
+  // Selection, and the one subtle case: a plain click on a piece that is
+  // ALREADY selected.
+  //
+  // It cannot narrow the selection there and then, because a plain drag is how
+  // a whole selection is moved and collapsing to one piece on pointerdown
+  // would make a multi-piece drag impossible. But it must not do nothing
+  // either -- everything is selected after J, so "click the piece you want"
+  // would have no effect at all, which is the first thing anyone tries.
+  //
+  // So it is decided on the way up: a click that moved nothing collapses to
+  // the piece under it, a click that dragged moves the selection it had.
   const sel = new Set(assembling.selected);
+  dragState.collapseTo = null;
   if (ev.ctrlKey || ev.metaKey) sel.delete(pi);
-  else if (ev.shiftKey && !sel.has(pi)) sel.add(pi);
+  else if (ev.shiftKey) { if (!sel.has(pi)) sel.add(pi); }
   else if (!sel.has(pi)) { sel.clear(); sel.add(pi); }
-  if (sel.size !== assembling.selected.size || !sel.has(pi)) setSelection(sel);
+  else if (sel.size > 1) dragState.collapseTo = pi;
+  if (sel.size !== assembling.selected.size
+    || ![...sel].every((x) => assembling.selected.has(x))) setSelection(sel);
 
   const axis = assembling.laid.axis;
   const R = assembling.laid.placements[pi].radius;
@@ -2050,6 +2089,11 @@ renderer.domElement.addEventListener('pointermove', (ev) => {
 
 const endDrag = (ev) => {
   if (!dragState.mode) return;
+  // a click, not a drag: take the piece that was clicked
+  if (!dragState.moved && dragState.collapseTo !== null) {
+    setSelection([dragState.collapseTo]);
+  }
+  dragState.collapseTo = null;
   dragState.mode = null;
   controls.enabled = true;
   if (ev && ev.pointerId !== undefined && renderer.domElement.hasPointerCapture(ev.pointerId)) {
@@ -2187,3 +2231,17 @@ updateHUD();
 
 // expose for console poking
 Object.assign(globalThis, { THREE, scene, torso, get asm() { return asm; }, params, relax, quantize, settle, buildGridShell, LIBRARY });
+// A one-line summary of the hand-assembly state, for headless checks of the
+// viewer: what is selected, what is armed, and how far there is to go.
+globalThis.__dbg = () => (assembling ? JSON.stringify({
+  phase: assembling.phase,
+  playing,
+  simSeconds: +sim.time.toFixed(2),
+  frames: sim.steps,
+  selected: [...assembling.selected],
+  armed: sim.stitches.filter((s) => s.active).length,
+  feeding: sim.stitches.filter((s) => s.feeding).length,
+  feedLeftCm: +sim.remainingFeedCm().toFixed(2),
+  widestGapCm: +sim.maxStitchGap().toFixed(2),
+}) : 'no assembly');
+globalThis.__pump = (n) => { for (let i = 0; i < n; i++) sim.step(1 / 60); };

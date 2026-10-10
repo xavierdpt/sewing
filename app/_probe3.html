@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><title>p3</title><body><pre id="log">…</pre>
+<script type="module">
+const L=[];const say=s=>{L.push(s);document.getElementById('log').textContent=L.join('\n');};
+window.onerror=(m,f,l)=>say(`ERROR ${m} @${f}:${l}`);
+const logs=[]; const orig=console.log; console.log=(...a)=>{logs.push(a.join(' '));orig(...a);};
+try{
+  await import('./js/main.js');
+  await new Promise(r=>setTimeout(r,3000));
+  // press J
+  dispatchEvent(new KeyboardEvent('keydown',{key:'j'}));
+  await new Promise(r=>setTimeout(r,8000));
+  say('--- console after J ---');
+  for(const l of logs.slice(-3)) say(l);
+  say('--- state ---');
+  say(`globalThis.asm verts: ${globalThis.asm ? globalThis.asm.verts.length : 'none'}`);
+  say('PROBE3 OK');
+}catch(e){say(`THREW ${e&&e.stack||e}`);}
+</script>
