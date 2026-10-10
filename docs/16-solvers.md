@@ -130,7 +130,42 @@ The thing it replaces was a single worst case over vertices, which read
 skirt. Both halves of that were true. A scalar with a threshold is
 verification; seeing what is happening needs a distribution and a location.
 
+### What the viewer reports back
+
+It used to report nothing: the viewer posted a mesh to the side-car and every
+measurement and exception stayed in a browser console. Two bugs this session
+were found only because a person pasted console output by hand, and one of
+them had already appeared in an automated run as "nothing happened" and been
+written off as a timeout.
+
+`app/js/telemetry.js` now batches events to `POST /log`; the server appends
+JSON lines to `sim/logs/viewer-DATE.jsonl` and `GET /log` returns the tail.
+The payload at each phase boundary is deliberately the same set of numbers
+`tools/trace.mjs` prints, because **parity is the point**: a browser session
+and a headless run should agree about the same garment, and when they do not,
+the difference is the bug. That is how the viewer was caught sewing with
+self-collision on.
+
+Four clocks, and mixing them is a trap:
+
+| | |
+|---|---|
+| `t` | wall clock in the browser, ISO. Readable, but it can **jump** — an NTP correction mid-session makes a phase look instantaneous. |
+| `ms` | monotonic ms since session start (`performance.now()`). What any **duration** should come from. |
+| `dtMs` | monotonic ms since the previous event, so a phase duration is a field rather than a subtraction. |
+| `simSeconds` | the **simulation's** clock. Measured: a sewing pass of 4.27 simulated seconds inside 300 ms of wall time. Conflating the two is how "it is slow" and "it is sewing slowly" get confused. |
+
+Plus `sentT`/`sentMs` when the batch left and `srvT` when it **arrived** —
+which is not when the event happened. Measured at 57 s behind on a slow page,
+long enough to reorder events against the server's own lines if anyone
+trusted `srvT` to sort them. Keeping all of them means queue delay
+(`sentMs − ms`), transport and clock skew (`srvT − sentT`) are each
+measurable instead of guessed. The browser and the server clocks were 10 s
+apart in testing.
+
 ```bash
+curl -s localhost:8778/log | python3 -m json.tool   # the tail, as JSON
+tail -f sim/logs/viewer-*.jsonl                      # live
 node tools/trace.mjs               # arrange -> sew -> weld -> drape, as a table
 node tools/trace.mjs --sidecar     # the same, draped by the side-car
 node tools/trace.mjs --obj bad.obj # the triangles the body comes through

@@ -29,7 +29,7 @@ import sys
 import tempfile
 import threading
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,19 +41,36 @@ def log_path():
     return os.path.join(LOGDIR, f"viewer-{date.today().isoformat()}.jsonl")
 
 
-def append_events(session, events):
+def utc_now():
+    """ISO 8601, UTC, milliseconds. Not strftime('%H:%M:%S'): whole-second
+    stamps with no timezone cannot be compared with the viewer's, which is
+    the entire reason both clocks are recorded."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def append_events(session, events, sent_t=None, sent_ms=None):
     """One JSON object per line, so the log can be tailed, grepped and diffed.
 
     The viewer had no way to tell anyone what it was doing: every measurement
     and every uncaught exception stayed in a browser console. Two bugs this
     session were found only because a human pasted console output by hand.
+
+    Every line gets `srvT`, which is ARRIVAL here -- not when the event
+    happened. Events are batched, so arrival lags by up to a flush interval
+    (measured at 57 s on a slow page). `sentT`/`sentMs` say when the batch
+    left, which separates queue delay from transport, and the viewer's own
+    `t`/`ms` say when the event actually occurred. Ordering anything by
+    `srvT` alone is wrong; it is here so clock skew between the two machines
+    is measurable rather than assumed.
     """
     os.makedirs(LOGDIR, exist_ok=True)
+    srv = utc_now()
     with LOGLOCK, open(log_path(), "a") as f:
         for e in events:
             if not isinstance(e, dict):
                 continue
-            e = {"session": session, **e}
+            e = {"session": session, "srvT": srv,
+                 "sentT": sent_t, "sentMs": sent_ms, **e}
             f.write(json.dumps(e, separators=(",", ":")) + "\n")
     return len(events)
 
@@ -138,7 +155,8 @@ class Handler(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(n))
                 written = append_events(body.get("session"),
-                                        body.get("events", []))
+                                        body.get("events", []),
+                                        body.get("sentT"), body.get("sentMs"))
             except Exception as e:
                 self._send(400, {"error": f"bad log batch: {e}"})
                 return
@@ -174,7 +192,7 @@ class Handler(BaseHTTPRequestHandler):
             res = fn(job)
         except Exception as e:
             append_events(job.get("session"), [{
-                "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "event": "drape-failed",
+                "t": utc_now(), "event": "drape-failed",
                 "backend": name, "error": str(e)[:2000], **shape,
             }])
             self._send(500, {"error": str(e)})
@@ -182,7 +200,7 @@ class Handler(BaseHTTPRequestHandler):
         res["backend"] = name
         res["wallSeconds"] = round(time.time() - t0, 1)
         append_events(job.get("session"), [{
-            "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "event": "drape",
+            "t": utc_now(), "event": "drape",
             "backend": name, "wallSeconds": res["wallSeconds"], **shape,
         }])
         self._send(200, res)

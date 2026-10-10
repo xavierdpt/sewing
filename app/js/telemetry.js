@@ -24,6 +24,28 @@ let timer = null;
 
 const now = () => new Date().toISOString();
 
+// Three clocks, because one is not enough and mixing them is a trap.
+//
+//   t      wall clock, ISO. Human-readable and comparable with the server's
+//          line for the same drape -- but it can JUMP. new Date() follows the
+//          system clock, so an NTP correction mid-session makes a phase look
+//          instantaneous or negative.
+//   ms     monotonic milliseconds since this session started
+//          (performance.now()), which cannot jump and is what any DURATION
+//          should be computed from.
+//   dtMs   monotonic milliseconds since the PREVIOUS event, so how long a
+//          phase took is a field rather than a subtraction the reader has to
+//          do across a 4-second batching window.
+//
+// And a fourth lives in the payload: `simSeconds`, the simulation's own
+// clock. A sewing pass that takes 4.2 s of simulated time may take any amount
+// of wall time depending on substeps and machine, and conflating the two is
+// how "it is slow" and "it is sewing slowly" get confused.
+const mono = () => (typeof performance !== 'undefined' && performance.now
+  ? performance.now() : Date.now());
+let T0 = mono();
+let tPrev = T0;
+
 /** Post whatever has accumulated. Never throws, never blocks the caller. */
 async function flush() {
   if (!CONFIG.enabled || !CONFIG.url || !QUEUE.length) return;
@@ -33,7 +55,19 @@ async function flush() {
     await fetch(`${CONFIG.url}/log`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session: CONFIG.session, events: batch }),
+      // When the BATCH left, as well as when each event happened. The server
+      // can only stamp arrival, and arrival is up to a flush interval after
+      // the fact -- measured, 57 s on a slow page, which is long enough to
+      // reorder events against the server's own lines if anyone trusted it.
+      // With `sentMs` the queue delay is (sentMs - event.ms), both from the
+      // same monotonic clock; with `sentT` the transport-plus-skew is
+      // (srvT - sentT). Neither has to be guessed from the other.
+      body: JSON.stringify({
+        session: CONFIG.session,
+        sentT: now(),
+        sentMs: +(mono() - T0).toFixed(1),
+        events: batch,
+      }),
       keepalive: true,
     });
   } catch {
@@ -49,7 +83,15 @@ async function flush() {
 export function tlog(event, data = {}) {
   if (!CONFIG.enabled) return;
   try {
-    QUEUE.push({ t: now(), event, ...data });
+    const m = mono();
+    QUEUE.push({
+      t: now(),
+      ms: +(m - T0).toFixed(1),
+      dtMs: +(m - tPrev).toFixed(1),
+      event,
+      ...data,
+    });
+    tPrev = m;
     if (QUEUE.length >= 32) flush();
   } catch { /* never let logging break the thing it is logging */ }
 }
@@ -91,6 +133,8 @@ export function startTelemetry({ url, enabled = true, flushMs = 4000 } = {}) {
     } catch { /* going away anyway */ }
   });
 
+  T0 = mono();
+  tPrev = T0;
   if (timer) clearInterval(timer);
   timer = setInterval(flush, flushMs);
   tlog('session-start', {
