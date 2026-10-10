@@ -150,6 +150,9 @@ const params = {
   // Sewing by hand (docs/15-manual-sewing.md). `stepCm` and `stepDeg` are how
   // far one press of a transform button moves the selection.
   stepCm: 1, stepDeg: 5, weldTolCm: 0.25,
+  // How fast a seam is drawn closed, cm/s. Constant: the seam is fed at this
+  // rate rather than pulled towards zero, so it never accelerates.
+  sewSpeedCmPerSec: 4,
   stitchColour: 'tension',        // 'tension' | 'seam'
   maxTensionGf: 250, stitchSoftness: 60,
   // Whether a seam that cannot be closed is welded anyway. Off is the honest
@@ -510,6 +513,7 @@ function startAssembly() {
       stitches: laid.stitches,
       maxTensionGf: params.maxTensionGf,
       stitchSoftness: params.stitchSoftness,
+      sewSpeedCmPerSec: params.sewSpeedCmPerSec,
       floorY: floorOf(surface),
     });
     sim.pattern = pattern;
@@ -582,20 +586,23 @@ const seamKeyOf = (st) => st.seam || `P${st.pa}-P${st.pb}`;
  *                      pair of pieces. These are the basting threads.
  *   BEING SEWN NOW     inside the selection, while the phase is 'stitching'.
  */
+/**
+ * Keep every seam that has ever been threaded active, at full strength.
+ *
+ * There is no ramp any more and nothing needs one: the gentleness comes from
+ * the feed rate, which draws the seam together at a constant `sewSpeedCmPerSec`
+ * instead of pulling it towards zero with a constant force. A thread once in
+ * stays in and keeps holding at whatever it has closed, which is what makes
+ * stopping half way mean something.
+ */
 function armStitches() {
   if (!assembling || !sim) return 0;
-  const sel = assembling.selected;
-  const sewn = assembling.sewn;
-  const sewing = assembling.phase === 'stitching';
-  const n = sim.setStitchActive((st) => sewn.has(seamKeyOf(st))
-    || (sewing && sel.has(st.pa) && sel.has(st.pb)));
-  // Already-sewn seams hold at full strength; the pass being sewn now gets
-  // whatever the ramp has reached. Without the split, ramping pass two would
-  // slacken every seam pass one had closed and the garment would sag open on
-  // every pass.
-  sim.setStitchStrength((st) => (sewn.has(seamKeyOf(st)) ? 1 : (assembling.ramp ?? 1)));
-  // Once anything is sewn its thread has to keep pulling, or the seam opens
-  // again the moment the ramp that closed it stops.
+  let n = 0;
+  for (const st of sim.stitches) {
+    st.active = st.rest !== null;
+    st.strength = 1;
+    if (st.active) n++;
+  }
   if (n > 0 && sim.stitchStrength <= 0) sim.stitchStrength = 1;
   return n;
 }
@@ -611,55 +618,64 @@ function selectAdjacent() {
   setSelection(sel);
 }
 
-/** Phase 1 -> 2: draw the seams inside the selection closed. */
-function sewItUp() {
+/**
+ * W: start sewing the selected seams, or stop where they have got to.
+ *
+ * A toggle, because sewing is now something that takes time at a known rate
+ * rather than an event. Press it and the seams begin closing at
+ * `sewSpeedCmPerSec`; press it again and they stop exactly where they are,
+ * threads still in and holding, and you are back to arranging. Select other
+ * pieces and press it again to carry on -- including on a seam that was left
+ * half closed, which resumes from where it stopped rather than starting over.
+ */
+function toggleSewing() {
   if (!assembling || assembling.phase === 'falling') return;
+  if (assembling.phase === 'stitching') { pauseSewing('stopped'); return; }
+
   const todo = stitchesInSelection();
   if (!todo.length) {
     console.warn('no seams inside the selection -- select at least two pieces '
       + 'that share a seam (shift-click, or "grow the selection").');
     return;
   }
-  assembling.phase = 'stitching';
-  assembling.sewStart = sim.time;
-  assembling.ramp = 0.05;
+  const inSel = new Set(todo);
+  const n = sim.startSewing((st) => inSel.has(st));
   armStitches();
+  assembling.phase = 'stitching';
   playing = true;
   const seams = [...new Set(todo.map(seamKeyOf))];
-  console.log(`sewing ${todo.length} stitches on ${seams.length} seam(s) `
-    + `(${seams.join(', ')}), widest gap ${sim.maxStitchGap().toFixed(1)} cm. `
-    + 'Gravity is off until the seams are closed.');
+  const togo = sim.remainingFeedCm();
+  console.log(`sewing ${n} stitches on ${seams.length} seam(s) `
+    + `(${seams.join(', ')}): ${togo.toFixed(1)} cm to take up at `
+    + `${params.sewSpeedCmPerSec} cm/s, about `
+    + `${(togo / params.sewSpeedCmPerSec).toFixed(1)} s. `
+    + 'Press W again to stop it where it is.');
 }
 
-/**
- * A sewing pass has finished. Record which seams it closed, report them, and
- * go back to arranging so the next pieces can be chosen.
- *
- * This is the loop the whole exercise is for: sew two pieces, look at it, sew
- * the next. The seams just sewn keep their threads (armStitches), so they hold
- * while the rest of the garment is still being arranged around them.
- */
-function finishSewingPass() {
-  const todo = stitchesInSelection();
-  const closed = todo.filter((st) => sim.stitchGap(st) <= params.weldTolCm);
-  for (const st of todo) assembling.sewn.add(seamKeyOf(st));
+/** Stop feeding, leaving every seam exactly where it has got to. */
+function pauseSewing(why = 'stopped') {
+  if (!assembling || assembling.phase !== 'stitching') return;
+  sim.stopSewing();
   assembling.phase = 'arranging';
-  assembling.ramp = 1;
   playing = false;
-  armStitches();
+  for (const st of sim.stitches) {
+    if (st.rest !== null) assembling.sewn.add(seamKeyOf(st));
+  }
   const rows = sim.stitchReport({ closedCm: params.weldTolCm })
     .filter((r) => r.sewing !== 'no');
-  console.log(`pass done: ${closed.length} of ${todo.length} stitches closed `
-    + `to within ${params.weldTolCm} cm.`);
+  const left = sim.remainingFeedCm();
+  console.log(`${why}: ${left > params.weldTolCm
+    ? `${left.toFixed(1)} cm still to take up -- press W to carry on`
+    : 'every armed seam is fully taken up'}.`);
   console.table(rows);
-  const bad = rows.filter((r) => r.maxGapCm > params.weldTolCm);
+  const bad = rows.filter((r) => r.sewing === 'done' && r.maxGapCm > params.weldTolCm);
   if (bad.length) {
     console.warn(`${bad.length} seam(s) would not close: `
       + bad.map((r) => `${r.seam} ${r.verdict}`).join('; ')
       + '. They are NOT welded shut -- fix the pattern on the table (T), or '
       + 'accept it and drop anyway.');
   }
-  console.log('select the next pieces and press W again, or press X to weld and drop.');
+  console.log('select other pieces and press W again, or X to weld and drop.');
   updateStitchLines();
   updateClothMesh();
   updateHUD();
@@ -1256,11 +1272,19 @@ function assemblyRows(row0, cls0) {
   const open = live.filter((r) => r.maxGapCm > params.weldTolCm);
   const peak = Math.max(0, ...sim.stitches.filter((x) => x.active).map((x) => x.tensionGf));
 
+  const togo = sim.remainingFeedCm ? sim.remainingFeedCm() : 0;
   let out = row0('phase', {
     arranging: nSel
-      ? `arranging ${nSel} piece(s) -- W sews the seams between them, X welds and drops`
+      ? (togo > params.weldTolCm
+        ? `arranging -- ${togo.toFixed(1)} cm of seam left to take up. `
+          + 'W carries on, X welds and drops.'
+        : `arranging ${nSel} piece(s) -- W sews the seams between them, `
+          + 'X welds and drops')
       : 'arranging -- nothing selected. Click a piece, or A for all.',
-    stitching: `sewing ${stitchesInSelection().length} stitches`,
+    stitching: `sewing at ${params.sewSpeedCmPerSec} cm/s -- `
+      + `${togo.toFixed(1)} cm to go, about `
+      + `${(togo / Math.max(0.01, params.sewSpeedCmPerSec)).toFixed(0)} s. `
+      + 'W stops it here.',
     falling: 'sewn, and falling',
   }[a.phase]);
   if (a.phase !== 'falling') {
@@ -1274,6 +1298,11 @@ function assemblyRows(row0, cls0) {
       cls0(peak < params.maxTensionGf * 0.9));
     out += row0('widest seam gap', `${sim.maxStitchGap().toFixed(2)} cm`,
       cls0(sim.maxStitchGap() <= params.weldTolCm));
+    // How far the cloth has fallen behind the feed. Small is the seam keeping
+    // up; large means it is jammed and the thread is doing all it can.
+    const lag = sim.maxStitchGap() - togo;
+    out += row0('cloth behind the feed', `${Math.max(0, lag).toFixed(2)} cm`,
+      cls0(lag < 0.5));
   }
   for (const r of open) {
     out += row0(`&nbsp;&nbsp;${r.seam}`, r.verdict, 'warn');
@@ -1656,7 +1685,7 @@ fSkirt.add(params, 'skirtEaseCm', 0, 4, 0.5).name('waist ease cm');
 fSkirt.add(params, 'skirtEdge', 2, 5, 0.25).name('triangle edge cm');
 fSkirt.add({ k: startSkirt }, 'k').name('draft, sew and hang it [K]');
 fSkirt.add({ j: startAssembly }, 'j').name('1. lay the pieces out [J]');
-fSkirt.add({ w: sewItUp }, 'w').name('2. sew the seams [W]');
+fSkirt.add({ w: toggleSewing }, 'w').name('2. sew / stop the seams [W]');
 fSkirt.add(params, 'standoffCm', 2, 20, 1).name('arrange this far out, cm');
 fSkirt.add(params, 'stitchSeconds', 0.5, 6, 0.5).name('seconds to sew the seams');
 fSkirt.add(params, 'pinWaist').name('waistband (off = it slides off)');
@@ -1726,9 +1755,10 @@ fMove.add({ e: () => selectionAction(arrange.reroll) }, 'e')
 fMove.add({ r: () => selectionAction(arrange.reset) }, 'r').name('reset to the placement hints');
 
 const fSew = fHand.addFolder('sew');
-fSew.add({ w: sewItUp }, 'w').name('2. sew the selected seams [W]');
+fSew.add({ w: toggleSewing }, 'w').name('2. sew / stop the selection [W]');
 fSew.add({ x: finishAssembly }, 'x').name('3. weld what closed, and drop [X]');
-fSew.add(params, 'stitchSeconds', 0.5, 6, 0.5).name('seconds per sewing pass');
+fSew.add(params, 'sewSpeedCmPerSec', 0.25, 20, 0.25).name('sewing speed, cm/s')
+  .onChange((v) => { if (sim) sim.opts.sewSpeedCmPerSec = v; });
 fSew.add(params, 'maxTensionGf', 5, 1000, 5).name('thread strength, gram-force')
   .onChange((v) => { if (sim) sim.maxTensionGf = v; });
 fSew.add(params, 'stitchSoftness', 1, 400, 1)
@@ -1913,6 +1943,13 @@ function reapplyPlacements(which = null) {
       v[0] = 0; v[1] = 0; v[2] = 0;
     }
   }
+  // Moving a piece that has already been sewn pulls its seams open again, so
+  // the threads on them are let out to where the cloth now is. Otherwise the
+  // next press of W would meet a seam that is suddenly 20 cm open with a
+  // thread tied for 0 cm, and snap it shut at the force limit.
+  const moved = new Set(ids);
+  const n = sim.retieStitches((st) => moved.has(st.pa) || moved.has(st.pb));
+  if (n) assembling.retied = (assembling.retied || 0) + n;
   updateClothMesh();
   updateStitchLines();
   updateHUD();
@@ -2076,7 +2113,7 @@ addEventListener('keydown', (ev) => {
   else if (k === 'd') startDrop();
   else if (k === 'k') startSkirt();
   else if (k === 'j') startAssembly();
-  else if (k === 'w') sewItUp();
+  else if (k === 'w') toggleSewing();
   else if (k === 'u') { if (table && table.undo()) updateHUD(); }
   else if (k === 'q') doQuantize();
   else if (k === 's') doSettle();
@@ -2120,13 +2157,12 @@ updateHUD();
     // by hand is. And the end of a pass returns to arranging rather than
     // welding the whole garment, so the next pieces can be chosen: that is
     // what makes the assembly progressive.
+    // Sewing is a constant-rate feed now (cloth.js `_feedStitches`), so there
+    // is no ramp to drive here. It stops itself once every seam being sewn has
+    // had its whole gap taken up and the cloth has caught up with the feed --
+    // or the moment W is pressed again, whichever comes first.
     if (assembling && assembling.phase === 'stitching') {
-      const frac = (sim.time - assembling.sewStart) / params.stitchSeconds;
-      assembling.ramp = Math.min(1, 0.05 + 1.2 * frac);
-      const sewn = assembling.sewn;
-      sim.setStitchStrength((st) => (sewn.has(seamKeyOf(st)) ? 1 : assembling.ramp));
-      sim.stitchStrength = 1;
-      if (frac >= 1) { finishSewingPass(); }
+      if (!sim.isSewing() && sim.rmsSpeed() < 1.0) pauseSewing('sewn');
     }
     sim.step((1 / 60) * params.slowMo);
     updateClothMesh();
@@ -2134,7 +2170,12 @@ updateHUD();
     if (!sim.healthy()) {
       playing = false;
       console.error('the cloth solver blew up; try more substeps or a smaller triangle');
-    } else if (sim.rmsSpeed() < 0.3 && sim.time > 0.5) {
+    } else if (sim.rmsSpeed() < 0.3 && sim.time > 0.5
+      && !(assembling && assembling.phase === 'stitching')) {
+      // A sewing pass is quasi-static by design -- the cloth creeps along at
+      // the feed rate, which is well under this threshold -- so the
+      // settled-and-stop test has to leave it alone or it would pause the
+      // sewing on its first frame.
       playing = false;
       console.table(sim.report());
       updateHUD();

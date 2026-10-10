@@ -225,6 +225,39 @@ export const DEFAULTS = {
   // somewhere over 1 kgf, but a basting stitch pulls out of the cloth long
   // before the thread parts, and it is the cloth that governs.
   maxTensionGf: 250,
+  // How fast a seam is drawn closed, cm/s of gap taken up.
+  //
+  // A seam is SEWN AT A RATE, and that is not a presentational detail. The
+  // first version made the stitch pull towards zero with a force limit, which
+  // for a seam with nothing resisting it is a constant force over 20-40 cm of
+  // travel -- so the pieces accelerated the whole way and arrived at speed.
+  // That is a catapult, not a seam.
+  //
+  // Here each stitch carries a rest length that starts at the gap it was armed
+  // with and is fed down at this rate, so the cloth is drawn together at a
+  // CONSTANT speed and never accelerates: the target moves at `v`, the cloth
+  // follows at `v`, and there is no transient to work out afterwards. The
+  // force limit still does its job, because the moment the cloth cannot keep
+  // up with the feed the constraint is violated and the tension rises.
+  //
+  // It also makes the sewing watchable and interruptible, which is the whole
+  // point of doing it by hand: stop half way and the seam is half sewn.
+  sewSpeedCmPerSec: 4,
+  // How far the commanded closure may run ahead of what the cloth has actually
+  // delivered, cm. See `_feedStitches`.
+  sewSlackCm: 1.0,
+  // Velocity retained per frame while a seam is being sewn.
+  //
+  // Drawing the seams closed is meant to be QUASI-STATIC -- that is the whole
+  // argument for doing it with gravity off before letting the garment fall
+  // (see the head of assemble.js). Quasi-static means the cloth has no
+  // momentum of its own: it goes where the feed takes it and stops. Without
+  // this the pieces keep whatever speed the first few frames of contact
+  // de-penetration gave them, which on a fresh layout is tens of cm/s, and
+  // the sewing reads as a lurch that has nothing to do with the thread.
+  //
+  // It applies only while feeding, so it cannot touch the drape.
+  sewDamping: 0.25,
   // Strain limiting is iterated to CONVERGENCE, not run a fixed number of
   // times: up to `strainPasses` sweeps, stopping as soon as no edge is over
   // its limit by more than `strainTol`.
@@ -444,14 +477,23 @@ export class Cloth {
     // Softer than the cloth by `stitchSoftness`, and force-limited by
     // `maxTensionGf`, so a seam that cannot be closed stays open and says by
     // how much instead of taking the difference out of the fabric.
+    // A stitch is ARMED -- the thread is in -- exactly when it has a `rest`
+    // length. `active` mirrors that and nothing else; keeping them as two
+    // independent flags was a bug, because every stitch started active and so
+    // every unsewn seam counted towards maxStitchGap() and the reports, which
+    // made a seam nobody had touched look like a seam that would not close.
     this.stitches = (o.stitches || []).map((s) => ({
       ...s,
-      active: s.active !== false,
+      active: (s.rest ?? null) !== null,
       // Per-stitch share of the force limit, 0..1. A seam already sewn holds
       // at 1 while a new pass ramps from nearly nothing, which a single global
       // ramp cannot express: ramping it would slacken every seam already
       // closed and the garment would sag open on every pass.
       strength: s.strength ?? 1,
+      // The gap the thread is currently holding the seam at. null = not yet
+      // armed; the thread is not in. Feeding takes it down to zero.
+      rest: s.rest ?? null,
+      feeding: false,     // is the rest length being taken up right now?
       lambda: 0,          // the XPBD multiplier, accumulated over one substep
       tensionGf: 0,       // |lambda| / h^2, in gram-force
       peakGf: 0,          // the most it has ever pulled with
@@ -528,6 +570,7 @@ export class Cloth {
     // that one line cost more than the whole solver. The actual fastest vertex
     // is the honest bound.
     this._applyRamp();
+    const feeding = this._feedStitches(dt) > 0;
     const reach = this.maxSpeed() * dt + 0.1;
     if (this.collider) {
       for (let i = 0; i < this.asm.verts.length; i++) {
@@ -537,6 +580,19 @@ export class Cloth {
     }
     if (o.selfCollision) this._findPairs(o.clothThickness + reach);
     for (let s = 0; s < n; s++) this._substep(h);
+    // Quasi-static sewing: the cloth follows the feed and carries no momentum
+    // of its own.
+    //
+    // This has to happen AFTER the substeps, not before. XPBD derives velocity
+    // from the positions it just projected (`(x - prev)/h`, step 7 of
+    // _substep), so damping the stored velocity on the way in is immediately
+    // overwritten and achieves nothing -- measured, vertices still reached 26
+    // cm/s on a 4 cm/s feed. Damping what came out is what actually stops the
+    // motion being carried into the next frame.
+    if (feeding) {
+      const k = this.opts.sewDamping;
+      for (const v of this.vel) { v[0] *= k; v[1] *= k; v[2] *= k; }
+    }
     this.time += dt;
     this.steps++;
     return this;
@@ -826,10 +882,19 @@ export class Cloth {
    *   is the measurement -- "this seam is 4 cm short" -- and it is exactly what
    *   forcing the seam shut used to throw away.
    *
+   * The constraint is to the stitch's own `rest` length, not to zero. `rest`
+   * starts at the gap the seam was armed with and is fed down at
+   * `sewSpeedCmPerSec` (see `_feedStitches`), so the cloth is drawn together at
+   * a constant speed. Pulling straight to zero instead applies a constant
+   * force over the whole 20-40 cm of travel, which accelerates the pieces the
+   * entire way -- a catapult rather than a seam.
+   *
+   * A thread pushes nothing, so the constraint is one-sided: slack does
+   * nothing, and only `L > rest` pulls.
+   *
    * `stitchStrength` (0..1) and each stitch's own `strength` scale the force
-   * LIMIT rather than the correction, which is what a seam being drawn closed
-   * by hand is: the same thread, pulled progressively harder. The per-stitch
-   * one is what lets one pass ramp while the seams already sewn hold fast.
+   * LIMIT, so a seam already sewn can hold at full strength while another is
+   * still being worked on.
    */
   _solveStitches(h2) {
     const V = this.asm.verts, W = this.invMass;
@@ -838,7 +903,7 @@ export class Cloth {
     const lamBase = this.maxTensionGf * G * h2 * k;
     const aT = this.alphaStitch / h2;
     for (const s of this.stitches) {
-      if (!s.active) continue;
+      if (!s.active || s.rest === null) continue;
       const lamMax = lamBase * Math.min(1, Math.max(0, s.strength));
       if (lamMax <= 0) continue;
       const wa = W[s.a], wb = W[s.b], wsum = wa + wb;
@@ -847,8 +912,9 @@ export class Cloth {
       const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
       const L = Math.hypot(dx, dy, dz);
       if (L < 1e-12) continue;
-      // C = L (rest length zero), so the stitch only ever pulls: dl <= 0.
-      let dl = -L / (wsum + aT);
+      const C = L - s.rest;
+      if (C <= 0) continue;            // a thread pushes nothing
+      let dl = -C / (wsum + aT);
       // Saturate on the ACCUMULATED multiplier, not on the increment, or the
       // limit would scale with the sweep count instead of being a force.
       if (s.lambda + dl < -lamMax) dl = -lamMax - s.lambda;
@@ -858,6 +924,124 @@ export class Cloth {
       a[0] -= dx * sc * wa; a[1] -= dy * sc * wa; a[2] -= dz * sc * wa;
       b[0] += dx * sc * wb; b[1] += dy * sc * wb; b[2] += dz * sc * wb;
     }
+  }
+
+  /**
+   * Take up `dt` worth of each feeding seam's remaining gap.
+   *
+   * Once per frame rather than per substep: this is a kinematic target moving
+   * at a known speed, and advancing it ten times inside one frame would make
+   * the feed rate depend on the substep count.
+   *
+   * The feed HOLDS whenever the cloth has fallen more than `sewSlackCm`
+   * behind, and this is a rate limiter in both directions, which matters:
+   *
+   *   it never advances faster than `step`, so the closing speed is capped at
+   *   the commanded rate however eager the cloth is. The first version clamped
+   *   `rest` to `gap + slack` instead, which LOWERS it whenever the gap is
+   *   already small -- so the feed could jump ahead of itself and the seam
+   *   shut at 19 cm/s on a 4 cm/s command, which is the lurch this is all
+   *   supposed to remove.
+   *
+   *   and it never gets further than `slack` ahead of the cloth, so a seam
+   *   jammed against the body cannot accumulate commanded closure it has no
+   *   way to deliver and then snap shut when it comes free.
+   */
+  _feedStitches(dt) {
+    const step = this.opts.sewSpeedCmPerSec * dt;
+    const slack = this.opts.sewSlackCm;
+    let feeding = 0;
+    for (const s of this.stitches) {
+      if (!s.active || !s.feeding || s.rest === null) continue;
+      if (s.rest <= 0) { s.rest = 0; s.feeding = false; continue; }
+      feeding++;
+      // has the cloth kept up? if not, wait for it rather than demanding more
+      if (this.stitchGap(s) - s.rest > slack) continue;
+      s.rest = Math.max(0, s.rest - step);
+    }
+    return feeding;
+  }
+
+  /**
+   * Put the thread in: arm these stitches at the gap they are at now, and
+   * start taking it up. Seams already armed keep whatever they have closed and
+   * carry on from there, so stopping and restarting is seamless.
+   */
+  startSewing(pred = () => true) {
+    let n = 0;
+    for (const s of this.stitches) {
+      if (!pred(s)) continue;
+      if (s.rest === null) s.rest = this.stitchGap(s);
+      s.active = true;
+      s.feeding = true;
+      n++;
+    }
+    if (n && this.stitchStrength <= 0) this.stitchStrength = 1;
+    return n;
+  }
+
+  /**
+   * Stop feeding, leaving every seam exactly where it has got to. The threads
+   * stay in and keep holding, which is what a half-sewn seam is.
+   *
+   * Two things have to happen for "where it has got to" to be true, and
+   * leaving either out means the seam carries on closing after you have
+   * stopped it:
+   *
+   *   the thread is tied off at the gap actually ACHIEVED, not at the gap last
+   *   commanded. Those differ by however far the cloth was lagging, and
+   *   holding at the commanded one leaves the seam free to spring back open to
+   *   it later.
+   *
+   *   and the cloth is brought to rest. It was travelling at the feed rate,
+   *   and with nothing to stop it, it coasts: measured, a seam stopped at 9.8
+   *   cm drifted on to 1.6 cm over the next three seconds. Putting the needle
+   *   down means the cloth stops too.
+   */
+  stopSewing() {
+    let n = 0;
+    for (const s of this.stitches) {
+      if (!s.feeding) continue;
+      s.feeding = false;
+      s.rest = Math.min(s.rest, this.stitchGap(s));
+      n++;
+    }
+    if (n) for (const v of this.vel) { v[0] = 0; v[1] = 0; v[2] = 0; }
+    return n;
+  }
+
+  /**
+   * Let the thread out to wherever the cloth now is, without unthreading it.
+   *
+   * This is what a piece being MOVED after it has been sewn needs. The thread
+   * is holding at the gap the seam reached; move the piece and the gap is
+   * suddenly large again, so resuming would hit the seam with the full force
+   * limit at once and snap it back -- the exact lurch the feed exists to
+   * prevent. Re-tying leaves the seam needing to be sewn again from where it
+   * now is, which is both gentler and a truer account of what was done to it.
+   */
+  retieStitches(pred = () => true) {
+    let n = 0;
+    for (const s of this.stitches) {
+      if (!s.active || s.rest === null || !pred(s)) continue;
+      const gap = this.stitchGap(s);
+      if (gap > s.rest) { s.rest = gap; s.feeding = false; n++; }
+    }
+    return n;
+  }
+
+  /** How much gap is still waiting to be taken up, cm, over all seams. */
+  remainingFeedCm() {
+    let m = 0;
+    for (const s of this.stitches) {
+      if (s.active && s.rest !== null && s.rest > m) m = s.rest;
+    }
+    return m;
+  }
+
+  /** Is anything still being sewn? */
+  isSewing() {
+    return this.stitches.some((s) => s.feeding);
   }
 
   /**
@@ -947,10 +1131,17 @@ export class Cloth {
   setStitchActive(pred) {
     let n = 0;
     for (const s of this.stitches) {
-      const was = s.active;
-      s.active = !!pred(s);
-      if (s.active) n++;
-      if (!s.active && was) { s.lambda = 0; s.tensionGf = 0; s.saturated = false; }
+      if (pred(s)) {
+        // arming at the CURRENT gap, so a seam resumes from where it was left
+        // rather than starting over
+        if (s.rest === null) s.rest = this.stitchGap(s);
+        s.active = true;
+        n++;
+      } else {
+        s.active = false;
+        s.rest = null;
+        s.lambda = 0; s.tensionGf = 0; s.saturated = false; s.feeding = false;
+      }
     }
     return n;
   }
@@ -1005,13 +1196,24 @@ export class Cloth {
       const pulling = meanT > 0.08 * this.maxTensionGf;
       const strained = this._seamStrain(list);
       const why = sat > 0 ? 'the thread is at its limit'
-        : strained >= this.maxStrain * 0.95 ? 'the cloth is at its limit' : null;
+        : strained >= this.maxStrain * 0.95 ? 'the cloth is at its limit'
+          : 'it has stopped closing';
+      // How much of the seam has not been commanded closed yet. With the feed
+      // driving the rest length down at a known rate, this is what separates
+      // "not finished sewing" from "sewn as far as it will go" -- a
+      // distinction the old force-to-zero model could only guess at from the
+      // tension, and guessed wrong on a seam that had simply not had time.
+      const armed = list.filter((x) => x.rest !== null);
+      const toGo = armed.length ? Math.max(...armed.map((x) => x.rest)) : null;
+      const feeding = list.filter((x) => x.feeding).length;
       rows.push({
         seam: id,
         pieces: list[0].pa !== undefined ? `${list[0].pa} + ${list[0].pb}` : '-',
         stitches: list.length,
-        sewing: active === 0 ? 'no' : active === list.length ? 'yes' : 'part',
+        sewing: !armed.length ? 'no'
+          : feeding ? 'now' : (toGo > closedCm ? 'paused' : 'done'),
         closedPct: +pct.toFixed(0),
+        toGoCm: toGo === null ? '-' : +toGo.toFixed(2),
         maxGapCm: +maxGap.toFixed(2),
         meanTensionGf: +meanT.toFixed(0),
         peakTensionGf: +Math.max(...list.map((s) => s.peakGf)).toFixed(0),
@@ -1022,14 +1224,15 @@ export class Cloth {
         // the garment -- a short piece elsewhere distorts the whole ring --
         // and a seam that closed at no tension at all did not force anything,
         // whatever its neighbours are doing.
-        verdict: active === 0 ? 'not sewn'
-          : maxGap <= closedCm
-            ? (sat > list.length * 0.1
-              || (pulling && strained >= this.maxStrain * 0.95)
-              ? 'closed, but forced -- it will pucker' : 'closed')
-            : pulling || sat > 0
-              ? `short by ${maxGap.toFixed(1)} cm (${why || 'it has stopped closing'})`
-              : 'still closing',
+        verdict: !armed.length ? 'not sewn'
+          : toGo > closedCm
+            ? (feeding ? `being sewn, ${toGo.toFixed(1)} cm to go`
+              : `half sewn, ${toGo.toFixed(1)} cm to go`)
+            : maxGap <= closedCm
+              ? (sat > list.length * 0.1
+                || (pulling && strained >= this.maxStrain * 0.95)
+                ? 'closed, but forced -- it will pucker' : 'closed')
+              : `short by ${maxGap.toFixed(1)} cm (${why})`,
       });
     }
     return rows.sort((a, b) => String(a.seam).localeCompare(String(b.seam)));

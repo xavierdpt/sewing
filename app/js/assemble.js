@@ -137,7 +137,8 @@ export function layOut(pattern, surface, {
         seam: seamOfV3.get(v3) || (pa === pb ? `dart@P${pa}` : null),
         pa: Math.min(pa, pb),
         pb: Math.max(pa, pb),
-        active: true,
+        // Not armed. Putting the thread in is a runtime decision -- which
+        // seams are being sewn, and when -- not a property of the pattern.
       });
     }
   }
@@ -275,11 +276,20 @@ export function assembleGarment(pattern, surface, {
     selfCollision: false,
     ...clothOpts,
   });
+  // Put the thread in first: a stitch has no gap to speak of until it is
+  // armed, because an unarmed seam is one nobody has started sewing and
+  // maxStitchGap() does not count it.
+  sim.stitchStrength = 1;
+  sim.startSewing();
   const gap0 = sim.maxStitchGap();
+  // Sew at a constant rate, chosen to take up the whole gap in the time
+  // allowed. The old code ramped a pull towards zero instead, which for a
+  // seam with nothing resisting it is a constant force over the whole travel
+  // and so accelerates the pieces the entire way; feeding the rest length down
+  // draws them together at a steady speed with no transient to work out.
+  sim.opts.sewSpeedCmPerSec = gap0 / Math.max(1e-3, stitchSeconds);
   const frames = Math.round(stitchSeconds / dt);
   for (let f = 0; f < frames; f++) {
-    // ramp the pull, so the pieces are drawn together rather than snapped
-    sim.stitchStrength = Math.min(1, 0.05 + 1.2 * (f / frames));
     sim.step(dt);
     if (onFrame) onFrame('stitching', f / frames, sim);
   }
@@ -295,7 +305,7 @@ export function assembleGarment(pattern, surface, {
   // more: velocities are damped, not erased, and it stops as soon as the gap
   // stops improving.
   let last = sim.maxStitchGap();
-  for (let f = 0; f < 60; f++) {
+  for (let f = 0; f < 90; f++) {
     for (const v of sim.vel) { v[0] *= 0.5; v[1] *= 0.5; v[2] *= 0.5; }
     sim.step(dt);
     const g = sim.maxStitchGap();
@@ -304,6 +314,7 @@ export function assembleGarment(pattern, surface, {
   }
   log.push({
     phase: 'stitching', seconds: +sim.time.toFixed(2),
+    sewSpeedCmPerSec: +sim.opts.sewSpeedCmPerSec.toFixed(1),
     seamGapStartCm: +gap0.toFixed(2), seamGapEndCm: +sim.maxStitchGap().toFixed(3),
     peakTensionGf: +Math.max(0, ...sim.stitches.map((x) => x.peakGf)).toFixed(0),
     seamsAtTheLimit: sim.stitches.filter((x) => x.saturated).length,
@@ -335,7 +346,12 @@ export function assembleGarment(pattern, surface, {
   const sim2 = new Cloth(welded.asm, surface, {
     fabric, floorY, stitches: welded.openStitches, ...clothOpts,
   });
-  if (welded.openStitches.length) sim2.stitchStrength = 1;
+  if (welded.openStitches.length) {
+    sim2.stitchStrength = 1;
+    // the basting stays in at the gap it reached, holding but not feeding
+    sim2.startSewing();
+    sim2.stopSewing();
+  }
   welded.velocities.forEach((v, i) => { sim2.vel[i] = v; });
   if (pinTop > 0) sim2.pinTop(pinTop);
   // A waistband. Without one a skirt is a loose tube and gravity simply slides

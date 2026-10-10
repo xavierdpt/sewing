@@ -1043,7 +1043,13 @@ line('arrange, stitch, drop: assembling from separate pieces');
   check('every seam point has a stitch waiting',
     laid.stitches.length === 4 * pattern.meta.rows,
     `${laid.stitches.length} stitches for ${pattern.seams.length} seams`);
-  const gapBefore = new Cloth(laid.asm, null, { stitches: laid.stitches }).maxStitchGap();
+  // maxStitchGap() reports only ARMED seams -- ones the thread is actually in
+  // -- so a stitch has to be armed before it has a gap to speak of. Measuring
+  // the laid-out geometry directly says the same thing without a solver.
+  const gapBefore = Math.max(...laid.stitches.map((st) => {
+    const a = laid.asm.verts[st.a], b2 = laid.asm.verts[st.b];
+    return Math.hypot(b2[0] - a[0], b2[1] - a[1], b2[2] - a[2]);
+  }));
   check('and the seams start apart, waiting to be closed', gapBefore > 10,
     `${gapBefore.toFixed(1)} cm`);
 
@@ -1388,16 +1394,20 @@ line('sewing by hand: only the selected seams, and only what closes');
   // ---- sew ONLY the seams between pieces 0 and 1
   const sim = new Cloth(laid.asm, b, {
     fabric: 'linen', gravityScale: 0, stitches: laid.stitches,
-    selfCollision: false, substeps: 8,
+    selfCollision: false, substeps: 8, sewSpeedCmPerSec: 6,
   });
+  sim.stitchStrength = 1;
   const sel = new Set([0, 1]);
-  const n = sim.setStitchActive((st) => sel.has(st.pa) && sel.has(st.pb));
+  // startSewing both puts the thread in and starts feeding it. Arming without
+  // feeding -- setStitchActive on its own -- leaves the seam held exactly
+  // where it is, which is a half-sewn seam, not a seam being sewn.
+  const n = sim.startSewing((st) => sel.has(st.pa) && sel.has(st.pb));
   check('a selection arms only its own seams', n > 0 && n < laid.stitches.length,
     `${n} of ${laid.stitches.length} stitches`);
   const gapOf = (st) => sim.stitchGap(st);
-  for (let f = 0; f < 180; f++) {
-    sim.stitchStrength = Math.min(1, 0.05 + 1.2 * (f / 180));
+  for (let f = 0; f < 600; f++) {
     sim.step(1 / 60);
+    if (!sim.isSewing() && sim.rmsSpeed() < 1.0) break;
   }
   // `sim.stitches`, not `laid.stitches`: the solver takes its own copy, and the
   // live state -- active, tension, saturated -- lives on the solver's.
@@ -1422,6 +1432,118 @@ line('sewing by hand: only the selected seams, and only what closes');
   check('the welded mesh is still in one piece per unsewn group',
     w.asm.verts.length === laid.asm.verts.length - mine.length,
     `${w.asm.verts.length} vertices from ${laid.asm.verts.length}`);
+}
+
+line('sewing happens at a rate: constant speed, and it can be stopped');
+{
+  // The seam is FED closed at a constant rate rather than pulled towards zero
+  // by a force. Pulling towards zero means a constant force over the whole
+  // 20-40 cm of travel, so the pieces accelerate the entire way and arrive at
+  // speed -- a catapult, not a seam. And a rate is interruptible, which is
+  // what makes sewing by hand possible at all.
+  const b = new Body();
+  const waistV = b.landmarkV('waist');
+  const ring = waistRing(b, { waistV, ease: 1.0 });
+  const mk = () => flaredSkirtPattern({
+    panels: 4, waistCm: ring.circumferenceCm, circleFraction: 0.5,
+    lengthCm: 50, edge: 6.0, waistV,
+  });
+  const arm = (sim, sel) => sim.startSewing((st) => sel.has(st.pa) && sel.has(st.pb));
+  const fresh = (speed) => {
+    const laid = layOut(mk(), b, { standoffCm: 6 });
+    const sim = new Cloth(laid.asm, b, {
+      fabric: 'linen', gravityScale: 0, stitches: laid.stitches,
+      selfCollision: false, substeps: 6, sewSpeedCmPerSec: speed,
+    });
+    sim.stitchStrength = 1;
+    return { laid, sim };
+  };
+
+  // ---- nothing is armed until sewing starts: an unsewn seam is not a seam
+  // being sewn, and counting it was a bug that made every untouched seam look
+  // like one that would not close.
+  const { sim: s0 } = fresh(4);
+  check('nothing is threaded until sewing starts',
+    s0.stitches.every((st) => st.rest === null && !st.active)
+      && s0.maxStitchGap() === 0);
+
+  // ---- the duration is the gap divided by the rate, at any rate
+  const times = [];
+  for (const speed of [2, 4, 10]) {
+    const { sim } = fresh(speed);
+    arm(sim, new Set([0, 1]));
+    const gap0 = sim.remainingFeedCm();
+    let t = 0;
+    for (let f = 0; f < 2400; f++) { sim.step(1 / 60); t = sim.time; if (!sim.isSewing()) break; }
+    times.push({ speed, gap0, t, predicted: gap0 / speed, gap: sim.maxStitchGap() });
+  }
+  for (const r of times) {
+    console.log(`  ${String(r.speed).padStart(2)} cm/s: ${r.gap0.toFixed(1)} cm took`
+      + ` ${r.t.toFixed(2)} s (predicted ${r.predicted.toFixed(2)} s),`
+      + ` closed to ${r.gap.toFixed(3)} cm`);
+  }
+  check('the time taken is the gap divided by the rate',
+    times.every((r) => Math.abs(r.t - r.predicted) < 0.15),
+    times.map((r) => `${r.t.toFixed(2)}/${r.predicted.toFixed(2)}`).join(' '));
+  check('and every rate closes the seam', times.every((r) => r.gap < 0.1));
+
+  // ---- the speed is bounded: no accumulation over the travel. A constant
+  // force would have the cloth arriving far faster than it set off.
+  const { sim } = fresh(4);
+  arm(sim, new Set([0, 1]));
+  const rates = [];
+  let prev = sim.maxStitchGap();
+  for (let f = 1; f <= 1200; f++) {
+    sim.step(1 / 60);
+    if (f % 20 === 0) { rates.push((prev - sim.maxStitchGap()) / (20 / 60)); prev = sim.maxStitchGap(); }
+    if (!sim.isSewing()) break;
+  }
+  const early = rates.slice(0, 3).reduce((a, x) => a + x, 0) / 3;
+  const late = rates.slice(-4, -1).reduce((a, x) => a + x, 0) / 3;
+  console.log(`  closing rate: ${early.toFixed(2)} cm/s at the start,`
+    + ` ${late.toFixed(2)} cm/s at the end (commanded 4)`);
+  check('it does not accelerate: the end is no faster than the start',
+    late < early * 2.2, `${early.toFixed(2)} -> ${late.toFixed(2)} cm/s`);
+  check('and it never greatly exceeds the rate it was given',
+    Math.max(...rates) < 4 * 3, `peak ${Math.max(...rates).toFixed(2)} cm/s`);
+
+  // ---- stop half way, and resume from there rather than from the beginning
+  const { sim: sp } = fresh(4);
+  arm(sp, new Set([0, 1]));
+  const full = sp.remainingFeedCm();
+  for (let f = 0; f < 90; f++) sp.step(1 / 60);     // 1.5 s of a ~5 s job
+  const stoppedAt = sp.maxStitchGap();
+  sp.stopSewing();
+  check('stopping stops the sewing', !sp.isSewing());
+  check('and brings the cloth to rest, so it does not coast on',
+    sp.maxSpeed() === 0, `${sp.maxSpeed().toFixed(2)} cm/s`);
+  const left = sp.remainingFeedCm();
+  console.log(`  stopped after 1.5 s of a ${(full / 4).toFixed(1)} s seam:`
+    + ` ${stoppedAt.toFixed(1)} cm open, ${left.toFixed(1)} cm left to take up`);
+  check('the seam is left half sewn, not undone and not finished',
+    left > 0.25 && left < full - 0.25, `${left.toFixed(1)} of ${full.toFixed(1)} cm`);
+  const row = sp.stitchReport({ closedCm: 0.25 }).find((r) => r.seam === 'S01');
+  check('and the report says so', /half sewn/.test(row.verdict), row.verdict);
+
+  arm(sp, new Set([0, 1]));                         // W again
+  check('resuming carries on from where it stopped',
+    Math.abs(sp.remainingFeedCm() - left) < 1e-9,
+    `${sp.remainingFeedCm().toFixed(1)} cm, not the original ${full.toFixed(1)}`);
+
+  // ---- moving a sewn piece lets its thread out instead of snapping it back
+  const { laid: l2, sim: s2 } = fresh(4);
+  arm(s2, new Set([0, 1]));
+  for (let f = 0; f < 400; f++) { s2.step(1 / 60); if (!s2.isSewing()) break; }
+  check('the seam closed', s2.maxStitchGap() < 0.1);
+  arrange.nudge(l2.placements, [1], 'station', 20);
+  arrange.applyPlacements(l2.asm, l2.asm.meta ? mk() : mk(), l2.placements, l2.axis, l2.offsets, [1]);
+  const opened = s2.maxStitchGap();
+  const retied = s2.retieStitches((st) => st.pa === 1 || st.pb === 1);
+  check('moving a sewn piece re-ties its threads rather than leaving them taut',
+    retied > 0 && s2.remainingFeedCm() > 1,
+    `${retied} threads let out over ${opened.toFixed(1)} cm`);
+  check('so nothing is left straining', s2.stitches.every((st) => !st.active
+    || st.rest === null || s2.stitchGap(st) - st.rest < 0.5));
 }
 
 line('an impossible seam shows tension instead of being forced shut');

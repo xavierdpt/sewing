@@ -108,7 +108,65 @@ pattern by hand is therefore not wired up at all, even though `currentPattern()`
 
 ---
 
-## 3 — Tension instead of forcing: a force-limited seam
+## 3 — Sewing is a rate, not an event
+
+The first thing building this got wrong, and it is worth stating before the
+force limit because it is the part you actually watch.
+
+A force-limited stitch pulling towards zero is, for a seam with nothing
+resisting it, **a constant force over the whole 20–40 cm of travel**. So the
+pieces accelerate the entire way and arrive at speed. That is a catapult, not a
+seam: the gesture it models is letting go of two pieces and having them snap
+together, when what is wanted is a seam being closed *at a rate*.
+
+So each stitch carries a `rest` length instead. It starts at the gap the seam
+was armed with and is **fed down at `sewSpeedCmPerSec`**, so the cloth is drawn
+together at a constant speed and never accelerates: the target moves at `v`,
+the cloth follows at `v`, and there is no transient to work out afterwards.
+Measured on a 19.9 cm seam at 4 cm/s — **4.09 cm/s at the start, 4.04 cm/s at
+the end**, peak 4.74 — and the duration is the gap divided by the rate to
+within 0.03 s at 2, 4 and 10 cm/s.
+
+The force limit still does its job, because the moment the cloth cannot keep up
+with the feed the constraint is violated and the tension rises. Nothing in §4
+changes; the feed decides *how fast*, the limit decides *how hard*.
+
+### Three things this needed that were not obvious
+
+**The rate limiter has to work in both directions.** The first version clamped
+`rest` to `gap + slack` to stop a jammed seam accumulating closure it could
+never deliver. But that *lowers* `rest` whenever the gap is already small, so
+the feed could leap ahead of itself and shut a seam at 19 cm/s on a 4 cm/s
+command — the very lurch it was supposed to remove. It now holds the feed when
+the cloth has fallen more than `sewSlackCm` behind, and never advances by more
+than one step.
+
+**Damping has to come after the substeps.** Sewing is meant to be
+quasi-static — that is the whole argument for closing seams with gravity off
+(assemble.js). But XPBD derives velocity from the positions it just projected,
+so damping the stored velocity on the way *in* is immediately overwritten and
+achieves nothing: vertices still reached **26 cm/s** on a 4 cm/s feed. Damping
+what comes *out* drops that to **6.6 cm/s**, which is about 1.5× the feed and
+is simply a panel rotating about its far edge.
+
+**Stopping has to tie off and halt the cloth.** A seam stopped at 9.8 cm
+drifted on to 1.6 cm over the next three seconds, for two reasons. The thread
+was holding at the gap last *commanded* rather than the gap actually
+*achieved*, which left the seam free to spring back; and the cloth was still
+travelling at the feed rate with nothing to stop it. Putting the needle down
+means the cloth stops too.
+
+There is a residual effect here worth knowing about, because it is real rather
+than a bug: a partly sewn assembly is **not in equilibrium**. The cloth is held
+strained by the feed, and if the simulation keeps running after the feed stops,
+that stored energy relaxes and closes the seam further on its own — at zero
+thread tension. The viewer freezes the simulation when you stop, so what you
+see is where the sewing got to; the relaxation happens on the next press of W,
+where the sewing damping absorbs it.
+
+---
+
+## 4 — Tension instead of forcing: a force-limited seam
 
 Replace the midpoint projection with a compliant XPBD distance constraint, the
 same shape as `stretch` and `bend`:
@@ -157,7 +215,7 @@ implements both dart and spread (docs/14-editing.md).
 
 ---
 
-## 4 — Selection, and sewing progressively
+## 5 — Selection, and sewing progressively
 
 Tag each stitch with its **seam id** and **panel pair** at `layOut` time.
 `main.js:692` already derives `seamOfV3` from `pattern.runs`; move that into
@@ -193,7 +251,7 @@ where drape is not yet being looked at, and keeps the rebuild to one.
 
 ---
 
-## 5 — The transform buttons
+## 6 — The transform buttons
 
 The refinement that makes this tractable: **store a rigid placement per piece and
 rebuild its vertices from the pattern**, rather than accumulating onto
@@ -300,7 +358,7 @@ trade for a transform with no clear fitting use.
 
 ---
 
-## 6 — Where the code goes
+## 7 — Where the code goes
 
 | file | change |
 |---|---|
@@ -396,7 +454,7 @@ the sewing decides what is joined and the arrangement does not.
 
 ---
 
-## 7 — Build order
+## 8 — Build order
 
 The risk was concentrated in one number, so it went first.
 
@@ -409,7 +467,7 @@ The risk was concentrated in one number, so it went first.
    literally the same operation on the same numbers.
 4. **Selection, the buttons, and progressive sewing.**
 
-## 8 — Using it
+## 9 — Using it
 
 **J** lays the pieces out, all selected. Then:
 
@@ -421,11 +479,21 @@ The risk was concentrated in one number, so it went first.
 | `[` `]` and `;` `'` | spin, tilt |
 | **M** / **F** / **0** | mirror, flip, reset to the placement hints |
 | drag / shift-drag / alt-drag | the same as the buttons, by hand |
-| **W** | sew the seams between the selected pieces |
+| **W** | start sewing the seams between the selected pieces — **or stop where they have got to** |
 | **X** | weld what closed, and drop |
 
-**W** returns to arranging rather than finishing the garment, so the loop is:
-select two pieces, sew, look at the report, select the next. Seams sewn on an
-earlier pass keep their threads and hold while the rest is arranged around
-them. The stitch ribbons are coloured by tension by default, so a seam being
-dragged shut is visible as it happens.
+**W is a toggle**, because sewing takes time at a known rate rather than being
+an event. Press it and the seams begin closing at `sewSpeedCmPerSec` (the
+`sewing speed, cm/s` slider); press it again and they stop exactly where they
+are, threads still in and holding. So the loop is: select two pieces, sew,
+stop when you have seen enough, look at the report, select the next. A seam
+left half closed resumes from where it stopped rather than starting over.
+
+Seams sewn on an earlier pass keep their threads and hold while the rest is
+arranged around them — and if you *move* a piece that has already been sewn,
+its threads are let out to where the cloth now is, so the next press of W draws
+it back gently instead of snapping it.
+
+The stitch ribbons are coloured by tension by default, so a seam being dragged
+shut is visible as it happens, and the HUD shows how many cm are left to take
+up and how far the cloth is lagging behind the feed.
