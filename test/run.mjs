@@ -21,6 +21,7 @@ import { layOut, weldStitched, assembleGarment } from '../app/js/assemble.js';
 import { takeOutWedge, letInWedge, check as patternCheck,
   panelArea } from '../app/js/patternedit.js';
 import { DEG, dist, add, mul } from '../app/js/geom.js';
+import * as arrange from '../app/js/arrange.js';
 
 const line = (s) => console.log(`\n=== ${s}`);
 let fails = 0;
@@ -1199,26 +1200,18 @@ line('arranging by hand: any rigid placement sews up the same');
     lengthCm: 50, edge: 5.0, waistV,
   });
 
-  // the same four gestures the mouse applies, as a function
+  // The same gestures the mouse and the buttons apply, which are now the same
+  // thing: an edit to the piece's stored placement, after which its vertices
+  // are recomputed from the pattern (arrange.js). That is what makes the
+  // invariant below hold exactly rather than approximately.
   const shove = (laid, pi, { turn = 0, lift = 0, spin = 0, push = 0 }) => {
-    const V = laid.asm.verts;
-    const ids = laid.panelOf.map((p, i) => (p === pi ? i : -1)).filter((i) => i >= 0);
-    const ax = laid.centre;
-    let cx = 0, cz = 0;
-    for (const i of ids) { cx += V[i][0] / ids.length; cz += V[i][2] / ids.length; }
-    const rot = (px, pz, ang) => {
-      const ca = Math.cos(ang), sa = Math.sin(ang);
-      for (const i of ids) {
-        const x = V[i][0] - px, z = V[i][2] - pz;
-        V[i][0] = px + x * ca - z * sa;
-        V[i][2] = pz + x * sa + z * ca;
-      }
-    };
-    rot(ax[0], ax[2], turn);
-    rot(cx, cz, spin);
-    const R = Math.hypot(cx - ax[0], cz - ax[2]) || 1;
-    const nx = (cx - ax[0]) / R, nz = (cz - ax[2]) / R;
-    for (const i of ids) { V[i][1] += lift; V[i][0] += nx * push; V[i][2] += nz * push; }
+    const pl = laid.placements[pi];
+    pl.station += turn;
+    pl.y += lift;
+    pl.spin += spin;
+    pl.radius = Math.max(1, pl.radius + push);
+    arrange.applyPlacements(laid.asm, pattern, laid.placements, laid.axis,
+      laid.offsets, [pi]);
   };
 
   const tidy = layOut(pattern, b, { standoffCm: 6 });
@@ -1272,6 +1265,232 @@ line('arranging by hand: any rigid placement sews up the same');
     `hem ${a.hem.hemLengthCm} vs ${c.hem.hemLengthCm} cm`);
   check('neither comes out strained', a.peak < 8 && c.peak < 8,
     `${a.peak} % and ${c.peak} %`);
+}
+
+line('the transform buttons: every placement is an isometry');
+{
+  // The claim the whole arrangement phase rests on: a piece that has been
+  // moved is still exactly the piece that was cut. Stored placements make that
+  // checkable rather than hopeful -- the vertices are recomputed from the
+  // pattern every time, so no sequence of button presses can accumulate drift.
+  const b = new Body();
+  const waistV = b.landmarkV('waist');
+  const ring = waistRing(b, { waistV, ease: 1.0 });
+  const pattern = flaredSkirtPattern({
+    panels: 4, waistCm: ring.circumferenceCm, circleFraction: 0.5,
+    lengthCm: 50, edge: 5.0, waistV,
+  });
+  const { placements, axis } = arrange.defaultPlacements(pattern, b, { standoffCm: 6 });
+  const panel = pattern.panels[0];
+
+  // flat on a tangent plane, a placement is exactly the pattern, moved
+  const flat = arrange.placement({ ...placements[0], wrap: false });
+  check('a flat placement is exactly isometric',
+    arrange.placementStrain(panel, flat, axis) < 1e-12,
+    `${arrange.placementStrain(panel, flat, axis).toExponential(1)}`);
+
+  // rolled, it is the chord-versus-arc error of the mesh and nothing else
+  const rolled = arrange.placement(placements[0]);
+  const e0 = arrange.placementStrain(panel, rolled, axis);
+  check('rolling onto the body bends it without stretching it', e0 < 0.004,
+    `${(100 * e0).toFixed(3)} % -- edge^2/24R^2`);
+
+  // Every transform EXCEPT spin is a rigid motion of the already-wrapped
+  // piece, so it cannot change the piece's own measurements at all, however
+  // many times it is applied. `radius` included: pushing a piece in or out
+  // carries it bodily, and the cylinder it was rolled onto (`wrapRadius`) is
+  // left alone -- which is what keeps a shared seam lined up when two
+  // neighbouring pieces are pushed out by different amounts.
+  const rigid = [arrange.placement(placements[0])];
+  for (let i = 0; i < 300; i++) {
+    arrange.nudge(rigid, [0], 'station', 7);
+    arrange.nudge(rigid, [0], 'y', -0.3);
+    arrange.nudge(rigid, [0], 'radius', 0.2);
+    arrange.nudge(rigid, [0], 'tilt', 3);
+    arrange.nudge(rigid, [0], 'swing', -2);
+    arrange.nudge(rigid, [0], 'y', 0.3);
+    arrange.nudge(rigid, [0], 'radius', -0.2);
+  }
+  const eR = arrange.placementStrain(panel, rigid[0], axis);
+  check('1500 presses of the rigid transforms change nothing at all',
+    Math.abs(eR - e0) < 1e-12,
+    `${(100 * Math.abs(eR - e0)).toExponential(1)} % of drift`);
+
+  // Spin is the exception, and it is not drift: spin happens in pattern space
+  // BEFORE the piece is wrapped, so it changes how the piece's edges lie
+  // against the cylinder's curvature and therefore changes the chord-versus-
+  // arc error. Measured, this piece: 0.236 % upright, 0.357 % at 45 degrees.
+  // It is bounded by the mesh, not by the number of presses, and laying the
+  // piece flat removes it entirely whatever the spin.
+  const spun = arrange.placement({ ...placements[0], spin: 45 * Math.PI / 180 });
+  const eS = arrange.placementStrain(panel, spun, axis);
+  console.log(`  spun 45 deg: ${(100 * eS).toFixed(3)} % against`
+    + ` ${(100 * e0).toFixed(3)} % upright -- the wrap error, not drift`);
+  check('spinning changes the wrap error but keeps it small', eS < 0.005);
+  check('and laying it flat removes it however it is spun',
+    arrange.placementStrain(panel, arrange.placement({ ...spun, wrap: false }), axis) < 1e-12);
+
+  // The real no-drift claim: a placement is its numbers, so the path taken to
+  // them cannot matter. This is what an accumulated mutation could not promise.
+  const walked = [arrange.placement(placements[0])];
+  for (let i = 0; i < 200; i++) {
+    arrange.nudge(walked, [0], 'station', 7);
+    arrange.nudge(walked, [0], 'spin', 11);
+    arrange.nudge(walked, [0], 'tilt', 3);
+    arrange.nudge(walked, [0], 'station', -7);
+    arrange.nudge(walked, [0], 'spin', -11);
+    arrange.nudge(walked, [0], 'tilt', -3);
+  }
+  const A = arrange.placePanel(panel, walked[0], axis);
+  const B = arrange.placePanel(panel, arrange.placement(placements[0]), axis);
+  const worst = Math.max(...A.map((q, i) => dist(q, B[i])));
+  console.log(`  1200 presses out and back: every vertex within`
+    + ` ${worst.toExponential(1)} cm of where it started`);
+  check('a placement is its numbers: the path to them does not matter',
+    worst < 1e-9, `${worst.toExponential(1)} cm`);
+
+  // flip and mirror are isometries too, and mirror is its own inverse
+  const m = arrange.placement(placements[1]);
+  const before = JSON.stringify(m);
+  arrange.mirror([m], [0]);
+  check('mirroring is an isometry',
+    Math.abs(arrange.placementStrain(pattern.panels[1], m, axis)
+      - arrange.placementStrain(pattern.panels[1], placements[1], axis)) < 1e-12);
+  arrange.mirror([m], [0]);
+  check('and mirroring twice is where you started', JSON.stringify(m) === before);
+
+  // distribute evenly really does
+  const many = pattern.panels.map((_, i) => arrange.placement({ ...placements[i], station: i * 0.1 }));
+  arrange.distribute(many, many.map((_, i) => i));
+  const gaps = many.map((q, i) => q.station - many[(i - 1 + many.length) % many.length].station)
+    .slice(1);
+  check('distribute spaces them equally',
+    Math.max(...gaps) - Math.min(...gaps) < 1e-12,
+    `${(gaps[0] * DEG).toFixed(1)} deg apart`);
+}
+
+line('sewing by hand: only the selected seams, and only what closes');
+{
+  const b = new Body();
+  const waistV = b.landmarkV('waist');
+  const ring = waistRing(b, { waistV, ease: 1.0 });
+  const mk = () => flaredSkirtPattern({
+    panels: 4, waistCm: ring.circumferenceCm, circleFraction: 0.5,
+    lengthCm: 50, edge: 5.0, waistV,
+  });
+
+  // ---- a stitch knows which seam and which two pieces it belongs to
+  const laid = layOut(mk(), b, { standoffCm: 6 });
+  check('every stitch knows its seam and its two pieces',
+    laid.stitches.every((st) => st.seam && st.pa !== undefined && st.pb !== undefined),
+    `${new Set(laid.stitches.map((st) => st.seam)).size} seams`);
+
+  // ---- sew ONLY the seams between pieces 0 and 1
+  const sim = new Cloth(laid.asm, b, {
+    fabric: 'linen', gravityScale: 0, stitches: laid.stitches,
+    selfCollision: false, substeps: 8,
+  });
+  const sel = new Set([0, 1]);
+  const n = sim.setStitchActive((st) => sel.has(st.pa) && sel.has(st.pb));
+  check('a selection arms only its own seams', n > 0 && n < laid.stitches.length,
+    `${n} of ${laid.stitches.length} stitches`);
+  const gapOf = (st) => sim.stitchGap(st);
+  for (let f = 0; f < 180; f++) {
+    sim.stitchStrength = Math.min(1, 0.05 + 1.2 * (f / 180));
+    sim.step(1 / 60);
+  }
+  // `sim.stitches`, not `laid.stitches`: the solver takes its own copy, and the
+  // live state -- active, tension, saturated -- lives on the solver's.
+  const mine = sim.stitches.filter((st) => st.active);
+  const others = sim.stitches.filter((st) => !st.active);
+  const myGap = Math.max(...mine.map(gapOf));
+  const otherGap = Math.max(...others.map(gapOf));
+  console.log(`  sewed pieces 0+1: their seam closed to ${myGap.toFixed(3)} cm,`
+    + ` the untouched seams are still ${otherGap.toFixed(1)} cm open`);
+  check('the selected seam closes', myGap < 0.3, `${myGap.toFixed(3)} cm`);
+  check('and the unselected seams are left alone',
+    otherGap > 1, `${otherGap.toFixed(1)} cm still open`);
+  check('an inactive stitch pulls with nothing',
+    others.every((st) => st.tensionGf === 0));
+
+  // ---- a weld takes only what was sewn AND closed
+  const w = weldStitched(laid.asm, sim.stitches, { closedCm: 0.25 });
+  check('welding takes the closed seams and leaves the rest',
+    w.closedStitches.length === mine.length
+      && w.openStitches.length === others.length,
+    `${w.weldedPct} % welded, ${w.openStitches.length} left basted`);
+  check('the welded mesh is still in one piece per unsewn group',
+    w.asm.verts.length === laid.asm.verts.length - mine.length,
+    `${w.asm.verts.length} vertices from ${laid.asm.verts.length}`);
+}
+
+line('an impossible seam shows tension instead of being forced shut');
+{
+  // The whole reason for the force-limited stitch. A seam that is
+  // geometrically too short must STAY OPEN and say by how much, rather than be
+  // dragged closed with the fabric taking the difference.
+  const b = new Body();
+  const waistV = b.landmarkV('waist');
+  const ring = waistRing(b, { waistV, ease: 1.0 });
+  const mk = () => flaredSkirtPattern({
+    panels: 4, waistCm: ring.circumferenceCm, circleFraction: 0.5,
+    lengthCm: 50, edge: 5.0, waistV,
+  });
+
+  // take 20 % out of the length of one panel: its two side seams can no longer
+  // reach the panels either side of it
+  const pattern = mk();
+  const p0 = pattern.panels[0];
+  const yTop = Math.max(...p0.pts.map((q) => q.y));
+  for (const q of p0.pts) q.y = yTop + (q.y - yTop) * 0.8;
+
+  const r = assembleGarment(pattern, b, {
+    fabric: 'linen', standoffCm: 6, stitchSeconds: 2.5, fallSeconds: 3,
+    floorY: floorOf(b),
+  });
+  const touching = r.seams.filter((x) => x.pieces.includes('0'));
+  const sound = r.seams.filter((x) => !x.pieces.includes('0'));
+  for (const x of r.seams) console.log(`  ${x.seam} (${x.pieces}): ${x.verdict}`);
+
+  check('the seams on the short piece do not close',
+    touching.every((x) => x.maxGapCm > 0.25), `${touching.length} seams open`);
+  check('and they say so, by how much and why',
+    touching.every((x) => /short by/.test(x.verdict)));
+  check('while the sound seams close normally',
+    sound.every((x) => x.maxGapCm <= 0.25 && x.verdict === 'closed'));
+  check('the short seams pull much harder than the sound ones',
+    Math.min(...touching.map((x) => x.meanTensionGf))
+      > Math.max(...sound.map((x) => x.meanTensionGf)) + 5,
+    `${touching.map((x) => x.meanTensionGf).join('/')} gf against `
+      + `${sound.map((x) => x.meanTensionGf).join('/')} gf`);
+  check('and the cloth is NOT stretched past what it can take',
+    r.sim.report().maxStretchPct <= 4.0, `${r.sim.report().maxStretchPct} %`);
+  check('the garment is welded only where it closed',
+    r.welded.openStitches.length > 0 && r.welded.weldedPct < 100,
+    `${r.welded.weldedPct} % welded`);
+
+  // ---- the other way a seam fails: the thread, not the cloth.
+  //
+  // It has to be tested on a seam that NEEDS force. A sound seam closes on
+  // almost nothing -- measured above at under 1 gf -- so a weak thread sews it
+  // perfectly well, which is correct and is why the same short pattern is used
+  // here with a thread too weak to drag it together.
+  const weakPattern = mk();
+  const w0 = weakPattern.panels[0];
+  const wTop = Math.max(...w0.pts.map((q) => q.y));
+  for (const q of w0.pts) q.y = wTop + (q.y - wTop) * 0.8;
+  const weak = assembleGarment(weakPattern, b, {
+    fabric: 'linen', standoffCm: 6, stitchSeconds: 2.5, fallSeconds: 1,
+    floorY: floorOf(b), cloth: { maxTensionGf: 4 },
+  });
+  const stuck = weak.seams.filter((x) => x.maxGapCm > 0.25);
+  console.log(`  with a 4 gf thread: ${stuck.length} of ${weak.seams.length}`
+    + ' seams cannot be closed at all');
+  check('a thread too weak to close a sound seam saturates',
+    stuck.length > 0 && stuck.every((x) => x.atTheLimit > 0),
+    `${stuck.map((x) => x.atTheLimit).join('/')} stitches at the limit`);
+  check('and the report blames the thread, not the cloth',
+    stuck.every((x) => /thread is at its limit/.test(x.verdict)));
 }
 
 line('editing a piece: taking a wedge out, letting a wedge in');

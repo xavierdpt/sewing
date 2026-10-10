@@ -447,6 +447,11 @@ export class Cloth {
     this.stitches = (o.stitches || []).map((s) => ({
       ...s,
       active: s.active !== false,
+      // Per-stitch share of the force limit, 0..1. A seam already sewn holds
+      // at 1 while a new pass ramps from nearly nothing, which a single global
+      // ramp cannot express: ramping it would slacken every seam already
+      // closed and the garment would sag open on every pass.
+      strength: s.strength ?? 1,
       lambda: 0,          // the XPBD multiplier, accumulated over one substep
       tensionGf: 0,       // |lambda| / h^2, in gram-force
       peakGf: 0,          // the most it has ever pulled with
@@ -821,18 +826,21 @@ export class Cloth {
    *   is the measurement -- "this seam is 4 cm short" -- and it is exactly what
    *   forcing the seam shut used to throw away.
    *
-   * `stitchStrength` (0..1, ramped by the caller) scales the force limit rather
-   * than the correction, which is what a seam being drawn closed by hand is:
-   * the same thread, pulled progressively harder.
+   * `stitchStrength` (0..1) and each stitch's own `strength` scale the force
+   * LIMIT rather than the correction, which is what a seam being drawn closed
+   * by hand is: the same thread, pulled progressively harder. The per-stitch
+   * one is what lets one pass ramp while the seams already sewn hold fast.
    */
   _solveStitches(h2) {
     const V = this.asm.verts, W = this.invMass;
     const k = Math.min(1, Math.max(0, this.stitchStrength));
     // gram-force -> g*cm/s^2 -> multiplier units (lambda = force * h^2)
-    const lamMax = this.maxTensionGf * G * h2 * k;
+    const lamBase = this.maxTensionGf * G * h2 * k;
     const aT = this.alphaStitch / h2;
     for (const s of this.stitches) {
       if (!s.active) continue;
+      const lamMax = lamBase * Math.min(1, Math.max(0, s.strength));
+      if (lamMax <= 0) continue;
       const wa = W[s.a], wb = W[s.b], wsum = wa + wb;
       if (wsum <= 0) continue;
       const a = V[s.a], b = V[s.b];
@@ -861,14 +869,24 @@ export class Cloth {
    * gram-force -- a number a person can weigh against a thread.
    */
   _readStitchTensions(h2) {
-    const lamMax = this.maxTensionGf * G * h2 * Math.min(1, Math.max(0, this.stitchStrength));
+    const lamBase = this.maxTensionGf * G * h2 * Math.min(1, Math.max(0, this.stitchStrength));
     for (const s of this.stitches) {
       if (!s.active) { s.tensionGf = 0; s.lambda = 0; s.saturated = false; continue; }
+      const lamMax = lamBase * Math.min(1, Math.max(0, s.strength));
       s.tensionGf = Math.abs(s.lambda) / (h2 * G);
       if (s.tensionGf > s.peakGf) s.peakGf = s.tensionGf;
       s.saturated = lamMax > 0 && Math.abs(s.lambda) >= lamMax * 0.995;
       s.lambda = 0;
     }
+  }
+
+  /**
+   * Set each stitch's share of the force limit. The caller ramps a new pass
+   * while leaving the seams it has already sewn at full strength.
+   */
+  setStitchStrength(fn) {
+    for (const s of this.stitches) s.strength = fn(s);
+    return this;
   }
 
   /**
@@ -999,9 +1017,15 @@ export class Cloth {
         peakTensionGf: +Math.max(...list.map((s) => s.peakGf)).toFixed(0),
         clothStrainPct: +(100 * strained).toFixed(1),
         atTheLimit: sat,
+        // "Forced" is a statement about THIS seam's thread, so it needs the
+        // thread to be working. Cloth near its strain limit is a fact about
+        // the garment -- a short piece elsewhere distorts the whole ring --
+        // and a seam that closed at no tension at all did not force anything,
+        // whatever its neighbours are doing.
         verdict: active === 0 ? 'not sewn'
           : maxGap <= closedCm
-            ? (sat > list.length * 0.1 || strained >= this.maxStrain * 0.95
+            ? (sat > list.length * 0.1
+              || (pulling && strained >= this.maxStrain * 0.95)
               ? 'closed, but forced -- it will pucker' : 'closed')
             : pulling || sat > 0
               ? `short by ${maxGap.toFixed(1)} cm (${why || 'it has stopped closing'})`

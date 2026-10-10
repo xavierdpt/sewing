@@ -22,6 +22,7 @@ import { neckFrame, floorOf } from './droptest.js';
 import { flaredSkirtPattern, placeSkirt, hemProfile, assemblyReport,
   waistRing } from './skirt.js';
 import { layOut, weldStitched } from './assemble.js';
+import * as arrange from './arrange.js';
 import { PatternTable } from './table.js';
 import { LIBRARY, byId } from './tiles.js';
 import { sub, add, mul, cross, norm, dist, DEG } from './geom.js';
@@ -146,6 +147,15 @@ const params = {
   skirtEaseCm: 1.0, skirtEdge: 3.0,
   // assembling from separate pieces
   standoffCm: 6, stitchSeconds: 2.5, pinWaist: true,
+  // Sewing by hand (docs/15-manual-sewing.md). `stepCm` and `stepDeg` are how
+  // far one press of a transform button moves the selection.
+  stepCm: 1, stepDeg: 5, weldTolCm: 0.25,
+  stitchColour: 'tension',        // 'tension' | 'seam'
+  maxTensionGf: 250, stitchSoftness: 60,
+  // Whether a seam that cannot be closed is welded anyway. Off is the honest
+  // setting and the default; on is the old behaviour, kept because it is the
+  // control case the new one is measured against.
+  forceSeamsShut: false,
   // the cutting table
   tool: 'select', intakeDeg: 15, spreadDeg: 20,
   selfCollision: true, clothColour: 'stretch', slowMo: 1,
@@ -483,8 +493,12 @@ function startSkirt() {
  */
 function startAssembly() {
   withBusy('arranging the pieces…', () => {
-    // whatever is on the table, edits and all
-    const pattern = currentSkirtPattern();
+    // Whatever pattern is in hand, edits and all -- a skirt off the cutting
+    // table, an imported file, or a bodice drafted for this body. This used to
+    // call currentSkirtPattern() unconditionally, which DISCARDED any pattern
+    // that was not a flared skirt and drafted a skirt instead, so arranging a
+    // bodice by hand was not reachable at all.
+    const pattern = currentArrangePattern();
     if (table) table.hide();
     const laid = layOut(pattern, surface, { standoffCm: params.standoffCm });
     sim = new Cloth(laid.asm, surface, {
@@ -494,44 +508,182 @@ function startAssembly() {
       selfCollision: params.selfCollision,
       gravityScale: 0,
       stitches: laid.stitches,
+      maxTensionGf: params.maxTensionGf,
+      stitchSoftness: params.stitchSoftness,
       floorY: floorOf(surface),
     });
     sim.pattern = pattern;
-    assembling = { pattern, laid, phase: 'arranging' };
+    // Nothing is being sewn yet. Sewing is a choice of pieces, made below.
+    sim.stitchStrength = 0;
+    assembling = {
+      pattern, laid, phase: 'arranging',
+      selected: new Set(pattern.panels.map((_, i) => i)),   // all, to begin with
+      sewn: new Set(),                                      // seams already drawn closed
+    };
     clearShell();
     asm = laid.asm;
     loadedPattern = pattern;
-    loadedName = `skirt-${params.skirtPanels}panel`;
-    params.clothColour = 'panel';          // so the separate pieces are visible
+    loadedName = pattern.meta && pattern.meta.test === 'flared-skirt'
+      ? `skirt-${params.skirtPanels}panel` : (loadedName || 'pattern');
+    params.clothColour = 'selection';      // so the selection is visible
     gui.controllersRecursive().forEach((c) => c.updateDisplay());
     buildClothMesh();
     buildStitchLines();
     // Nothing moves until you say so. The pieces are laid out where the
-    // placement hints put them; drag them wherever you want them first.
+    // placement hints put them; move them wherever you want them first.
     playing = false;
     console.log(`${pattern.panels.length} pieces laid out, `
       + `${laid.stitches.length} stitches waiting, widest seam gap `
       + `${sim.maxStitchGap().toFixed(1)} cm.\n`
-      + 'Drag a piece to move it round the body; shift-drag to spin it, '
-      + 'alt-drag to push it in or out. Then press W to sew.');
+      + 'Click a piece to select it, shift-click to add, A selects all. '
+      + 'Move the selection with the buttons, or drag it. '
+      + 'Then press W to sew the seams BETWEEN SELECTED PIECES only.');
     updateHUD();
   });
 }
 
-/** Phase 1 -> 2: stop arranging, start drawing the seams closed. */
+// ------------------------------------------------- selection and sewing
+
+/** Every stitch whose two pieces are both selected: what W will actually sew. */
+function stitchesInSelection() {
+  if (!assembling) return [];
+  const sel = assembling.selected;
+  return assembling.laid.stitches.filter((st) => sel.has(st.pa) && sel.has(st.pb));
+}
+
+/**
+ * Select pieces, and keep the picture and the solver in step.
+ *
+ * The selection is what decides which seams are being sewn -- a stitch is
+ * active iff BOTH its pieces are selected -- so changing it has to re-arm the
+ * solver, not just recolour the mesh.
+ */
+function setSelection(ids) {
+  if (!assembling) return;
+  assembling.selected = new Set(ids);
+  armStitches();
+  updateClothMesh();
+  updateStitchLines();
+  updateHUD();
+}
+
+/** A stitch's seam, named even when the pattern did not name it. */
+const seamKeyOf = (st) => st.seam || `P${st.pa}-P${st.pb}`;
+
+/**
+ * Tell the solver which seams are being sewn.
+ *
+ * Three states, and the middle one is what makes assembly progressive:
+ *
+ *   NOT YET SEWN       a thread that has not been put in. Inactive: the two
+ *                      pieces are free to be moved apart.
+ *   ALREADY SEWN       sewn on an earlier pass. Stays active for ever, because
+ *                      a seam does not come undone when you select the next
+ *                      pair of pieces. These are the basting threads.
+ *   BEING SEWN NOW     inside the selection, while the phase is 'stitching'.
+ */
+function armStitches() {
+  if (!assembling || !sim) return 0;
+  const sel = assembling.selected;
+  const sewn = assembling.sewn;
+  const sewing = assembling.phase === 'stitching';
+  const n = sim.setStitchActive((st) => sewn.has(seamKeyOf(st))
+    || (sewing && sel.has(st.pa) && sel.has(st.pb)));
+  // Already-sewn seams hold at full strength; the pass being sewn now gets
+  // whatever the ramp has reached. Without the split, ramping pass two would
+  // slacken every seam pass one had closed and the garment would sag open on
+  // every pass.
+  sim.setStitchStrength((st) => (sewn.has(seamKeyOf(st)) ? 1 : (assembling.ramp ?? 1)));
+  // Once anything is sewn its thread has to keep pulling, or the seam opens
+  // again the moment the ramp that closed it stops.
+  if (n > 0 && sim.stitchStrength <= 0) sim.stitchStrength = 1;
+  return n;
+}
+
+/** Pieces sharing a seam with the selection: the next step of an assembly. */
+function selectAdjacent() {
+  if (!assembling) return;
+  const sel = new Set(assembling.selected);
+  for (const st of assembling.laid.stitches) {
+    if (sel.has(st.pa)) sel.add(st.pb);
+    if (sel.has(st.pb)) sel.add(st.pa);
+  }
+  setSelection(sel);
+}
+
+/** Phase 1 -> 2: draw the seams inside the selection closed. */
 function sewItUp() {
-  if (!assembling || assembling.phase !== 'arranging') return;
+  if (!assembling || assembling.phase === 'falling') return;
+  const todo = stitchesInSelection();
+  if (!todo.length) {
+    console.warn('no seams inside the selection -- select at least two pieces '
+      + 'that share a seam (shift-click, or "grow the selection").');
+    return;
+  }
   assembling.phase = 'stitching';
   assembling.sewStart = sim.time;
+  assembling.ramp = 0.05;
+  armStitches();
   playing = true;
-  console.log(`sewing: ${assembling.laid.stitches.length} stitches, widest gap `
-    + `${sim.maxStitchGap().toFixed(1)} cm. Gravity is off until the seams are closed.`);
+  const seams = [...new Set(todo.map(seamKeyOf))];
+  console.log(`sewing ${todo.length} stitches on ${seams.length} seam(s) `
+    + `(${seams.join(', ')}), widest gap ${sim.maxStitchGap().toFixed(1)} cm. `
+    + 'Gravity is off until the seams are closed.');
+}
+
+/**
+ * A sewing pass has finished. Record which seams it closed, report them, and
+ * go back to arranging so the next pieces can be chosen.
+ *
+ * This is the loop the whole exercise is for: sew two pieces, look at it, sew
+ * the next. The seams just sewn keep their threads (armStitches), so they hold
+ * while the rest of the garment is still being arranged around them.
+ */
+function finishSewingPass() {
+  const todo = stitchesInSelection();
+  const closed = todo.filter((st) => sim.stitchGap(st) <= params.weldTolCm);
+  for (const st of todo) assembling.sewn.add(seamKeyOf(st));
+  assembling.phase = 'arranging';
+  assembling.ramp = 1;
+  playing = false;
+  armStitches();
+  const rows = sim.stitchReport({ closedCm: params.weldTolCm })
+    .filter((r) => r.sewing !== 'no');
+  console.log(`pass done: ${closed.length} of ${todo.length} stitches closed `
+    + `to within ${params.weldTolCm} cm.`);
+  console.table(rows);
+  const bad = rows.filter((r) => r.maxGapCm > params.weldTolCm);
+  if (bad.length) {
+    console.warn(`${bad.length} seam(s) would not close: `
+      + bad.map((r) => `${r.seam} ${r.verdict}`).join('; ')
+      + '. They are NOT welded shut -- fix the pattern on the table (T), or '
+      + 'accept it and drop anyway.');
+  }
+  console.log('select the next pieces and press W again, or press X to weld and drop.');
+  updateStitchLines();
+  updateClothMesh();
+  updateHUD();
 }
 
 /** Phase 2 -> 3: weld the closed seams and switch gravity on. */
 function finishAssembly() {
+  if (!assembling || assembling.phase === 'falling') return;
   const { pattern, laid } = assembling;
-  const welded = weldStitched(laid.asm, laid.stitches, { velocities: sim.vel });
+  // Only seams that were actually SEWN are candidates for welding. Passing
+  // every stitch would weld a seam nobody ever sewed, purely because its two
+  // pieces happened to be parked within the tolerance of each other -- which
+  // would make the arrangement, rather than the sewing, decide what is joined.
+  // Press X having sewn half the seams and you get a half-assembled garment,
+  // which is the honest answer.
+  const sewnStitches = sim.stitches.filter((st) => assembling.sewn.has(seamKeyOf(st)));
+  if (!sewnStitches.length) {
+    console.warn('nothing has been sewn yet -- press W on a selection first.');
+    return;
+  }
+  const welded = weldStitched(laid.asm, sewnStitches, {
+    velocities: sim.vel,
+    closedCm: params.forceSeamsShut ? Infinity : params.weldTolCm,
+  });
   const idsOfKind = (kind) => {
     const out = new Set();
     for (const p of pattern.panels) {
@@ -547,18 +699,32 @@ function finishAssembly() {
   };
   welded.asm.meta.hemIds = idsOfKind('bottom');
   welded.asm.meta.waistIds = idsOfKind('top');
-  welded.asm.meta.skirt = true;
-  welded.asm.meta.waistRingCm = pattern.meta.waistCm;
+  // Only a skirt has a waist ring to measure against, and the hem profile and
+  // the HUD both key off this. A bodice arranged by hand must not claim to be
+  // one, or `count the folds` reports nonsense about it.
+  const isSkirt = !!(pattern.meta && pattern.meta.test === 'flared-skirt');
+  welded.asm.meta.skirt = isSkirt;
+  if (isSkirt) welded.asm.meta.waistRingCm = pattern.meta.waistCm;
   const gap = sim.maxStitchGap();
+  const report = sim.stitchReport({ closedCm: params.weldTolCm });
   const next = new Cloth(welded.asm, surface, {
     fabric: params.fabric,
     friction: params.friction,
     substeps: params.substeps,
     selfCollision: params.selfCollision,
+    // The seams that would not close keep their basting threads through the
+    // fall. They are still held as well as the thread can hold them, they
+    // still report their tension, and they are visibly still open -- which is
+    // the point: a garment with a seam that does not meet should LOOK like
+    // one, not like a garment with a puckered seam.
+    stitches: welded.openStitches,
+    maxTensionGf: params.maxTensionGf,
+    stitchSoftness: params.stitchSoftness,
     floorY: floorOf(surface),
   });
+  if (welded.openStitches.length) next.stitchStrength = 1;
   welded.velocities.forEach((v, i) => { next.vel[i] = v; });
-  if (params.pinWaist) {
+  if (params.pinWaist && welded.asm.meta.waistIds.length) {
     for (const i of welded.asm.meta.waistIds) {
       welded.asm.pinned[i] = true;
       next.invMass[i] = 0;
@@ -568,14 +734,25 @@ function finishAssembly() {
   sim = next;
   asm = welded.asm;
   assembling.phase = 'falling';
+  assembling.seamReport = report;
   panelOfVert = [];
-  for (const o of [stitchLines, seamCorners]) {
-    if (o) { scene.remove(o); o.geometry.dispose(); }
+  if (!welded.openStitches.length) {
+    for (const o of [stitchLines, seamCorners]) {
+      if (o) { scene.remove(o); o.geometry.dispose(); }
+    }
+    stitchLines = null; seamCorners = null;
+  } else {
+    buildStitchLines();
   }
-  stitchLines = null; seamCorners = null;
   buildClothMesh();
-  console.log(`seams closed to ${gap.toFixed(2)} cm and welded; `
-    + `${welded.asm.verts.length} vertices. Gravity on.`);
+  console.log(`welded ${welded.weldedPct} % of the stitches `
+    + `(within ${params.weldTolCm} cm); ${welded.asm.verts.length} vertices. `
+    + `Widest seam still open: ${gap.toFixed(2)} cm. Gravity on.`);
+  if (welded.openStitches.length) {
+    console.warn(`${welded.openStitches.length} stitches were NOT welded because `
+      + 'their seams would not close. They stay basted and visible.');
+    console.table(report.filter((r) => r.maxGapCm > params.weldTolCm));
+  }
   updateHUD();
 }
 
@@ -641,7 +818,14 @@ function updateClothMesh() {
   for (let i = 0; i < V.length; i++) {
     let c;
     if (params.clothColour === 'panel') c = PANEL_COLOURS[(panelOfVert[i] || 0) % PANEL_COLOURS.length];
-    else if (params.clothColour === 'stretch') c = STRETCH_RAMP((f.tension[i] - f.slack[i]) / 0.05);
+    else if (params.clothColour === 'selection') {
+      // selected pieces in their own colour, the rest dimmed: the only way to
+      // see what a button press is about to move
+      const pi = assembling ? assembling.laid.panelOf[i] : null;
+      const on = !assembling || assembling.selected.has(pi);
+      c = PANEL_COLOURS[(panelOfVert[i] || 0) % PANEL_COLOURS.length].clone();
+      if (!on) c.lerp(new THREE.Color(0.20, 0.21, 0.23), 0.78);
+    } else if (params.clothColour === 'stretch') c = STRETCH_RAMP((f.tension[i] - f.slack[i]) / 0.05);
     else if (params.clothColour === 'contact') {
       c = f.contact[i] ? new THREE.Color(0.92, 0.55, 0.15) : new THREE.Color(0.56, 0.60, 0.66);
     } else if (params.clothColour === 'gap') {
@@ -681,6 +865,19 @@ let stitchLines = null;
  * meet and the places a mismatch shows first.
  */
 let seamCorners = null;
+let stitchSeamColour = null;
+
+/**
+ * How hard a stitch is pulling, as a colour: slack grey through to the full
+ * force limit in red.
+ *
+ * This is the visible half of the force limit. A seam closing easily stays
+ * grey; one that is being dragged shut goes red and STAYS red and open, which
+ * is the thing the old hard projection could not show because it always won.
+ */
+const TENSION_RAMP = (t) => new THREE.Color(0.45, 0.47, 0.50)
+  .lerp(new THREE.Color(0.95, 0.80, 0.20), Math.min(1, t * 2))
+  .lerp(new THREE.Color(0.95, 0.15, 0.12), Math.max(0, Math.min(1, (t - 0.5) * 2)));
 
 function buildStitchLines() {
   for (const o of [stitchLines, seamCorners]) {
@@ -708,12 +905,11 @@ function buildStitchLines() {
   const n = sim.stitches.length;
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 6), 3));
-  const col = new Float32Array(n * 6);
-  sim.stitches.forEach((st, k) => {
-    const c = colourOf(st.v3);
-    for (const o of [0, 3]) { col[k * 6 + o] = c.r; col[k * 6 + o + 1] = c.g; col[k * 6 + o + 2] = c.b; }
-  });
-  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 6), 3));
+  // The colour is rewritten every frame now (updateStitchLines), because it
+  // carries the tension. `stitchColourOf` is kept on the object so the update
+  // does not have to rebuild the seam index sixty times a second.
+  stitchSeamColour = colourOf;
   stitchLines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({
     vertexColors: true, transparent: true, opacity: 0.8,
   }));
@@ -750,11 +946,26 @@ function buildStitchLines() {
 function updateStitchLines() {
   if (!stitchLines || !sim) return;
   const a = stitchLines.geometry.attributes.position.array;
+  const col = stitchLines.geometry.attributes.color.array;
+  const byTension = params.stitchColour === 'tension';
+  const lim = Math.max(1e-6, sim.maxTensionGf);
   sim.stitches.forEach((st, k) => {
     const p = asm.verts[st.a], q = asm.verts[st.b];
     a[k * 6] = p[0]; a[k * 6 + 1] = p[1]; a[k * 6 + 2] = p[2];
     a[k * 6 + 3] = q[0]; a[k * 6 + 4] = q[1]; a[k * 6 + 5] = q[2];
+    let c;
+    if (!st.active) {
+      // a thread not yet put in: nearly invisible, so the seams being worked
+      // on are the ones you see
+      c = new THREE.Color(0.22, 0.23, 0.26);
+    } else if (byTension) {
+      c = TENSION_RAMP(st.tensionGf / lim);
+    } else {
+      c = stitchSeamColour ? stitchSeamColour(st.v3) : new THREE.Color(0.8, 0.8, 0.8);
+    }
+    for (const o of [0, 3]) { col[k * 6 + o] = c.r; col[k * 6 + o + 1] = c.g; col[k * 6 + o + 2] = c.b; }
   });
+  stitchLines.geometry.attributes.color.needsUpdate = true;
   stitchLines.geometry.attributes.position.needsUpdate = true;
   stitchLines.geometry.computeBoundingSphere();
   if (seamCorners) {
@@ -1026,6 +1237,50 @@ function exportOBJ() {
 
 // -------------------------------------------------------------------- HUD
 
+/**
+ * What the hand assembly is doing, in the HUD rather than in the console.
+ *
+ * Three things have to be on screen at all times while arranging, because all
+ * three change with every button press: what is selected, what is being sewn,
+ * and -- the whole point of the force-limited seam -- which seams will not
+ * close and by how much.
+ */
+function assemblyRows(row0, cls0) {
+  const a = assembling;
+  const nSel = a.selected.size;
+  const names = [...a.selected].slice(0, 6)
+    .map((i) => a.pattern.panels[i].name).join(', ');
+  const rows = sim.stitches.length
+    ? sim.stitchReport({ closedCm: params.weldTolCm }) : [];
+  const live = rows.filter((r) => r.sewing !== 'no');
+  const open = live.filter((r) => r.maxGapCm > params.weldTolCm);
+  const peak = Math.max(0, ...sim.stitches.filter((x) => x.active).map((x) => x.tensionGf));
+
+  let out = row0('phase', {
+    arranging: nSel
+      ? `arranging ${nSel} piece(s) -- W sews the seams between them, X welds and drops`
+      : 'arranging -- nothing selected. Click a piece, or A for all.',
+    stitching: `sewing ${stitchesInSelection().length} stitches`,
+    falling: 'sewn, and falling',
+  }[a.phase]);
+  if (a.phase !== 'falling') {
+    out += row0('selected', nSel
+      ? `${nSel} of ${a.pattern.panels.length}: ${names}${nSel > 6 ? ' …' : ''}`
+      : 'none', cls0(nSel > 0));
+  }
+  out += row0('seams sewn', `${a.sewn.size} of ${new Set(a.laid.stitches.map(seamKeyOf)).size}`);
+  if (live.length) {
+    out += row0('thread tension', `${peak.toFixed(0)} of ${params.maxTensionGf} gf peak`,
+      cls0(peak < params.maxTensionGf * 0.9));
+    out += row0('widest seam gap', `${sim.maxStitchGap().toFixed(2)} cm`,
+      cls0(sim.maxStitchGap() <= params.weldTolCm));
+  }
+  for (const r of open) {
+    out += row0(`&nbsp;&nbsp;${r.seam}`, r.verdict, 'warn');
+  }
+  return out;
+}
+
 const fitReportOf = () => fitReport(garment, surface);
 
 function updateHUD() {
@@ -1079,14 +1334,7 @@ function updateHUD() {
       + row0('cloth', `${params.fabric}, ${r.weightG} g over ${(r.areaCm2 / 10000).toFixed(2)} m2`)
       + row0('hole / hem', p0 ? `${p0.holeCircumferenceCm} / ${p0.hemCircumferenceCm} cm` : '-')
       + row0('mesh', `${asm.tiles.length} triangles, ${r.vertices} vertices`)
-      + (assembling
-        ? row0('phase', {
-          arranging: `arranging by hand -- widest seam gap `
-            + `${sim.maxStitchGap().toFixed(1)} cm. Press W to sew.`,
-          stitching: `sewing: widest seam gap ${sim.maxStitchGap().toFixed(1)} cm`,
-          falling: 'sewn, and falling',
-        }[assembling.phase])
-        : '')
+      + (assembling ? assemblyRows(row0, cls0) : '')
       + row0('simulated', `${r.seconds.toFixed(2)} s`)
       + row0('still?', `${r.rmsSpeedCmPerSec} cm/s rms`, cls0(r.rmsSpeedCmPerSec < 0.3))
       + row0('touching the body', `${r.contactVerts} vertices (${r.contactPct} %)`)
@@ -1390,7 +1638,7 @@ fDrop.add(params, 'terminalCmPerSec', 0, 400, 10).name('air drag: terminal cm/s'
 fDrop.add(params, 'substeps', 4, 24, 1).name('substeps / frame');
 fDrop.add(params, 'selfCollision').name('self-collision');
 fDrop.add(params, 'slowMo', 0.1, 1, 0.1).name('slow motion');
-fDrop.add(params, 'clothColour', ['stretch', 'panel', 'contact', 'gap', 'plain'])
+fDrop.add(params, 'clothColour', ['stretch', 'panel', 'selection', 'contact', 'gap', 'plain'])
   .name('colour by').onChange(updateClothMesh);
 fDrop.add({ d: startDrop }, 'd').name('drop it [D]');
 fDrop.add({ p: () => { playing = !playing; } }, 'p').name('pause / resume [space]');
@@ -1417,6 +1665,80 @@ fSkirt.add({ f: () => { if (sim && asm.meta && asm.meta.skirt) console.table(hem
 fSkirt.add({ a: () => { if (loadedPattern) console.table(assemblyReport(loadedPattern)); } },
   'a').name('how it assembles');
 fSkirt.add({ p: exportPattern }, 'p').name('print the pattern [P]');
+
+// ------------------------------------------------- sewing by hand
+
+/**
+ * The manual assembly panel: select pieces, move them with buttons, sew only
+ * those, and read the seam tension back. See docs/15-manual-sewing.md.
+ *
+ * The buttons are generated from arrange.TRANSFORMS rather than written out,
+ * so a new transform is one line in one place and cannot disagree with the
+ * gesture that does the same thing.
+ */
+const fHand = gui.addFolder('sewing by hand -- select, move, sew');
+
+fHand.add({ j: startAssembly }, 'j').name('1. lay the pieces out [J]');
+
+const fSel = fHand.addFolder('select');
+fSel.add({ a: () => { if (assembling) setSelection(assembling.pattern.panels.map((_, i) => i)); } },
+  'a').name('select all [A]');
+fSel.add({ n: () => setSelection([]) }, 'n').name('select none');
+fSel.add({ i: () => {
+  if (!assembling) return;
+  setSelection(assembling.pattern.panels
+    .map((_, i) => i).filter((i) => !assembling.selected.has(i)));
+} }, 'i').name('invert');
+fSel.add({ g: selectAdjacent }, 'g').name('grow: add whatever shares a seam [G]');
+fSel.add({ s: () => {
+  if (!assembling) return;
+  // the pieces that are not sewn to anything yet: what is left to do
+  const done = new Set();
+  for (const st of assembling.laid.stitches) {
+    if (assembling.sewn.has(seamKeyOf(st))) { done.add(st.pa); done.add(st.pb); }
+  }
+  setSelection(assembling.pattern.panels.map((_, i) => i).filter((i) => !done.has(i)));
+} }, 's').name('still unsewn');
+fSel.add({ p: logPlacement }, 'p').name('where are they? (numbers)');
+
+const fMove = fHand.addFolder('move the selection');
+fMove.add(params, 'stepCm', 0.1, 10, 0.1).name('step, cm');
+fMove.add(params, 'stepDeg', 1, 45, 1).name('step, degrees');
+for (const t of arrange.TRANSFORMS) {
+  const o = {
+    minus: () => nudgeSelection(t.field, -1),
+    plus: () => nudgeSelection(t.field, +1),
+  };
+  fMove.add(o, 'minus').name(`${t.label}  −`);
+  fMove.add(o, 'plus').name(`${t.label}  +`);
+}
+fMove.add({ f: () => selectionAction(arrange.flip) }, 'f').name('flip (lay it face down)');
+fMove.add({ m: () => selectionAction(arrange.mirror) }, 'm')
+  .name('mirror across the centre front');
+fMove.add({ d: () => selectionAction(arrange.distribute) }, 'd')
+  .name('distribute evenly around the body');
+fMove.add({ w: () => selectionAction((P, sel) => arrange.setWrap(P, sel, true)) }, 'w')
+  .name('roll onto the body');
+fMove.add({ v: () => selectionAction((P, sel) => arrange.setWrap(P, sel, false)) }, 'v')
+  .name('lay flat (a tangent plane)');
+fMove.add({ e: () => selectionAction(arrange.reroll) }, 'e')
+  .name('re-roll to hug the body here');
+fMove.add({ r: () => selectionAction(arrange.reset) }, 'r').name('reset to the placement hints');
+
+const fSew = fHand.addFolder('sew');
+fSew.add({ w: sewItUp }, 'w').name('2. sew the selected seams [W]');
+fSew.add({ x: finishAssembly }, 'x').name('3. weld what closed, and drop [X]');
+fSew.add(params, 'stitchSeconds', 0.5, 6, 0.5).name('seconds per sewing pass');
+fSew.add(params, 'maxTensionGf', 5, 1000, 5).name('thread strength, gram-force')
+  .onChange((v) => { if (sim) sim.maxTensionGf = v; });
+fSew.add(params, 'stitchSoftness', 1, 400, 1)
+  .name('stitch slacker than cloth, x')
+  .onChange((v) => { if (sim) sim.alphaStitch = sim.alphaStretch * v; });
+fSew.add(params, 'weldTolCm', 0.05, 2, 0.05).name('count a seam closed within, cm');
+fSew.add(params, 'forceSeamsShut').name('force open seams shut (the old way)');
+fSew.add(params, 'stitchColour', ['tension', 'seam']).name('colour the stitches by');
+fSew.add({ r: () => { if (sim && sim.stitches.length) console.table(sim.stitchReport({ closedCm: params.weldTolCm })); } },
+  'r').name('seam report: tension and gaps');
 
 const fTable = gui.addFolder('the cutting table -- edit the pieces');
 fTable.add({ t: openTable }, 't').name('put the pieces on the table [T]');
@@ -1486,6 +1808,22 @@ function openTable() {
   updateHUD();
 }
 
+/**
+ * The pattern to arrange by hand: whatever is in hand, whatever it is.
+ *
+ * The assembly used to call currentSkirtPattern() unconditionally, which threw
+ * away any loaded pattern that was not a flared skirt and drafted a skirt in
+ * its place -- so a bodice, or an imported file, could not be arranged by hand
+ * at all. An arranged pattern only has to have seams annotated, which every
+ * path through patternio gives it.
+ */
+function currentArrangePattern() {
+  if (loadedPattern && loadedPattern.panels && loadedPattern.panels.length) {
+    return loadedPattern;
+  }
+  return currentSkirtPattern();
+}
+
 /** The pattern the table and the assembly share. */
 function currentSkirtPattern() {
   if (loadedPattern && loadedPattern.meta && loadedPattern.meta.test === 'flared-skirt') {
@@ -1507,20 +1845,24 @@ function currentSkirtPattern() {
 // ------------------------------------------------- arranging, by hand
 
 /**
- * Drag the pattern pieces around the body before anything is sewn.
+ * Arranging the pieces by hand, before anything is sewn.
  *
- * Every motion here is RIGID -- a rotation about the body's axis, a lift, a
- * spin about the piece's own axis, a push in or out -- so a dragged piece is
- * still exactly the shape it was cut, and the garment still starts unstrained
- * however it is arranged. That is the whole reason the pieces can be moved
- * freely: nothing about the arrangement is a claim about the cloth.
+ * Every motion is RIGID, so a moved piece is still exactly the piece that was
+ * cut and the garment still starts unstrained however it is arranged. That is
+ * the whole reason the pieces may be moved freely: nothing about the
+ * arrangement is a claim about the cloth.
  *
- * The gestures are the ones the job needs rather than a general 3D gizmo:
- *   drag         slide the piece around the body, and up and down
- *   shift-drag   spin it on the spot (a piece laid on upside down)
- *   alt-drag     push it away from the body or pull it in
+ * What changed: a gesture no longer moves vertices. It edits the piece's
+ * stored PLACEMENT (arrange.js) and the vertices are recomputed from the
+ * pattern. So the buttons and the mouse are the same operation, a piece can be
+ * reset or mirrored, and composing a hundred small moves cannot drift.
+ *
+ *   click        select a piece (shift-click to add, ctrl-click to remove)
+ *   drag         slide the selection around the body, and up and down
+ *   shift-drag   spin each piece in its own surface
+ *   alt-drag     push the selection away from the body or pull it in
  */
-const dragState = { piece: null, verts: null, axis: null, a0: 0, y0: 0, r0: 0, mode: null };
+const dragState = { verts: null, axis: null, a0: 0, y0: 0, mode: null, moved: false };
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 
@@ -1544,47 +1886,104 @@ function rayOnCylinder(R, axis) {
   const t = Math.min(...[(-b - sq) / (2 * a), (-b + sq) / (2 * a)].filter((x) => x > 0));
   if (!Number.isFinite(t)) return null;
   const p = [o.x + d.x * t, o.y + d.y * t, o.z + d.z * t];
-  // the body's own convention: dir(u) = [-sin a, 0, cos a]
+  // the body's own convention: outward(a) = [-sin a, 0, cos a]
   return { angle: Math.atan2(-(p[0] - axis[0]), p[2] - axis[2]), y: p[1], point: p };
 }
 
-function pieceVerts(pi) {
-  const out = [];
-  const po = assembling.laid.panelOf;
-  for (let i = 0; i < po.length; i++) if (po[i] === pi) out.push(i);
-  return out;
+/** Can the pieces still be moved? Only before the garment is welded. */
+const canArrange = () => !!assembling && assembling.phase !== 'falling';
+
+/**
+ * Recompute the selected pieces' vertices from their placements, and tell the
+ * solver the cloth has been moved rather than having moved itself.
+ *
+ * Zeroing the velocities matters: a piece that was just picked up and put down
+ * has no momentum, and leaving the old velocity in makes it lurch when the
+ * simulation next steps.
+ */
+function reapplyPlacements(which = null) {
+  if (!assembling) return;
+  const { laid, pattern } = assembling;
+  const ids = which || [...assembling.selected];
+  arrange.applyPlacements(laid.asm, pattern, laid.placements, laid.axis, laid.offsets, ids);
+  for (const pi of ids) {
+    const base = laid.offsets[pi];
+    for (let i = 0; i < pattern.panels[pi].pts.length; i++) {
+      const v = sim.vel[base + i];
+      v[0] = 0; v[1] = 0; v[2] = 0;
+    }
+  }
+  updateClothMesh();
+  updateStitchLines();
+  updateHUD();
 }
 
-renderer.domElement.addEventListener('pointerdown', (ev) => {
-  if (!assembling || assembling.phase !== 'arranging' || !clothMesh) return;
+/** The piece under the mouse, or null. */
+function pieceUnderMouse(ev) {
+  if (!clothMesh) return null;
   setNDC(ev);
   raycaster.setFromCamera(ndc, camera);
   const hit = raycaster.intersectObject(clothMesh, false)[0];
-  if (!hit) return;
+  if (!hit) return null;
   // the geometry is indexed as asm.tiles.flatMap(t => t.v), so face i is tile i
-  const pi = assembling.laid.panelOf[asm.tiles[hit.faceIndex].v[0]];
-  const verts = pieceVerts(pi);
-  const axis = assembling.laid.centre;
-  let cx = 0, cy = 0, cz = 0;
-  for (const i of verts) { cx += asm.verts[i][0]; cy += asm.verts[i][1]; cz += asm.verts[i][2]; }
-  cx /= verts.length; cy /= verts.length; cz /= verts.length;
-  const R = Math.hypot(cx - axis[0], cz - axis[2]);
+  return assembling.laid.panelOf[asm.tiles[hit.faceIndex].v[0]];
+}
+
+// ---- the transform buttons, which are the same operations as the gestures
+
+/** One press of a button: move the selection by one step. */
+function nudgeSelection(field, sign, mult = 1) {
+  if (!canArrange() || !assembling.selected.size) return;
+  const t = arrange.TRANSFORMS.find((x) => x.field === field);
+  const step = (t.unit === 'cm' ? params.stepCm : params.stepDeg) * mult;
+  arrange.nudge(assembling.laid.placements, assembling.selected, field, step * sign);
+  reapplyPlacements();
+}
+
+function selectionAction(fn) {
+  if (!canArrange() || !assembling.selected.size) return;
+  fn(assembling.laid.placements, assembling.selected, assembling.laid.defaults);
+  reapplyPlacements();
+}
+
+/** What the selected piece's placement is, in numbers. */
+function logPlacement() {
+  if (!assembling || !assembling.selected.size) return;
+  const ids = [...assembling.selected];
+  console.table(Object.fromEntries(ids.map((i) =>
+    [assembling.pattern.panels[i].name, arrange.describe(assembling.laid.placements[i])])));
+}
+
+renderer.domElement.addEventListener('pointerdown', (ev) => {
+  if (!canArrange() || !clothMesh) return;
+  const pi = pieceUnderMouse(ev);
+  if (pi === null || pi === undefined) return;
+
+  // selection first: a click that hits a piece outside the selection takes it,
+  // so dragging an unselected piece does the obvious thing rather than moving
+  // whatever happened to be selected before.
+  const sel = new Set(assembling.selected);
+  if (ev.ctrlKey || ev.metaKey) sel.delete(pi);
+  else if (ev.shiftKey && !sel.has(pi)) sel.add(pi);
+  else if (!sel.has(pi)) { sel.clear(); sel.add(pi); }
+  if (sel.size !== assembling.selected.size || !sel.has(pi)) setSelection(sel);
+
+  const axis = assembling.laid.axis;
+  const R = assembling.laid.placements[pi].radius;
   const at = rayOnCylinder(R, axis);
   if (!at) return;
-  dragState.piece = pi;
-  dragState.verts = verts;
   dragState.axis = axis;
-  dragState.centroid = [cx, cy, cz];
   dragState.R = R;
   dragState.a0 = at.angle;
   dragState.y0 = at.y;
+  dragState.moved = false;
   dragState.mode = ev.shiftKey ? 'spin' : (ev.altKey ? 'radius' : 'move');
   controls.enabled = false;
   renderer.domElement.setPointerCapture(ev.pointerId);
 });
 
 renderer.domElement.addEventListener('pointermove', (ev) => {
-  if (dragState.piece === null) return;
+  if (!dragState.mode || !canArrange()) return;
   setNDC(ev);
   raycaster.setFromCamera(ndc, camera);
   const at = rayOnCylinder(dragState.R, dragState.axis);
@@ -1593,42 +1992,27 @@ renderer.domElement.addEventListener('pointermove', (ev) => {
   while (dA > Math.PI) dA -= 2 * Math.PI;
   while (dA < -Math.PI) dA += 2 * Math.PI;
   const dY = at.y - dragState.y0;
-  const V = asm.verts;
-  const ax = dragState.axis;
-  const c = dragState.centroid;
+  const P = assembling.laid.placements;
+  const sel = assembling.selected;
 
-  if (dragState.mode === 'move' || dragState.mode === 'spin') {
-    // rotate about the body's axis, or about the piece's own, by the same angle
-    const px = dragState.mode === 'spin' ? c[0] : ax[0];
-    const pz = dragState.mode === 'spin' ? c[2] : ax[2];
-    const ca = Math.cos(-dA), sa = Math.sin(-dA);
-    for (const i of dragState.verts) {
-      const x = V[i][0] - px, z = V[i][2] - pz;
-      V[i][0] = px + x * ca - z * sa;
-      V[i][2] = pz + x * sa + z * ca;
-      if (dragState.mode === 'move') V[i][1] += dY;
-    }
-    if (dragState.mode === 'move') c[1] += dY;
+  // Each gesture is one field of the placement. The mouse and the buttons are
+  // now literally the same operation on the same numbers.
+  if (dragState.mode === 'move') {
+    for (const i of sel) { P[i].station += dA; P[i].y += dY; }
+  } else if (dragState.mode === 'spin') {
+    for (const i of sel) P[i].spin += dA;
   } else {
-    // push in or out: translate the whole piece along its outward direction,
-    // which is a translation and so still rigid
-    const nx = (c[0] - ax[0]) / dragState.R, nz = (c[2] - ax[2]) / dragState.R;
-    const dr = dY;                      // vertical mouse travel reads as in/out
-    for (const i of dragState.verts) { V[i][0] += nx * dr; V[i][2] += nz * dr; }
-    c[0] += nx * dr; c[2] += nz * dr;
-    dragState.R = Math.hypot(c[0] - ax[0], c[2] - ax[2]);
+    // vertical mouse travel reads as in/out
+    for (const i of sel) P[i].radius = Math.max(1, P[i].radius + dY);
   }
   dragState.a0 = at.angle;
   dragState.y0 = at.y;
-  for (const i of dragState.verts) { sim.vel[i][0] = 0; sim.vel[i][1] = 0; sim.vel[i][2] = 0; }
-  updateClothMesh();
-  updateStitchLines();
-  updateHUD();
+  dragState.moved = true;
+  reapplyPlacements();
 });
 
 const endDrag = (ev) => {
-  if (dragState.piece === null) return;
-  dragState.piece = null;
+  if (!dragState.mode) return;
   dragState.mode = null;
   controls.enabled = true;
   if (ev && ev.pointerId !== undefined && renderer.domElement.hasPointerCapture(ev.pointerId)) {
@@ -1641,8 +2025,47 @@ renderer.domElement.addEventListener('pointercancel', endDrag);
 // ---------------------------------------------------------------- keys
 
 const COLOURS = ['defect', 'strain', 'tile', 'gore', 'fit', 'plain'];
+
+/**
+ * The keys that only mean something while the pieces are being arranged.
+ *
+ * They are handled first and separately rather than added to the global list,
+ * because several of the letters the arranging needs are already spoken for --
+ * G grows the shell, R rebuilds it -- and silently stealing them would break
+ * the rest of the viewer. In this mode they mean the arranging thing; outside
+ * it they mean what they always did.
+ *
+ * The arrow keys are the transform buttons under the fingers: a press is one
+ * step, shift is five steps, alt is a fifth of one.
+ */
+function arrangeKey(ev) {
+  if (!canArrange()) return false;
+  const k = ev.key.toLowerCase();
+  const all = () => assembling.pattern.panels.map((_, i) => i);
+  const mult = ev.shiftKey ? 5 : (ev.altKey ? 0.2 : 1);
+  switch (k) {
+    case 'a': setSelection(all()); return true;
+    case 'n': setSelection([]); return true;
+    case 'g': selectAdjacent(); return true;
+    case 'x': finishAssembly(); return true;
+    case 'm': selectionAction(arrange.mirror); return true;
+    case 'f': selectionAction(arrange.flip); return true;
+    case '0': selectionAction(arrange.reset); return true;
+    case 'arrowleft': nudgeSelection('station', -1, mult); return true;
+    case 'arrowright': nudgeSelection('station', +1, mult); return true;
+    case 'arrowup': nudgeSelection(ev.shiftKey ? 'radius' : 'y', +1, ev.shiftKey ? 1 : mult); return true;
+    case 'arrowdown': nudgeSelection(ev.shiftKey ? 'radius' : 'y', -1, ev.shiftKey ? 1 : mult); return true;
+    case '[': nudgeSelection('spin', -1, mult); return true;
+    case ']': nudgeSelection('spin', +1, mult); return true;
+    case ';': nudgeSelection('tilt', -1, mult); return true;
+    case "'": nudgeSelection('tilt', +1, mult); return true;
+    default: return false;
+  }
+}
+
 addEventListener('keydown', (ev) => {
   if (ev.target.tagName === 'INPUT') return;
+  if (arrangeKey(ev)) { ev.preventDefault(); return; }
   const k = ev.key.toLowerCase();
   if (k === 'r') { params.showShell = true; rebuildShell();
     gui.controllersRecursive().forEach((c) => c.updateDisplay()); }
@@ -1690,11 +2113,20 @@ updateHUD();
   // test mode is to WATCH it fall. It stops itself once the cloth is still,
   // so a settled drape costs nothing.
   if (playing && sim) {
-    // Phase 2 of an assembly: ramp the stitch pull, then weld and drop.
+    // A sewing pass: ramp the thread tension, then stop and report.
+    //
+    // The ramp is on the FORCE LIMIT now, not on the correction -- the same
+    // thread pulled progressively harder, which is what drawing a seam closed
+    // by hand is. And the end of a pass returns to arranging rather than
+    // welding the whole garment, so the next pieces can be chosen: that is
+    // what makes the assembly progressive.
     if (assembling && assembling.phase === 'stitching') {
       const frac = (sim.time - assembling.sewStart) / params.stitchSeconds;
-      sim.stitchStrength = Math.min(1, 0.05 + 1.2 * frac);
-      if (frac >= 1) { finishAssembly(); }
+      assembling.ramp = Math.min(1, 0.05 + 1.2 * frac);
+      const sewn = assembling.sewn;
+      sim.setStitchStrength((st) => (sewn.has(seamKeyOf(st)) ? 1 : assembling.ramp));
+      sim.stitchStrength = 1;
+      if (frac >= 1) { finishSewingPass(); }
     }
     sim.step((1 / 60) * params.slowMo);
     updateClothMesh();

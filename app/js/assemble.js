@@ -34,6 +34,7 @@
 
 import { Assembly } from './assembly.js';
 import { Cloth } from './cloth.js';
+import { defaultPlacements, placePanel } from './arrange.js';
 
 /**
  * Phase 1. Place every piece in 3D, unjoined: vertically around the body, one
@@ -67,51 +68,23 @@ export function layOut(pattern, surface, {
   const instances = new Map();        // v3 -> [vertex index, ...]
   const panelOf = [];
 
-  const vs = [];
-  for (const p of pattern.panels) for (const q of p.pts) if (q.uv) vs.push(q.uv[1]);
-  const vLo = vs.length ? Math.min(...vs) : 0.2;
-  const vHi = vs.length ? Math.max(...vs) : 0.9;
-
-  let cx = 0, cz = 0, rMax = 0, n = 0;
-  for (let k = 0; k <= 12; k++) {
-    const v = vLo + (vHi - vLo) * k / 12;
-    for (let i = 0; i < 24; i++) {
-      const q = surface.point(i / 24, v);
-      cx += q[0]; cz += q[2]; n++;
-      rMax = Math.max(rMax, Math.hypot(q[0], q[2]));
-    }
-  }
-  cx /= n; cz /= n;
-  const R = radiusCm ?? rMax + standoffCm;
-
-  const hintOf = (panel, pi) => {
-    const us = panel.pts.map((q) => (q.uv ? q.uv[0] : null)).filter((x) => x !== null);
-    if (!us.length) return pi / pattern.panels.length;
-    const a = Math.atan2(us.reduce((t, u) => t + Math.sin(u * 2 * Math.PI), 0),
-      us.reduce((t, u) => t + Math.cos(u * 2 * Math.PI), 0)) / (2 * Math.PI);
-    return a - Math.floor(a);
-  };
-  const yOf = (v) => surface.point(0, Math.max(0, Math.min(1, v)))[1];
+  // Where each piece goes, as a stored rigid placement rather than as moved
+  // vertices (arrange.js). The hand arrangement in the viewer edits exactly
+  // these numbers and re-runs exactly this mapping, so the arrangement the
+  // buttons produce and the arrangement the hints produce cannot drift apart.
+  const { placements, axis, radiusCm: R } = defaultPlacements(pattern, surface,
+    { standoffCm, radiusCm });
+  const [cx, , cz] = axis;
+  // where each panel's points start in asm.verts, so a placement can be
+  // re-applied later without rebuilding the mesh
+  const offsets = [];
 
   pattern.panels.forEach((panel, pi) => {
-    const xs = panel.pts.map((q) => q.x);
-    const xMid = (Math.min(...xs) + Math.max(...xs)) / 2;
-    const pv = panel.pts.map((q) => (q.uv ? q.uv[1] : null)).filter((x) => x !== null);
-    const vTop = pv.length ? Math.max(...pv) : vHi;
-    const yTop = yOf(vTop);
-    const yMaxPanel = Math.max(...panel.pts.map((q) => q.y));
-    const aMid = hintOf(panel, pi) * Math.PI * 2;
-
+    offsets.push(asm.verts.length);
+    const placed = placePanel(panel, placements[pi], axis);
     const local = [];
-    for (const q of panel.pts) {
-      // arc length along the cylinder -> angle, centred on this piece's station
-      const a = aMid + (q.x - xMid) / R;
-      const pos = [
-        cx - Math.sin(a) * R,
-        yTop + (q.y - yMaxPanel),
-        cz + Math.cos(a) * R,
-      ];
-      asm.verts.push(pos);
+    panel.pts.forEach((q, i) => {
+      asm.verts.push(placed[i]);
       asm.pinned.push(false);
       const idx = asm.verts.length - 1;
       panelOf.push(pi);
@@ -120,7 +93,7 @@ export function layOut(pattern, surface, {
         if (!instances.has(q.v3)) instances.set(q.v3, []);
         instances.get(q.v3).push(idx);
       }
-    }
+    });
     for (const t of panel.tris) {
       const A = panel.pts[t[0]], B = panel.pts[t[1]], C = panel.pts[t[2]];
       const sides = [
@@ -172,7 +145,13 @@ export function layOut(pattern, surface, {
   for (const [v3, group] of instances) v3Of.set(v3, group[0]);
 
   asm.meta = { sewn: false, arranged: true, panels: pattern.panels.length, panelOf, stitches };
-  return { asm, stitches, panelOf, radiusCm: R, centre: [cx, 0, cz], v3Of };
+  return {
+    asm, stitches, panelOf, radiusCm: R, centre: [cx, 0, cz], v3Of,
+    // the hand-arrangement handles: the placements, where to write them back,
+    // and what "reset" means
+    placements, offsets, axis,
+    defaults: placements.map((p) => ({ ...p })),
+  };
 }
 
 /**

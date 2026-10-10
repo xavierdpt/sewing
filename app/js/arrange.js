@@ -32,7 +32,25 @@ import { RAD, DEG } from './geom.js';
  *
  *   station  angle around the body's vertical axis, radians. 0 is the front.
  *   y        height of the piece's TOP edge, cm, in body coordinates.
- *   radius   distance from the body's axis, cm.
+ *   radius   where the piece SITS: its distance from the body's axis, cm.
+ *            Changing it translates the piece bodily in or out, which is a
+ *            rigid motion and so changes nothing about the piece.
+ *   wrapRadius
+ *            the cylinder the piece was ROLLED ONTO, cm, which is what sets
+ *            its curvature. Normally the standoff radius it was laid out at,
+ *            and normally left alone.
+ *
+ * Those last two are separate for a reason worth stating, because collapsing
+ * them was a bug. Pushing a piece out should carry it bodily outwards and keep
+ * the shape it was cut -- a translation. Re-rolling it onto a WIDER cylinder
+ * instead flattens it, and a flatter piece of the same cloth spans a smaller
+ * angle: push two neighbouring pieces out by different amounts and their
+ * shared seam no longer lines up at all. Measured, four-panel skirt with the
+ * pieces shoved in and out by a few cm each: re-rolling took the sewn hem from
+ * 235 cm to 79 cm, which is the garment wringing itself out. Translating
+ * leaves it at 235 cm.
+ *
+ * `reroll` is there for when changing the curvature IS what is wanted.
  *   spin     rotation in the piece's own surface, radians, applied in PATTERN
  *            space before the piece is wrapped -- so a spun piece still lies
  *            on the cylinder instead of cutting through it.
@@ -53,12 +71,14 @@ import { RAD, DEG } from './geom.js';
  * in-surface rotation here, not two.
  */
 export function placement(o = {}) {
-  return {
-    station: 0, y: 0, radius: 20,
+  const p = {
+    station: 0, y: 0, radius: 20, wrapRadius: null,
     spin: 0, tilt: 0, swing: 0,
     flip: false, wrap: true,
     ...o,
   };
+  if (p.wrapRadius === null) p.wrapRadius = p.radius;
+  return p;
 }
 
 /**
@@ -144,11 +164,16 @@ export function panelStation(panel, pi, nPanels) {
  */
 export function placePanel(panel, pl, axis, out = null) {
   const { xMid, yTop } = panelFrame(panel);
+  // W rolls the piece (its curvature); R says where it ends up. The difference
+  // between them is a rigid translation outwards.
+  const W = Math.max(1e-6, pl.wrapRadius ?? pl.radius);
   const R = Math.max(1e-6, pl.radius);
+  const o0 = outward(pl.station);
+  const dr = R - W;
   const cs = Math.cos(pl.spin), ss = Math.sin(pl.spin);
   const res = out || panel.pts.map(() => [0, 0, 0]);
 
-  // --- 1-3: pattern space -> flip -> spin -> wrap
+  // --- 1-3: pattern space -> flip -> spin -> wrap -> push out
   for (let i = 0; i < panel.pts.length; i++) {
     const q = panel.pts[i];
     let px = q.x - xMid;
@@ -159,15 +184,15 @@ export function placePanel(panel, pl, axis, out = null) {
     const sy = px * ss + qy * cs;
     const p = res[i];
     if (pl.wrap) {
-      const a = pl.station + sx / R;
-      p[0] = axis[0] - Math.sin(a) * R;
+      const a = pl.station + sx / W;
+      p[0] = axis[0] - Math.sin(a) * W + o0[0] * dr;
       p[1] = pl.y + sy;
-      p[2] = axis[2] + Math.cos(a) * R;
+      p[2] = axis[2] + Math.cos(a) * W + o0[2] * dr;
     } else {
-      const o = outward(pl.station), t = along(pl.station);
-      p[0] = axis[0] + o[0] * R + t[0] * sx;
+      const t = along(pl.station);
+      p[0] = axis[0] + o0[0] * R + t[0] * sx;
       p[1] = pl.y + sy;
-      p[2] = axis[2] + o[2] * R + t[2] * sx;
+      p[2] = axis[2] + o0[2] * R + t[2] * sx;
     }
   }
 
@@ -232,6 +257,7 @@ export function defaultPlacements(pattern, surface, { standoffCm = 6, radiusCm =
     station: panelStation(panel, pi, pattern.panels.length),
     y: panelTopY(panel, surface, vHi),
     radius: R,
+    wrapRadius: R,
   }));
   return { placements, axis: [cx, 0, cz], radiusCm: R };
 }
@@ -303,6 +329,22 @@ export function setWrap(placements, selection, wrap) {
 }
 
 /**
+ * Re-roll the selected pieces onto the cylinder they now sit on, so they hug
+ * the body again at their current distance.
+ *
+ * This is the one action that deliberately changes a piece's curvature, which
+ * is why it is separate from pushing it in and out: it is a bending, so the
+ * piece is still the piece that was cut, but its angular width changes and a
+ * seam it shares with a piece at a different radius will no longer line up.
+ */
+export function reroll(placements, selection) {
+  for (const i of selection) {
+    if (placements[i]) placements[i].wrapRadius = Math.max(1, placements[i].radius);
+  }
+  return placements;
+}
+
+/**
  * Mirror the selection across the body's plane of symmetry.
  *
  * A mirrored placement is the piece's own reflection: its station reflects
@@ -357,6 +399,7 @@ export function describe(pl) {
     'around the body': `${(pl.station * DEG).toFixed(0)} deg`,
     height: `${pl.y.toFixed(1)} cm`,
     'out from the axis': `${pl.radius.toFixed(1)} cm`,
+    'rolled onto radius': `${(pl.wrapRadius ?? pl.radius).toFixed(1)} cm`,
     spin: `${(pl.spin * DEG).toFixed(0)} deg`,
     tilt: `${(pl.tilt * DEG).toFixed(0)} deg`,
     swing: `${(pl.swing * DEG).toFixed(0)} deg`,
