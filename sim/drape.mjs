@@ -12,71 +12,11 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FABRICS } from '../app/js/cloth.js';
+import { buildJob, bodyMesh, clothSettings, assemblyAreaCm2 } from '../app/js/drapejob.js';
+
+export { bodyMesh, clothSettings, assemblyAreaCm2 };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-
-/** The body as a plain indexed triangle mesh, in cm. */
-export function bodyMesh(surface, { nu = 96, nv = 64 } = {}) {
-  const verts = [];
-  const index = new Map();
-  const id = (p) => {
-    const k = `${p[0].toFixed(4)},${p[1].toFixed(4)},${p[2].toFixed(4)}`;
-    if (!index.has(k)) { index.set(k, verts.length); verts.push([p[0], p[1], p[2]]); }
-    return index.get(k);
-  };
-  const tris = [];
-  const ring = (v) => Array.from({ length: nu }, (_, i) => surface.point(i / nu, v));
-  let prev = ring(0);
-  for (let j = 1; j <= nv; j++) {
-    const cur = ring(j / nv);
-    for (let i = 0; i < nu; i++) {
-      const i2 = (i + 1) % nu;
-      tris.push([id(prev[i]), id(cur[i]), id(cur[i2])]);
-      tris.push([id(prev[i]), id(cur[i2]), id(prev[i2])]);
-    }
-    prev = cur;
-  }
-  return { verts, tris };
-}
-
-/**
- * Blender cloth settings from one of this project's fabric presets.
- *
- * These are NOT a conversion -- the two solvers do not share a parameterisation
- * and pretending otherwise would be the sort of false precision this project
- * avoids. XPBD compliance is an inverse stiffness with units; Blender's
- * stiffnesses are dimensionless spring constants its own solver interprets.
- * What IS carried across exactly is the part that is physical: areal density,
- * and therefore the weight of the garment.
- */
-export function clothSettings(fabric, areaCm2, vertexCount, {
-  clothThicknessCm = 0.2, selfCollision = true, quality = 10,
-  collisionQuality = 5,
-} = {}) {
-  const f = FABRICS[fabric] || FABRICS['cotton poplin'];
-  const totalKg = (areaCm2 / 10000) * (f.gsm / 1000);
-  // stiffness scaled off the preset's compliance: softer cloth, softer springs
-  const stiff = (alpha, lo, hi) => {
-    const t = Math.min(1, Math.max(0, Math.log10(alpha / 1e-7) / 2.5));
-    return hi + (lo - hi) * t;
-  };
-  return {
-    vertexMassKg: totalKg / Math.max(1, vertexCount),
-    tension: stiff(f.stretch, 2, 40),
-    compression: stiff(f.stretch, 2, 40),
-    shear: stiff(f.stretch, 1, 20),
-    bending: Math.max(0.05, 0.5 * (f.bend / 4e-3)),
-    damping: 5 * (f.damp ?? 0.75) / 0.75,
-    airDamping: 1.0,
-    clothThicknessCm,
-    selfCollision,
-    quality,
-    collisionQuality,
-    gsm: f.gsm,
-    totalKg: +totalKg.toFixed(4),
-  };
-}
 
 /** Is Blender available to run jobs? */
 export function available() {
@@ -101,28 +41,21 @@ export function drapeWithBlender(asm, surface, {
   bodyThicknessCm = 0.35, clothThicknessCm = 0.35, selfCollision = true,
   gravity = true, quality = 14, collisionQuality = 12,
   nu = 96, nv = 64, keep = false,
+  // Seams to close, as pairs of vertex indices. Given these, Blender sews the
+  // pieces together and drapes the result in one solve -- no separate
+  // stitching phase, and the sewing happens behind the same collision that
+  // the drape does.
+  sewEdges = null, sewingForceMax = 0,
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'drape-'));
   const jobPath = join(dir, 'job.json');
   const outPath = join(dir, 'out.json');
 
-  const areaCm2 = asm.tiles.reduce((a, t) => {
-    const [x, y, z] = t.sides;
-    const s = (x + y + z) / 2;
-    return a + Math.sqrt(Math.max(0, s * (s - x) * (s - y) * (s - z)));
-  }, 0);
-
-  const job = {
-    fps,
-    frames: Math.max(1, Math.round(seconds * fps)),
-    gravity,
-    bodyThicknessCm,
-    body: bodyMesh(surface, { nu, nv }),
-    garment: { verts: asm.verts, tris: asm.tiles.map((t) => t.v) },
-    pinned: pinned || asm.pinned.map((p, i) => (p ? i : -1)).filter((i) => i >= 0),
-    cloth: clothSettings(fabric, areaCm2, asm.verts.length,
-      { clothThicknessCm, selfCollision, quality, collisionQuality }),
-  };
+  const job = buildJob(asm, surface, {
+    fabric, seconds, fps, pinned, bodyThicknessCm, clothThicknessCm,
+    selfCollision, gravity, quality, collisionQuality, nu, nv,
+    sewEdges, sewingForceMax,
+  });
   writeFileSync(jobPath, JSON.stringify(job));
 
   const t0 = Date.now();

@@ -23,6 +23,7 @@ import { flaredSkirtPattern, placeSkirt, hemProfile, assemblyReport,
   waistRing } from './skirt.js';
 import { layOut, weldStitched } from './assemble.js';
 import * as arrange from './arrange.js';
+import { drapeRemote, health as sidecarHealth, DEFAULT_URL } from './remote.js';
 import { PatternTable } from './table.js';
 import { LIBRARY, byId } from './tiles.js';
 import { sub, add, mul, cross, norm, dist, DEG } from './geom.js';
@@ -150,6 +151,13 @@ const params = {
   // Sewing by hand (docs/15-manual-sewing.md). `stepCm` and `stepDeg` are how
   // far one press of a transform button moves the selection.
   stepCm: 1, stepDeg: 5, weldTolCm: 0.25,
+  // The drape side-car. This project's solver resolves contact as a point
+  // query per vertex, so it holds the cloth off the body at its VERTICES and
+  // nowhere else and the figure comes through the triangles in between --
+  // measured, 0.47 cm at 130 sample points on a four-panel skirt, against
+  // 0 cm at none for the side-car. So the local fall is a preview and the
+  // side-car is the answer. See sim/server.py and docs/16-solvers.md.
+  sidecarUrl: DEFAULT_URL, useSidecar: true, sidecarSeconds: 6,
   // How fast a seam is drawn closed, cm/s. Constant: the seam is fed at this
   // rate rather than pulled towards zero, so it never accelerates.
   sewSpeedCmPerSec: 4,
@@ -184,6 +192,8 @@ let sim = null;              // the running cloth simulation, if any
 // When a garment is being assembled from separate pieces, this holds what is
 // needed to weld it once the seams are closed.
 let assembling = null;
+// what the drape side-car is doing, for the HUD
+let sidecar = null;
 let clothMesh = null;
 let playing = false;
 let bodyMesh = null;
@@ -513,7 +523,14 @@ function startAssembly() {
       fabric: params.fabric,
       friction: params.friction,
       substeps: params.substeps,
-      selfCollision: params.selfCollision,
+      // Cut pieces are allowed to pass through each other while they are
+      // still cut pieces -- the same reason assemble.js gives for the headless
+      // path, which the viewer was not honouring. A wide panel cannot be
+      // arranged near the body without overlapping its neighbours, and
+      // treating that overlap as a collision stops the seams closing:
+      // measured, the viewer's seams stalled at 0.4 cm and nothing welded,
+      // against 0.032 cm and a full weld with it off.
+      selfCollision: false,
       edgeCollision: params.edgeCollision,
       gravityScale: 0,
       stitches: laid.stitches,
@@ -796,12 +813,78 @@ function finishAssembly() {
   console.log(`welded ${welded.weldedPct} % of the stitches `
     + `(within ${params.weldTolCm} cm); ${welded.asm.verts.length} vertices. `
     + `Widest seam still open: ${gap.toFixed(2)} cm. Gravity on.`);
+  if (params.useSidecar) sendToSidecar();
   if (welded.openStitches.length) {
     console.warn(`${welded.openStitches.length} stitches were NOT welded because `
       + 'their seams would not close. They stay basted and visible.');
     console.table(report.filter((r) => r.maxGapCm > params.weldTolCm));
   }
   updateHUD();
+}
+
+/**
+ * Hand the welded garment to the drape side-car, and put the answer back.
+ *
+ * Measured on a four-panel skirt, the same garment draped both ways:
+ *
+ *   this project   4.2 s   0.47 cm through the body at 130 sample points
+ *   side-car      42   s   0    cm at none
+ *
+ * The difference is not tuning. Contact here is a point query per vertex, so
+ * the cloth is held off the body at its vertices and the triangle between
+ * them is free to dip below the surface; the side-car's solver does
+ * triangle-against-triangle with the response spread over the three corners
+ * by barycentric weight. No amount of adjusting the former turns it into the
+ * latter -- which is what an afternoon of trying it established.
+ *
+ * It is asynchronous and the local fall keeps running underneath, so the
+ * viewer never blocks: you watch the preview drop, and a minute later it is
+ * replaced by the real thing.
+ */
+async function sendToSidecar() {
+  if (!sim || !asm) return;
+  const target = asm;
+  const pinned = asm.pinned.map((p, i) => (p ? i : -1)).filter((i) => i >= 0);
+  const h = await sidecarHealth(params.sidecarUrl);
+  if (!h) {
+    console.warn(`no drape side-car at ${params.sidecarUrl} -- showing the local`
+      + ' preview only, which lets the body through between the vertices.'
+      + ' Start it with:  python3 sim/server.py');
+    updateHUD();
+    return;
+  }
+  sidecar = { state: 'running', since: Date.now() };
+  updateHUD();
+  console.log(`side-car (${Object.entries(h.backends).map(([k, v]) => `${k}: ${v}`).join(', ')})`
+    + ` draping ${asm.verts.length} vertices…`);
+  try {
+    const out = await drapeRemote(target, surface, {
+      url: params.sidecarUrl,
+      fabric: params.fabric,
+      seconds: params.sidecarSeconds,
+      pinned,
+      selfCollision: params.selfCollision,
+    });
+    // the garment may have been cleared or rebuilt while we waited
+    if (asm !== target) { sidecar = null; return; }
+    playing = false;
+    out.verts.forEach((p, i) => {
+      target.verts[i][0] = p[0]; target.verts[i][1] = p[1]; target.verts[i][2] = p[2];
+    });
+    for (const v of sim.vel) { v[0] = 0; v[1] = 0; v[2] = 0; }
+    const pen = sim.penetration();
+    sidecar = { state: 'done', backend: out.backend, seconds: out.wallSeconds, pen };
+    updateClothMesh();
+    updateStitchLines();
+    updateHUD();
+    console.log(`side-car drape done in ${out.wallSeconds}s (${out.backend}).`
+      + ` Inside the body: ${pen.worstCm} cm at ${pen.insideSamples} sample points.`);
+    console.table(sim.report());
+  } catch (e) {
+    sidecar = { state: 'failed', error: String(e.message || e) };
+    console.error(`side-car drape failed: ${e.message || e}`);
+    updateHUD();
+  }
 }
 
 const STRETCH_RAMP = (t) => (t >= 0
@@ -1406,6 +1489,12 @@ function updateHUD() {
         ? `${r.deepestPenetrationCm.toFixed(2)} cm (between the vertices)`
         : `${r.deepestPenetrationCm.toFixed(2)} cm`,
         cls0(r.deepestPenetrationCm < 0.1))
+      + (sidecar ? row0('drape', {
+        running: `side-car working… (${((Date.now() - sidecar.since) / 1000).toFixed(0)} s)`,
+        done: `${sidecar.backend}, ${sidecar.seconds} s -- `
+          + `${sidecar.pen.worstCm} cm inside at ${sidecar.pen.insideSamples} points`,
+        failed: `side-car failed: ${sidecar.error}`,
+      }[sidecar.state], cls0(sidecar.state !== 'failed')) : '')
       + row0('stretch mean / max', `${r.meanStrainPct} / ${r.maxStretchPct} %`,
         cls0(r.maxStretchPct < 10))
       + row0('seams stretched', `${r.stretchedSeamsPct} %`)
@@ -1808,6 +1897,29 @@ fSew.add(params, 'forceSeamsShut').name('force open seams shut (the old way)');
 fSew.add(params, 'stitchColour', ['tension', 'seam']).name('colour the stitches by');
 fSew.add({ r: () => { if (sim && sim.stitches.length) console.table(sim.stitchReport({ closedCm: params.weldTolCm })); } },
   'r').name('seam report: tension and gaps');
+
+// ------------------------------------------------- the drape side-car
+
+/**
+ * The real drape runs elsewhere. This project's solver keeps the cloth off the
+ * body at its VERTICES and nowhere else, so the figure comes through the
+ * triangles in between -- 0.47 cm at 130 sample points on a four-panel skirt,
+ * against 0 cm at none for the side-car, which does triangle-against-triangle
+ * contact. The local fall is a preview; this is the answer.
+ */
+const fSide = gui.addFolder('the drape side-car -- where the real contact happens');
+fSide.add(params, 'useSidecar').name('send the drape to the side-car');
+fSide.add(params, 'sidecarUrl').name('side-car url');
+fSide.add(params, 'sidecarSeconds', 1, 20, 1).name('seconds of drape to solve');
+fSide.add({ d: () => sendToSidecar() }, 'd').name('re-drape what is on screen now');
+fSide.add({ h: async () => {
+  const h = await sidecarHealth(params.sidecarUrl);
+  if (h) console.table(h.backends);
+  else console.warn(`no side-car at ${params.sidecarUrl}.`
+    + '  Start it with:  python3 sim/server.py');
+} }, 'h').name('is it running?');
+fSide.add({ p: () => { if (sim) console.table(sim.penetration()); } }, 'p')
+  .name('how much of the body is through the cloth?');
 
 const fTable = gui.addFolder('the cutting table -- edit the pieces');
 fTable.add({ t: openTable }, 't').name('put the pieces on the table [T]');

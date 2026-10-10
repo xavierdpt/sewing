@@ -38,10 +38,17 @@ def clear():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
 
-def mesh_object(name, verts, tris):
-    """A Blender object from arrays of cm-space vertices and triangle indices."""
+def mesh_object(name, verts, tris, edges=()):
+    """A Blender object from arrays of cm-space vertices and triangle indices.
+
+    `edges` are LOOSE edges -- ones belonging to no face. That is how a seam is
+    expressed to Blender's cloth solver: an edge joining two points that are
+    the same point of the garment but were cut on different pieces. With
+    `use_sewing_springs` the solver pulls each one closed, which is sewing.
+    """
     me = bpy.data.meshes.new(name)
-    me.from_pydata([(v[0] * CM, v[1] * CM, v[2] * CM) for v in verts], [], tris)
+    me.from_pydata([(v[0] * CM, v[1] * CM, v[2] * CM) for v in verts],
+                   [tuple(e) for e in edges], tris)
     me.validate(verbose=False)
     me.update()
     ob = bpy.data.objects.new(name, me)
@@ -62,8 +69,8 @@ def add_body(verts, tris, thickness_cm):
     return ob
 
 
-def add_cloth(verts, tris, pinned, opts):
-    ob = mesh_object("garment", verts, tris)
+def add_cloth(verts, tris, pinned, opts, sew_edges=()):
+    ob = mesh_object("garment", verts, tris, sew_edges)
 
     if pinned:
         vg = ob.vertex_groups.new(name="pinned")
@@ -92,6 +99,16 @@ def add_cloth(verts, tris, pinned, opts):
     c.use_collision = True
     c.collision_quality = int(opts.get("collisionQuality", 5))
     c.distance_min = max(0.001, float(opts["clothThicknessCm"]) * CM)
+    # Sewing, natively. `sewing_force_max` is the force limit on a seam: past
+    # it the stitch stops pulling harder, so a seam that cannot be closed stays
+    # open and says so instead of dragging the cloth through the body. That is
+    # the same property this project hand-rolled in cloth.js, except that here
+    # it sits behind triangle-against-triangle collision rather than a point
+    # query per vertex. 0 means no limit.
+    if sew_edges:
+        s.use_sewing_springs = True
+        s.sewing_force_max = float(opts.get("sewingForceMax", 0.0))
+
     c.use_self_collision = bool(opts.get("selfCollision", True))
     c.self_distance_min = max(0.001, float(opts.get("selfDistanceCm", 0.2)) * CM)
     c.self_friction = 5.0
@@ -127,13 +144,15 @@ def main():
     add_body(job["body"]["verts"], job["body"]["tris"],
              job.get("bodyThicknessCm", 0.2))
     cloth = add_cloth(job["garment"]["verts"], job["garment"]["tris"],
-                      job.get("pinned", []), job["cloth"])
+                      job.get("pinned", []), job["cloth"],
+                      job.get("sewEdges", []))
 
     frames = int(job.get("frames", 60))
     verts = bake(cloth, frames)
 
     json.dump({"verts": verts, "frames": frames}, open(out_path, "w"))
-    print(f"DRAPE OK {len(verts)} vertices, {frames} frames")
+    print(f"DRAPE OK {len(verts)} vertices, {frames} frames, "
+          f"{len(job.get('sewEdges', []))} seams")
 
 
 main()
