@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Triangulated Bodice</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1d2026; --ink: #e8e6e1; --dim: #9aa0aa;
+    --line: #2d313a; --accent: #d98b4a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink);
+    font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  #view { position: fixed; inset: 0; }
+  #hud, #help {
+    position: fixed; background: color-mix(in srgb, var(--panel) 88%, transparent);
+    border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
+    backdrop-filter: blur(6px); max-width: 52ch;
+  }
+  #hud { left: 12px; top: 12px; }
+  #help { left: 12px; bottom: 12px; color: var(--dim); font-size: 12px; }
+  h1 { font-size: 13px; margin: 0 0 8px; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
+  table { border-collapse: collapse; }
+  td { padding: 1px 0; }
+  td:first-child { color: var(--dim); padding-right: 14px; white-space: nowrap; }
+  td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .warn { color: #e0674f; }
+  .ok { color: #7bbf6a; }
+  kbd { background: #2a2e36; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+  #busy { position: fixed; inset: 0; display: none; place-items: center;
+    background: rgba(20,22,26,.7); font-size: 14px; color: var(--accent); z-index: 10; }
+  /* lil-gui at 75% larger than its defaults, which are tuned for a dense
+     developer panel rather than something you use while holding a tape measure */
+  .lil-gui {
+    --font-size: 19px;
+    --input-font-size: 18px;
+    --widget-height: 35px;
+    --padding: 7px;
+    --spacing: 7px;
+    --folder-indent: 12px;
+    --slider-input-min-width: 79px;
+    --color-input-min-width: 79px;
+    --scrollbar-width: 9px;
+    --slider-knob-width: 4px;
+    --widget-border-radius: 3px;
+  }
+  .lil-gui.root > .title { font-size: 20px; padding: 10px 14px; }
+  .lil-gui .title { font-size: 19px; }
+
+  #hud { font-size: 15px; }
+  #hud h1 { font-size: 16px; }
+  #help { font-size: 14px; }
+
+  @media (max-width: 760px) { #help { display: none; } #hud { font-size: 12px; max-width: 30ch; } }
+</style>
+</head>
+<body>
+  <div id="view"></div>
+  <div id="hud"><h1>Triangulated Bodice</h1><div id="stats">loading…</div></div>
+  <div id="help">
+    <kbd>drag</kbd> orbit &nbsp; <kbd>wheel</kbd> zoom &nbsp; <kbd>R</kbd> rebuild
+    &nbsp; <kbd>space</kbd> relax 20 &nbsp; <kbd>Q</kbd> quantise
+    &nbsp; <kbd>S</kbd> settle &nbsp; <kbd>G</kbd> grow &nbsp; <kbd>T</kbd> try on &nbsp; <kbd>I</kbd> import &nbsp; <kbd>P</kbd> pattern SVG &nbsp; <kbd>E</kbd> OBJ
+    &nbsp; <kbd>C</kbd> colour mode
+  </div>
+  <div id="busy">working…</div>
+  <script type="importmap">
+  { "imports": {
+      "three": "./vendor/three/three.module.js",
+      "three/addons/controls/OrbitControls.js": "./vendor/three/OrbitControls.js",
+      "lil-gui": "./vendor/three/lil-gui.module.min.js"
+  } }
+  </script>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
