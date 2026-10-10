@@ -141,9 +141,32 @@ export function layOut(pattern, surface, {
   // ribbon -- rather than sixty anonymous lines -- is what tells you whether a
   // piece is the right way round: lay one in back to front and its stitches
   // cross each other in an X instead of running parallel.
+  // Each stitch also carries WHICH SEAM it belongs to and WHICH TWO PIECES it
+  // joins. The pattern already knows -- annotateSeams (patternio.js) grouped
+  // the outline into runs and gave each shared run a seam id -- and without
+  // those two fields nothing can address a subset of the sewing: no "sew only
+  // these pieces", and no per-seam tension report.
+  const seamOfV3 = new Map();
+  for (const p of pattern.panels) {
+    for (const r of p.runs || []) {
+      if (r.kind !== 'seam' || !r.v3) continue;
+      for (const v of r.v3) seamOfV3.set(v, r.seam);
+    }
+  }
   const stitches = [];
   for (const [v3, group] of instances) {
-    for (let k = 1; k < group.length; k++) stitches.push({ a: group[0], b: group[k], v3 });
+    for (let k = 1; k < group.length; k++) {
+      const a = group[0], b = group[k];
+      const pa = panelOf[a], pb = panelOf[b];
+      stitches.push({
+        a, b, v3,
+        // a stitch on no named seam is a dart: a seam inside a single piece
+        seam: seamOfV3.get(v3) || (pa === pb ? `dart@P${pa}` : null),
+        pa: Math.min(pa, pb),
+        pb: Math.max(pa, pb),
+        active: true,
+      });
+    }
   }
   const v3Of = new Map();
   for (const [v3, group] of instances) v3Of.set(v3, group[0]);
@@ -164,12 +187,31 @@ export function layOut(pattern, surface, {
  * Rest lengths come from the pattern, not from the welded geometry, so nothing
  * that was stitched slightly imperfectly gets baked in as the cloth's new idea
  * of its own size.
+ *
+ * ONLY CLOSED SEAMS ARE WELDED. `closedCm` is a tolerance, not a formality: a
+ * stitch still open by more than that is left alone, and the pair of vertices
+ * stays two vertices. This is the counterpart of the force limit in cloth.js
+ * -- welding a seam the cloth could not close averages its two sides together
+ * and destroys the measurement, which is precisely the thing the force limit
+ * exists to produce. The caller gets `openStitches` back and can keep basting
+ * them, show them, or go and fix the pattern.
+ *
+ * Pass `closedCm: Infinity` for the old behaviour of welding everything.
  */
-export function weldStitched(asm, stitches, { velocities = null } = {}) {
+export function weldStitched(asm, stitches, {
+  velocities = null, closedCm = 0.25,
+} = {}) {
+  const gapOf = (s) => {
+    const a = asm.verts[s.a], b = asm.verts[s.b];
+    return Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  };
+  const closed = [], open = [];
+  for (const s of stitches) (gapOf(s) <= closedCm ? closed : open).push(s);
+
   const parent = asm.verts.map((_, i) => i);
   const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
   const union = (i, j) => { const a = find(i), b = find(j); if (a !== b) parent[b] = a; };
-  for (const s of stitches) union(s.a, s.b);
+  for (const s of closed) union(s.a, s.b);
 
   const newIndex = new Map();
   const groups = [];
@@ -204,12 +246,22 @@ export function weldStitched(asm, stitches, { velocities = null } = {}) {
     if (new Set(v).size < 3) continue;
     out.addRawTile(v, t.sides, t.label);
   }
+  // The seams that would not close, carried over to the welded indices so the
+  // caller can keep basting them and keep reporting them.
+  const openStitches = open
+    .map((s) => ({ ...s, a: map[s.a], b: map[s.b] }))
+    .filter((s) => s.a !== s.b);
   out.meta = {
     ...(asm.meta || {}), sewn: true, arranged: false, welded: true,
+    openStitches,
     panelOf: (asm.meta && asm.meta.panelOf)
       ? groups.map((g) => asm.meta.panelOf[g[0]]) : null,
   };
-  return { asm: out, map, velocities: vel, groups };
+  return {
+    asm: out, map, velocities: vel, groups,
+    closedStitches: closed, openStitches,
+    weldedPct: stitches.length ? +(100 * closed.length / stitches.length).toFixed(1) : 100,
+  };
 }
 
 export const PHASES = ['arranging', 'stitching', 'welding', 'falling', 'settled'];
@@ -224,7 +276,7 @@ export const PHASES = ['arranging', 'stitching', 'welding', 'falling', 'settled'
 export function assembleGarment(pattern, surface, {
   fabric = 'linen', standoffCm = 6, stitchSeconds = 2.0, fallSeconds = 6.0,
   dt = 1 / 60, floorY = null, cloth: clothOpts = {}, pinTop = 0, pinWaist = true,
-  onFrame = null,
+  onFrame = null, weldTolCm = 0.25,
 } = {}) {
   const log = [];
   const laid = layOut(pattern, surface, { standoffCm });
@@ -252,22 +304,36 @@ export function assembleGarment(pattern, surface, {
     sim.step(dt);
     if (onFrame) onFrame('stitching', f / frames, sim);
   }
-  // A last pass with the cloth held still, to take up the slack the seams have
-  // left: the stitch pulls against the stretch constraints, so it stops a few
-  // millimetres short while they are still being fought. The weld would average
-  // that away in any case, but a tighter seam means the weld moves less cloth.
-  for (let f = 0; f < 30; f++) {
-    for (const v of sim.vel) { v[0] = 0; v[1] = 0; v[2] = 0; }
+  // A last pass with the cloth held still, to let the seams converge: the
+  // stitch pulls against the stretch constraints, so it stops short while they
+  // are still being fought.
+  //
+  // This used to zero the velocities every frame, which is not settling, it is
+  // squeezing -- it drove the gap down by brute force so the weld would have
+  // less to average away. The gap is now the MEASUREMENT (a seam that cannot
+  // close is the thing a fitting most wants to know, and the weld no longer
+  // closes it on the seam's behalf), so the hold is a quiet settle and nothing
+  // more: velocities are damped, not erased, and it stops as soon as the gap
+  // stops improving.
+  let last = sim.maxStitchGap();
+  for (let f = 0; f < 60; f++) {
+    for (const v of sim.vel) { v[0] *= 0.5; v[1] *= 0.5; v[2] *= 0.5; }
     sim.step(dt);
+    const g = sim.maxStitchGap();
+    if (f > 5 && last - g < 1e-4) break;
+    last = g;
   }
   log.push({
     phase: 'stitching', seconds: +sim.time.toFixed(2),
     seamGapStartCm: +gap0.toFixed(2), seamGapEndCm: +sim.maxStitchGap().toFixed(3),
+    peakTensionGf: +Math.max(0, ...sim.stitches.map((x) => x.peakGf)).toFixed(0),
+    seamsAtTheLimit: sim.stitches.filter((x) => x.saturated).length,
     maxStretchPct: sim.report().maxStretchPct,
   });
 
-  // ---- phase 3: weld and drop
-  const welded = weldStitched(laid.asm, laid.stitches, { velocities: sim.vel });
+  // ---- phase 3: weld and drop. Only the seams that actually closed.
+  const welded = weldStitched(laid.asm, laid.stitches,
+    { velocities: sim.vel, closedCm: weldTolCm });
   // carry the pattern's own labels through: which vertices are the hem, which
   // the waist. The pattern knows; the mesh should not have to guess.
   const idsOfKind = (kind) => {
@@ -285,7 +351,12 @@ export function assembleGarment(pattern, surface, {
   };
   welded.asm.meta.hemIds = idsOfKind('bottom');
   welded.asm.meta.waistIds = idsOfKind('top');
-  const sim2 = new Cloth(welded.asm, surface, { fabric, floorY, ...clothOpts });
+  // Seams that did not close keep their basting threads: they are still held
+  // together as well as they can be, and they still report their tension.
+  const sim2 = new Cloth(welded.asm, surface, {
+    fabric, floorY, stitches: welded.openStitches, ...clothOpts,
+  });
+  if (welded.openStitches.length) sim2.stitchStrength = 1;
   welded.velocities.forEach((v, i) => { sim2.vel[i] = v; });
   if (pinTop > 0) sim2.pinTop(pinTop);
   // A waistband. Without one a skirt is a loose tube and gravity simply slides
@@ -303,8 +374,12 @@ export function assembleGarment(pattern, surface, {
   });
   log.push({
     phase: 'falling', seconds: settle.seconds, settled: !!settle.settled,
+    weldedPct: welded.weldedPct, seamsLeftOpen: welded.openStitches.length,
     maxStretchPct: sim2.report().maxStretchPct,
   });
 
-  return { laid, stitchSim: sim, asm: welded.asm, sim: sim2, welded, log, settle };
+  return {
+    laid, stitchSim: sim, asm: welded.asm, sim: sim2, welded, log, settle,
+    seams: sim.stitchReport({ closedCm: weldTolCm }),
+  };
 }

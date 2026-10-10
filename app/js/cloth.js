@@ -193,8 +193,38 @@ export const DEFAULTS = {
   // first and dropped second.
   gravityScale: 1,
   // Pairs of vertices to be drawn together: a seam before it is sewn. Each is
-  // { a, b }. `stitchStrength` (0..1, on the instance) ramps the pull.
+  // { a, b }, optionally with `seam`, `pa`, `pb` (which seam and which pieces),
+  // and `active` (false = basting thread not yet put in). `stitchStrength`
+  // (0..1, on the instance) ramps the pull.
   stitches: null,
+  // How much slacker a stitch is than the cloth it is sewing, as a multiple of
+  // the fabric's own stretch compliance.
+  //
+  // This is the number that decides whether a seam can lie about the body.
+  // Before it existed the stitch was an infinitely stiff projection to the
+  // midpoint, competing with stretch constraints that are themselves nearly
+  // rigid, and which of the two won was settled by Gauss-Seidel sweep ORDER
+  // rather than by physics -- so a seam that could not be closed was closed
+  // anyway and the fabric took the difference.
+  //
+  // Softer than the cloth, and the argument comes out the other way: the seam
+  // yields first, which is what a seam does. A thread is not stiffer than a
+  // woven ground; it is a single yarn against a fabric's worth of them.
+  stitchSoftness: 60,
+  // An absolute stitch compliance, overriding `stitchSoftness`.
+  stitchCompliance: null,
+  // What a stitch can pull with before it stops pulling harder, in gram-force.
+  //
+  // The whole point of the exercise. Past this the constraint SATURATES: the
+  // seam stays open, and how far it fell short is the measurement. Without a
+  // limit the only outcomes available to an impossible seam are to stretch the
+  // cloth past `maxStrain` or to drag the figure through the fabric, and both
+  // of those destroy the one number a fitting wants.
+  //
+  // 250 gf is a reasonable hand-basted seam: ordinary polyester thread breaks
+  // somewhere over 1 kgf, but a basting stitch pulls out of the cloth long
+  // before the thread parts, and it is the cloth that governs.
+  maxTensionGf: 250,
   // Strain limiting is iterated to CONVERGENCE, not run a fixed number of
   // times: up to `strainPasses` sweeps, stopping as soon as no edge is over
   // its limit by more than `strainTol`.
@@ -409,7 +439,21 @@ export class Cloth {
       const c = flatCrossLength(asm, e);
       if (c && c.rest > 1e-9) this.bend.push(c);
     }
-    this.stitches = o.stitches || [];
+    // ---- the stitches: a seam before it is sewn.
+    //
+    // Softer than the cloth by `stitchSoftness`, and force-limited by
+    // `maxTensionGf`, so a seam that cannot be closed stays open and says by
+    // how much instead of taking the difference out of the fabric.
+    this.stitches = (o.stitches || []).map((s) => ({
+      ...s,
+      active: s.active !== false,
+      lambda: 0,          // the XPBD multiplier, accumulated over one substep
+      tensionGf: 0,       // |lambda| / h^2, in gram-force
+      peakGf: 0,          // the most it has ever pulled with
+      saturated: false,   // pulling as hard as it is allowed to, and still open
+    }));
+    this.alphaStitch = o.stitchCompliance ?? this.alphaStretch * o.stitchSoftness;
+    this.maxTensionGf = o.maxTensionGf;
     this.stitchStrength = this.stitches.length ? 0.05 : 0;
 
     // ---- self-collision hash
@@ -581,8 +625,9 @@ export class Cloth {
         b[0] += dx * s * wb; b[1] += dy * s * wb; b[2] += dz * s * wb;
       }
       this._projectContacts(margin, maxPush, h);
-      if (this.stitchStrength > 0) this._solveStitches();
+      if (this.stitchStrength > 0) this._solveStitches(h2);
     }
+    if (this.stitchStrength > 0) this._readStitchTensions(h2);
 
     // ---- 4. bending, as a spring across each interior edge with its rest
     // length taken from the flat pattern. Softer than stretch by orders of
@@ -759,35 +804,211 @@ export class Cloth {
   /**
    * Draw the seams together. A stitch is a zero-length constraint between two
    * vertices that are the same point of the garment but were cut on different
-   * pieces; sewing is the process of making that true.
+   * pieces; sewing is the process of making that true -- when it CAN be made
+   * true, which is the point of doing it this way.
    *
-   * Under-relaxed by `stitchStrength`, which the caller ramps up, because a
-   * seam snapped shut in one step is the same arbitrarily large velocity as a
-   * teleported pin.
+   * A compliant XPBD distance constraint, exactly like `stretch` and `bend`
+   * above, with two differences that are the whole reason for the rewrite:
+   *
+   *   SOFTER THAN THE CLOTH.  alphaStitch = stitchSoftness * alphaStretch, so
+   *   when the seam and the fabric disagree the SEAM yields. The old hard
+   *   projection to the midpoint had no compliance at all, so the argument was
+   *   settled by sweep order and the fabric lost it.
+   *
+   *   FORCE-LIMITED.  The accumulated multiplier is clamped at
+   *   maxTensionGf, which makes the stitch SATURATE: it pulls as hard as it is
+   *   allowed to and then stops, and the seam simply stays open. That residual
+   *   is the measurement -- "this seam is 4 cm short" -- and it is exactly what
+   *   forcing the seam shut used to throw away.
+   *
+   * `stitchStrength` (0..1, ramped by the caller) scales the force limit rather
+   * than the correction, which is what a seam being drawn closed by hand is:
+   * the same thread, pulled progressively harder.
    */
-  _solveStitches() {
+  _solveStitches(h2) {
     const V = this.asm.verts, W = this.invMass;
-    const k = Math.min(1, this.stitchStrength);
+    const k = Math.min(1, Math.max(0, this.stitchStrength));
+    // gram-force -> g*cm/s^2 -> multiplier units (lambda = force * h^2)
+    const lamMax = this.maxTensionGf * G * h2 * k;
+    const aT = this.alphaStitch / h2;
     for (const s of this.stitches) {
+      if (!s.active) continue;
       const wa = W[s.a], wb = W[s.b], wsum = wa + wb;
       if (wsum <= 0) continue;
       const a = V[s.a], b = V[s.b];
       const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
-      const f = k / wsum;
-      a[0] += dx * f * wa; a[1] += dy * f * wa; a[2] += dz * f * wa;
-      b[0] -= dx * f * wb; b[1] -= dy * f * wb; b[2] -= dz * f * wb;
+      const L = Math.hypot(dx, dy, dz);
+      if (L < 1e-12) continue;
+      // C = L (rest length zero), so the stitch only ever pulls: dl <= 0.
+      let dl = -L / (wsum + aT);
+      // Saturate on the ACCUMULATED multiplier, not on the increment, or the
+      // limit would scale with the sweep count instead of being a force.
+      if (s.lambda + dl < -lamMax) dl = -lamMax - s.lambda;
+      if (dl >= 0) { s.saturated = true; continue; }
+      s.lambda += dl;
+      const sc = dl / L;
+      a[0] -= dx * sc * wa; a[1] -= dy * sc * wa; a[2] -= dz * sc * wa;
+      b[0] += dx * sc * wb; b[1] += dy * sc * wb; b[2] += dz * sc * wb;
     }
   }
 
-  /** How far is the furthest seam from being closed? cm. */
+  /**
+   * Turn the substep's accumulated multipliers into a tension, and start the
+   * next substep clean.
+   *
+   * Masses are real grams (from areal density, above) and gravity is real
+   * cm/s^2, so lambda/h^2 is a real force and dividing by G puts it in
+   * gram-force -- a number a person can weigh against a thread.
+   */
+  _readStitchTensions(h2) {
+    const lamMax = this.maxTensionGf * G * h2 * Math.min(1, Math.max(0, this.stitchStrength));
+    for (const s of this.stitches) {
+      if (!s.active) { s.tensionGf = 0; s.lambda = 0; s.saturated = false; continue; }
+      s.tensionGf = Math.abs(s.lambda) / (h2 * G);
+      if (s.tensionGf > s.peakGf) s.peakGf = s.tensionGf;
+      s.saturated = lamMax > 0 && Math.abs(s.lambda) >= lamMax * 0.995;
+      s.lambda = 0;
+    }
+  }
+
+  /**
+   * The worst stretch in the cloth immediately around a set of stitches.
+   *
+   * A seam drags on the edges that run into it, so if the fabric is what is
+   * stopping the seam closing, this is where it shows. One ring of incident
+   * edges is enough and is cheap; the alternative is to search the whole mesh
+   * and report a strain that has nothing to do with this seam.
+   */
+  _seamStrain(list) {
+    if (!this._incident) {
+      this._incident = new Map();
+      for (const c of this.stretch) {
+        if (!this._incident.has(c.a)) this._incident.set(c.a, []);
+        if (!this._incident.has(c.b)) this._incident.set(c.b, []);
+        this._incident.get(c.a).push(c);
+        this._incident.get(c.b).push(c);
+      }
+    }
+    const V = this.asm.verts;
+    let worst = 0;
+    for (const s of list) {
+      for (const i of [s.a, s.b]) {
+        for (const c of this._incident.get(i) || []) {
+          const a = V[c.a], b = V[c.b];
+          const L = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+          const e = (L - c.rest) / c.rest;
+          if (e > worst) worst = e;
+        }
+      }
+    }
+    return worst;
+  }
+
+  /** How far apart are this stitch's two ends still? cm. */
+  stitchGap(s) {
+    const a = this.asm.verts[s.a], b = this.asm.verts[s.b];
+    return Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  }
+
+  /** How far is the furthest ACTIVE seam from being closed? cm. */
   maxStitchGap() {
     let m = 0;
     for (const s of this.stitches) {
-      const a = this.asm.verts[s.a], b = this.asm.verts[s.b];
-      const d = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+      if (!s.active) continue;
+      const d = this.stitchGap(s);
       if (d > m) m = d;
     }
     return m;
+  }
+
+  /**
+   * Turn a predicate into which stitches are being sewn. This is what sewing
+   * only SOME of the pieces is, in the solver: the rest of the seams are
+   * threads that have not been put in yet.
+   */
+  setStitchActive(pred) {
+    let n = 0;
+    for (const s of this.stitches) {
+      const was = s.active;
+      s.active = !!pred(s);
+      if (s.active) n++;
+      if (!s.active && was) { s.lambda = 0; s.tensionGf = 0; s.saturated = false; }
+    }
+    return n;
+  }
+
+  /**
+   * One row per seam: how much of it closed, how hard the thread had to pull,
+   * and the verdict.
+   *
+   * This is the fitting readout, and it is the thing the old code could not
+   * produce. A seam that closes at low tension fits. A seam that closes only
+   * at the force limit is being forced, and will pucker. A seam that does not
+   * close is short, and the shortfall in centimetres is how much has to be
+   * eased in or taken out as a dart on the cutting table (docs/14-editing.md).
+   *
+   * A seam can fail to close for two different reasons and the report
+   * distinguishes them, because the remedy differs:
+   *
+   *   THE THREAD IS AT ITS LIMIT  (`saturated`) -- the stitch is pulling as
+   *   hard as `maxTensionGf` allows. A stronger thread or a slower, eased
+   *   seam would close it.
+   *
+   *   THE CLOTH IS AT ITS LIMIT -- the thread has capacity left but the fabric
+   *   has reached `maxStrain` and will not stretch further. No thread will fix
+   *   that; the pattern is wrong and the pieces have to be re-cut.
+   *
+   * Either way the seam stays open and the shortfall is reported, which is the
+   * whole difference from forcing it shut and averaging the evidence away.
+   *
+   * @param closedCm  a stitch within this is counted closed; the weld uses the
+   *                  same tolerance, so "closed" here means "will be welded".
+   */
+  stitchReport({ closedCm = 0.25 } = {}) {
+    const bySeam = new Map();
+    for (const s of this.stitches) {
+      const id = s.seam || (s.pa !== undefined ? `P${s.pa}-P${s.pb}` : 'dart');
+      if (!bySeam.has(id)) bySeam.set(id, []);
+      bySeam.get(id).push(s);
+    }
+    const rows = [];
+    for (const [id, list] of bySeam) {
+      const gaps = list.map((s) => this.stitchGap(s));
+      const closed = gaps.filter((g) => g <= closedCm).length;
+      const tens = list.map((s) => s.tensionGf);
+      const sat = list.filter((s) => s.saturated).length;
+      const active = list.filter((s) => s.active).length;
+      const maxGap = Math.max(...gaps);
+      const pct = 100 * closed / list.length;
+      const meanT = tens.reduce((a, b) => a + b, 0) / list.length;
+      // Is the seam pulling in earnest? A seam that is open at a tension this
+      // low has simply not been given time; one that is open while pulling
+      // hard has lost the argument and will not close.
+      const pulling = meanT > 0.08 * this.maxTensionGf;
+      const strained = this._seamStrain(list);
+      const why = sat > 0 ? 'the thread is at its limit'
+        : strained >= this.maxStrain * 0.95 ? 'the cloth is at its limit' : null;
+      rows.push({
+        seam: id,
+        pieces: list[0].pa !== undefined ? `${list[0].pa} + ${list[0].pb}` : '-',
+        stitches: list.length,
+        sewing: active === 0 ? 'no' : active === list.length ? 'yes' : 'part',
+        closedPct: +pct.toFixed(0),
+        maxGapCm: +maxGap.toFixed(2),
+        meanTensionGf: +meanT.toFixed(0),
+        peakTensionGf: +Math.max(...list.map((s) => s.peakGf)).toFixed(0),
+        clothStrainPct: +(100 * strained).toFixed(1),
+        atTheLimit: sat,
+        verdict: active === 0 ? 'not sewn'
+          : maxGap <= closedCm
+            ? (sat > list.length * 0.1 || strained >= this.maxStrain * 0.95
+              ? 'closed, but forced -- it will pucker' : 'closed')
+            : pulling || sat > 0
+              ? `short by ${maxGap.toFixed(1)} cm (${why || 'it has stopped closing'})`
+              : 'still closing',
+      });
+    }
+    return rows.sort((a, b) => String(a.seam).localeCompare(String(b.seam)));
   }
 
   /** One sweep; returns the largest remaining violation, as a strain. */
