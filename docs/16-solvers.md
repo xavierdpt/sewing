@@ -147,19 +147,39 @@ general than vertex pairs, which is what easing a seam needs — and a table of
 *measured* fabric parameters, which §8 of docs/11-cloth.md admits this project
 does not have.
 
-It does not build here. Two patches got past Intel MKL (fetched from an
-anaconda URL that no longer resolves; system OpenBLAS substituted) and past
-its vendored pybind11 2.4 (which predates `PyFrameObject` becoming opaque in
-Python 3.11, so it cannot compile against Python 3.12). What remains is
-incomplete-type errors between pybind11 2.11 and `boost::property_tree`, and
-GCC 13 rejecting `meta.hpp` — both needing edits to C-IPC's own sources.
+**It builds**, with four patches, none of which touch the solver's
+mathematics — `bash sim/cipc/build_cipc.sh`:
 
-It was not pursued further because Blender already reaches **zero**
-penetration, so there is nothing left on that axis to win. Its fabric table is
-worth stealing on its own merits even if the solver never builds: five real
-cloths at 150–240 gsm with measured Young's moduli, Poisson's ratios and
-strain limits of 0.5–13.4 %, against this project's plausible-but-invented
-presets.
+1. **MKL** is fetched from an anaconda.org URL that no longer resolves.
+   SuiteSparse needs only a BLAS and a LAPACK; system OpenBLAS is both.
+2. **The vendored pybind11 is 2.4**, which predates `PyFrameObject` becoming
+   opaque in Python 3.11 and so cannot compile against 3.12. Ubuntu's 2.11.1
+   can.
+3. **GCC 13 promoted `-Wchanges-meaning` to an error**, which rejects the
+   vendored `meta.hpp`. A name-lookup pedantry; warn instead.
+4. **`boost::property_tree` against pybind11 ≥ 2.6.** pybind11's
+   `is_copy_constructible` is container-aware: given a `value_type` it also
+   requires *that* to be copy-constructible. `ptree` is recursive — its
+   `value_type` is `std::pair<const Key, basic_ptree>` — so the trait
+   instantiates itself on a type that is still incomplete. Short-circuiting it
+   to the plain `std::` trait is the upstream advice for recursive types, and
+   is the right answer: `ptree` really is copy and move constructible. The
+   specialisation must go at **global** scope; inside `namespace JGSL` it
+   silently becomes `JGSL::pybind11::detail` and specialises nothing.
+
+Expect a long build — it compiles Kokkos, Kokkos-kernels, SuiteSparse, AMGCL
+and Boost from source, and Kokkos-kernels' several hundred generated template
+instantiations are most of the wall time.
+
+It is **not integrated**, because Blender already reaches zero penetration, so
+there is nothing left on that axis to win. It is here as a reference oracle —
+a second opinion from a solver that cannot interpenetrate by construction —
+and for its fabric table, which is recorded in
+[`sim/cipc/fabrics.md`](../sim/cipc/fabrics.md): five real cloths at
+150–240 gsm with measured Young's moduli, Poisson's ratios and strain limits
+of 0.5–13.4 %, against this project's plausible-but-invented presets. Those
+measured wovens stretch 6–13 % where this project assumes 2–4 %, which if
+right undercuts the yoke/slip boundary in docs/11-cloth.md.
 
 **FCL** (`libfcl-dev`) does mesh-mesh proximity with a BVH, and does it fast —
 342 contacts between a 1872-triangle garment and a 12288-triangle body in

@@ -291,5 +291,8 @@ The first two of these are why drape no longer runs here at all. See
   presets, though. Kawabata or FAST measurements of a real cloth would give
   them a footing; failing that, C-IPC ships a table of five measured cloths
   (150–240 gsm, with Young's moduli, Poisson's ratios and strain limits of
-  0.5–13.4 %) that is worth adopting on its own even though that solver does
-  not build here.
+  0.5–13.4 %), recorded in [`sim/cipc/fabrics.md`](../sim/cipc/fabrics.md).
+  **Those measured wovens stretch 6–13 % where the presets here assume 2–4 %**,
+  and if that is right then §7's yoke/slip boundary — which turns entirely on
+  the cloth refusing to stretch past the shoulder girth — was found with too
+  stiff a cloth and should be re-run.
