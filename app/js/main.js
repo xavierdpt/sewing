@@ -855,6 +855,12 @@ function finishAssembly() {
   sim = next;
   asm = welded.asm;
   assembling.phase = 'falling';
+  // Gravity is on in the new Cloth, but something has to STEP it. This used
+  // to be inherited: finishAssembly was reached from inside the render loop
+  // while a sewing pass was running, so `playing` was already true. Since W
+  // became a toggle the pass ends paused, and X was welding a garment with
+  // gravity enabled and then leaving it hanging in mid-air, untouched.
+  playing = true;
   assembling.seamReport = report;
   panelOfVert = [];
   if (!welded.openStitches.length) {
@@ -1467,6 +1473,7 @@ function phaseMetrics(extra = {}) {
       maxStretchPct: r.maxStretchPct,
       rmsSpeedCmPerSec: r.rmsSpeedCmPerSec,
       simSeconds: +sim.time.toFixed(2),
+      playing,
       widestSeamGapCm: +sim.maxStitchGap().toFixed(3),
       feedLeftCm: +sim.remainingFeedCm().toFixed(2),
       fabric: params.fabric,
@@ -1526,7 +1533,16 @@ function assemblyRows(row0, cls0) {
         + ` about ${(togo / Math.max(0.01, params.sewSpeedCmPerSec)).toFixed(0)} s.`
         + ' W stops it here.';
     }
-    if (a.phase === 'falling') return 'sewn, and falling';
+    if (a.phase === 'falling') {
+      // Say what is actually happening, not what phase we are nominally in.
+      // Reporting 'falling' while paused is the same class of mistake as the
+      // HUD reporting 0.00 cm inside the body while the figure was visibly
+      // through the cloth: a label that cannot be falsified by the state.
+      if (!playing) return 'sewn — paused. Space to run gravity.';
+      return sidecar && sidecar.state === 'running'
+        ? 'sewn, falling (preview) — the side-car is solving the real drape'
+        : 'sewn, and falling';
+    }
     if (!nSel) return 'arranging -- nothing selected. Click a piece, or A for all.';
     return togo > params.weldTolCm
       ? `arranging -- ${togo.toFixed(1)} cm of seam left to take up.`
