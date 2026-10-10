@@ -24,6 +24,8 @@ import { flaredSkirtPattern, placeSkirt, hemProfile, assemblyReport,
 import { layOut, weldStitched } from './assemble.js';
 import * as arrange from './arrange.js';
 import { drapeRemote, health as sidecarHealth, DEFAULT_URL } from './remote.js';
+import { startTelemetry, tlog, flushTelemetry } from './telemetry.js';
+import { clearance } from './clearance.js';
 import { PatternTable } from './table.js';
 import { LIBRARY, byId } from './tiles.js';
 import { sub, add, mul, cross, norm, dist, DEG } from './geom.js';
@@ -158,6 +160,13 @@ const params = {
   // 0 cm at none for the side-car. So the local fall is a preview and the
   // side-car is the answer. See sim/server.py and docs/16-solvers.md.
   sidecarUrl: DEFAULT_URL, useSidecar: true, sidecarSeconds: 6,
+  // Draw the body inset by half the cloth's thickness, which is the half of
+  // the cloth the renderer otherwise leaves out. Capped at that; it is not a
+  // knob for hiding penetration.
+  bodyInsetCm: 0.2, clothThicknessCm: 0.4,
+  // Send what the viewer measures to the side-car, so it can be read without
+  // someone copying a browser console by hand.
+  telemetry: true,
   // How fast a seam is drawn closed, cm/s. Constant: the seam is fed at this
   // rate rather than pulled towards zero, so it never accelerates.
   sewSpeedCmPerSec: 4,
@@ -224,11 +233,33 @@ async function loadMakeHuman() {
   return makehuman;
 }
 
+/**
+ * The body, drawn inset by half the cloth's thickness.
+ *
+ * Not a cheat, and the distinction matters. The solver models cloth with a
+ * real thickness (`clothThickness`, 0.4 cm) and holds its MID-SURFACE that
+ * far off the skin -- but the renderer draws the cloth as a zero-thickness
+ * sheet sitting exactly on its mid-surface, and draws the skin at the skin.
+ * So the near half of the cloth's own body is simply missing from the
+ * picture, and the figure reads as poking through wherever the sheet is
+ * within half a thickness of it. Garment software renders the offset for
+ * precisely this reason.
+ *
+ * What this does NOT do is hide solver error. It is clamped to half the
+ * modelled thickness, which is the amount that is physically there; the HUD
+ * goes on reporting the true clearance from `penetration()`, measured against
+ * the real surface, so anything deeper than the cloth is thick still shows up
+ * as a number and still shows up on screen.
+ */
 function buildBodyMesh() {
   if (bodyMesh) { scene.remove(bodyMesh); bodyMesh.geometry.dispose(); }
   const d = surface.mesh(params.source === 'parametric' ? { nu: 110, nv: 80 } : {});
+  const inset = Math.max(0, Math.min(params.bodyInsetCm, params.clothThicknessCm / 2));
+  const pos = inset > 0
+    ? d.positions.map((v, i) => v - d.normals[i] * inset)
+    : d.positions;
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(d.positions, 3));
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(d.normals, 3));
   g.setIndex(d.indices);
   bodyMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
@@ -564,6 +595,15 @@ function startAssembly() {
       const a = laid.asm.verts[st.a], c = laid.asm.verts[st.b];
       return Math.hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
     }));
+    tlog('arranged', phaseMetrics({
+      pieces: pattern.panels.length,
+      seams: pattern.seams.length,
+      stitches: laid.stitches.length,
+      standoffCm: params.standoffCm,
+      widestGapCm: +widest.toFixed(2),
+      arrangementStrainPct:
+        +(100 * Math.max(...laid.asm.edgeStrains().map((x) => Math.abs(x.strain)))).toFixed(4),
+    }));
     console.log(
       `${pattern.panels.length} pieces laid out around the body, all selected. `
       + `${laid.stitches.length} stitches waiting on `
@@ -693,6 +733,11 @@ function toggleSewing() {
   playing = true;
   const seams = [...new Set(todo.map(seamKeyOf))];
   const togo = sim.remainingFeedCm();
+  tlog('sew-start', phaseMetrics({
+    stitches: n, seams: seams.length, toTakeUpCm: +togo.toFixed(2),
+    sewSpeedCmPerSec: params.sewSpeedCmPerSec,
+    maxTensionGf: params.maxTensionGf,
+  }));
   console.log(`sewing ${n} stitches on ${seams.length} seam(s) `
     + `(${seams.join(', ')}): ${togo.toFixed(1)} cm to take up at `
     + `${params.sewSpeedCmPerSec} cm/s, about `
@@ -712,6 +757,17 @@ function pauseSewing(why = 'stopped') {
   const rows = sim.stitchReport({ closedCm: params.weldTolCm })
     .filter((r) => r.sewing !== 'no');
   const left = sim.remainingFeedCm();
+  tlog('sew-stop', phaseMetrics({
+    why,
+    leftToTakeUpCm: +left.toFixed(2),
+    seamsOpen: rows.filter((r) => r.maxGapCm > params.weldTolCm).length,
+    seamsClosed: rows.filter((r) => r.maxGapCm <= params.weldTolCm).length,
+    peakTensionGf: +Math.max(0, ...sim.stitches.map((x) => x.peakGf)).toFixed(0),
+    seams: rows.map((r) => ({
+      seam: r.seam, closedPct: r.closedPct, maxGapCm: r.maxGapCm,
+      meanTensionGf: r.meanTensionGf, verdict: r.verdict,
+    })),
+  }));
   console.log(`${why}: ${left > params.weldTolCm
     ? `${left.toFixed(1)} cm still to take up -- press W to carry on`
     : 'every armed seam is fully taken up'}.`);
@@ -810,6 +866,11 @@ function finishAssembly() {
     buildStitchLines();
   }
   buildClothMesh();
+  tlog('welded', phaseMetrics({
+    weldedPct: welded.weldedPct,
+    leftBasted: welded.openStitches.length,
+    weldTolCm: params.weldTolCm,
+  }));
   console.log(`welded ${welded.weldedPct} % of the stitches `
     + `(within ${params.weldTolCm} cm); ${welded.asm.verts.length} vertices. `
     + `Widest seam still open: ${gap.toFixed(2)} cm. Gravity on.`);
@@ -854,12 +915,14 @@ async function sendToSidecar() {
     return;
   }
   sidecar = { state: 'running', since: Date.now() };
+  tlog('sidecar-start', phaseMetrics({ backends: Object.keys(h.backends || {}) }));
   updateHUD();
   console.log(`side-car (${Object.entries(h.backends).map(([k, v]) => `${k}: ${v}`).join(', ')})`
     + ` draping ${asm.verts.length} vertices…`);
   try {
     const out = await drapeRemote(target, surface, {
       url: params.sidecarUrl,
+      session: telemetrySessionId,
       fabric: params.fabric,
       seconds: params.sidecarSeconds,
       pinned,
@@ -877,11 +940,17 @@ async function sendToSidecar() {
     updateClothMesh();
     updateStitchLines();
     updateHUD();
+    tlog('sidecar-done', phaseMetrics({
+      backend: out.backend, solveSeconds: out.wallSeconds,
+    }));
+    flushTelemetry();
     console.log(`side-car drape done in ${out.wallSeconds}s (${out.backend}).`
       + ` Inside the body: ${pen.worstCm} cm at ${pen.insideSamples} sample points.`);
     console.table(sim.report());
   } catch (e) {
     sidecar = { state: 'failed', error: String(e.message || e) };
+    tlog('sidecar-failed', { error: String(e.message || e) });
+    flushTelemetry();
     console.error(`side-car drape failed: ${e.message || e}`);
     updateHUD();
   }
@@ -1369,6 +1438,46 @@ function exportOBJ() {
 // -------------------------------------------------------------------- HUD
 
 /**
+ * The numbers worth recording at a phase boundary -- the same ones
+ * tools/trace.mjs prints, so a session in the viewer and a headless run can
+ * be compared line for line. That parity is the whole point: when the two
+ * disagree about the same garment, the difference is the bug. It is how the
+ * viewer's seams were found stalling at 0.4 cm where the headless path
+ * reached 0.032 cm.
+ *
+ * Clearance costs a few milliseconds over ~19k samples, so this is called at
+ * phase boundaries and never per frame.
+ */
+function phaseMetrics(extra = {}) {
+  if (!sim || !asm) return extra;
+  try {
+    const c = clearance(asm, surface, {
+      collider: sim.collider,
+      insetCm: Math.min(params.bodyInsetCm, params.clothThicknessCm / 2),
+    });
+    const r = sim.report();
+    return {
+      vertices: asm.verts.length,
+      triangles: asm.tiles.length,
+      insideAreaPct: c.insideAreaPct,
+      deepestCm: c.deepestCm,
+      visiblePct: c.visiblePct,
+      trianglesTouched: c.trianglesTouched,
+      medianGapCm: c.medianCm,
+      maxStretchPct: r.maxStretchPct,
+      rmsSpeedCmPerSec: r.rmsSpeedCmPerSec,
+      simSeconds: +sim.time.toFixed(2),
+      widestSeamGapCm: +sim.maxStitchGap().toFixed(3),
+      feedLeftCm: +sim.remainingFeedCm().toFixed(2),
+      fabric: params.fabric,
+      ...extra,
+    };
+  } catch (e) {
+    return { metricsError: String(e && e.message || e), ...extra };
+  }
+}
+
+/**
  * What the side-car is doing, as one line.
  *
  * A function and not an object literal indexed by state, which is how this
@@ -1508,10 +1617,22 @@ function updateHUD() {
       // Vertices AND edge midpoints. Reporting vertices alone said "0.00 cm"
       // while the dress form was plainly visible through a half-sewn skirt:
       // every vertex was outside and the triangles between them were not.
-      + row0('inside the body', r.deepestEdgeCm > r.deepestVertexCm
-        ? `${r.deepestPenetrationCm.toFixed(2)} cm (between the vertices)`
-        : `${r.deepestPenetrationCm.toFixed(2)} cm`,
-        cls0(r.deepestPenetrationCm < 0.1))
+      //
+      // The body is drawn inset by half the cloth's thickness, so penetration
+      // shallower than that is not visible on screen. Both numbers are shown:
+      // hiding the real one behind the rendered one is how the HUD came to
+      // report 0.00 cm through a visibly broken drape in the first place.
+      + row0('inside the body', (() => {
+        const d = r.deepestPenetrationCm;
+        const hidden = Math.min(params.bodyInsetCm, params.clothThicknessCm / 2);
+        if (d <= hidden) {
+          return `${d.toFixed(2)} cm -- within the cloth's own thickness,`
+            + ' so nothing shows';
+        }
+        return `${d.toFixed(2)} cm, of which ${(d - hidden).toFixed(2)} cm shows`
+          + (r.deepestEdgeCm > r.deepestVertexCm ? ' (between the vertices)' : '');
+      })(), cls0(r.deepestPenetrationCm
+        <= Math.min(params.bodyInsetCm, params.clothThicknessCm / 2)))
       + (sidecar ? row0('drape', sidecarLine(sidecar),
         cls0(sidecar.state !== 'failed')) : '')
       + row0('stretch mean / max', `${r.meanStrainPct} / ${r.maxStretchPct} %`,
@@ -1917,6 +2038,10 @@ fSew.add(params, 'stitchColour', ['tension', 'seam']).name('colour the stitches 
 fSew.add({ r: () => { if (sim && sim.stitches.length) console.table(sim.stitchReport({ closedCm: params.weldTolCm })); } },
   'r').name('seam report: tension and gaps');
 
+const telemetrySessionId = startTelemetry({
+  url: params.sidecarUrl, enabled: params.telemetry,
+});
+
 // ------------------------------------------------- the drape side-car
 
 /**
@@ -1939,6 +2064,9 @@ fSide.add({ h: async () => {
 } }, 'h').name('is it running?');
 fSide.add({ p: () => { if (sim) console.table(sim.penetration()); } }, 'p')
   .name('how much of the body is through the cloth?');
+fSide.add(params, 'bodyInsetCm', 0, 0.2, 0.01)
+  .name('draw the body inset by, cm (cloth half-thickness)')
+  .onChange(buildBodyMesh);
 
 const fTable = gui.addFolder('the cutting table -- edit the pieces');
 fTable.add({ t: openTable }, 't').name('put the pieces on the table [T]');
@@ -2361,6 +2489,10 @@ updateHUD();
       console.error('the cloth solver blew up; try more substeps or a smaller triangle');
     } else if (sim.rmsSpeed() < 0.3 && sim.time > 0.5
       && !(assembling && assembling.phase === 'stitching')) {
+      if (assembling && assembling.phase === 'falling' && !assembling.previewLogged) {
+        assembling.previewLogged = true;
+        tlog('preview-settled', phaseMetrics({}));
+      }
       // A sewing pass is quasi-static by design -- the cloth creeps along at
       // the feed rate, which is well under this threshold -- so the
       // settled-and-stop test has to leave it alone or it would pause the

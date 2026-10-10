@@ -91,9 +91,12 @@ export function buildJob(asm, surface, {
   bodyThicknessCm = 0.35, clothThicknessCm = 0.35, selfCollision = true,
   gravity = true, quality = 14, collisionQuality = 12,
   nu = 96, nv = 64, sewEdges = null, sewingForceMax = 0, backend = 'blender',
+  // so the server's log line for this drape joins up with the viewer's
+  session = null,
 } = {}) {
   return {
     backend,
+    session,
     fps,
     frames: Math.max(1, Math.round(seconds * fps)),
     gravity,

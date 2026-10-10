@@ -51,7 +51,7 @@ const percentile = (sorted, q) => {
  * @param order  barycentric grid order; 3 is ten samples per triangle
  * @returns distances in cm, negative inside, plus the summary that matters
  */
-export function clearance(asm, surface, { order = 3, collider = null } = {}) {
+export function clearance(asm, surface, { order = 3, collider = null, insetCm = 0 } = {}) {
   const col = collider || new BodyCollider(surface);
   const bary = barycentricGrid(order);
   const V = asm.verts;
@@ -92,6 +92,11 @@ export function clearance(asm, surface, { order = 3, collider = null } = {}) {
   all.sort((a, b) => a - b);
   worst.sort((a, b) => a.cm - b.cm);
   const inside = all.filter((d) => d < 0);
+  // What would still be SEEN. The viewer draws the body inset by half the
+  // cloth's thickness, because the renderer otherwise omits the near half of
+  // the cloth's own body (main.js buildBodyMesh). Cloth within that distance
+  // of the skin is not visibly through it; anything deeper is.
+  const visible = all.filter((d) => d < -insetCm);
   return {
     samples: all.length,
     trianglesTouched: worst.length,
@@ -103,6 +108,9 @@ export function clearance(asm, surface, { order = 3, collider = null } = {}) {
     insideAreaPct: +(100 * insideArea / Math.max(1e-9, totalArea)).toFixed(2),
     meanInsideCm: inside.length
       ? +(inside.reduce((a, d) => a + d, 0) / inside.length).toFixed(3) : 0,
+    insetCm,
+    visibleSamples: visible.length,
+    visiblePct: +(100 * visible.length / Math.max(1, all.length)).toFixed(2),
     // and the distribution, which says whether the garment fits at all
     p01Cm: +percentile(all, 0.01).toFixed(2),
     p05Cm: +percentile(all, 0.05).toFixed(2),

@@ -29,7 +29,7 @@ export async function health(url = DEFAULT_URL, timeoutMs = 2000) {
  * order, so they drop straight back into the Assembly.
  */
 export async function drapeRemote(asm, surface, opts = {}) {
-  const { url = DEFAULT_URL, ...rest } = opts;
+  const { url = DEFAULT_URL, ...rest } = opts;   // `session` rides along in rest
   const job = buildJob(asm, surface, rest);
   const r = await fetch(`${url}/drape`, {
     method: 'POST',
