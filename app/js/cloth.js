@@ -1647,10 +1647,14 @@ export class Cloth {
    * alone, so a limb passing through the cloth is counted too.
    */
   penetration() {
-    const out = { vertexCm: 0, edgeCm: 0, faceCm: 0, worstCm: 0, insideSamples: 0 };
+    const out = {
+      vertexCm: 0, edgeCm: 0, faceCm: 0, worstCm: 0,
+      insideSamples: 0, samples: 0,
+    };
     if (!this.collider) return out;
     const V = this.asm.verts;
     const worst = (p) => {
+      out.samples++;
       const d = this.collider.signedAt(p);
       if (!Number.isFinite(d) || d >= 0) return 0;
       out.insideSamples++;

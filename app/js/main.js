@@ -1369,6 +1369,29 @@ function exportOBJ() {
 // -------------------------------------------------------------------- HUD
 
 /**
+ * What the side-car is doing, as one line.
+ *
+ * A function and not an object literal indexed by state, which is how this
+ * was first written and was a crash: `{running: a, done: b}[state]` builds the
+ * whole object first, so the `done` branch dereferenced the result before
+ * there was one and threw while the job was still running -- taking the
+ * side-car call down with it.
+ */
+function sidecarLine(sc) {
+  switch (sc.state) {
+    case 'running':
+      return `side-car working… (${((Date.now() - sc.since) / 1000).toFixed(0)} s)`;
+    case 'done':
+      return `${sc.backend}, ${sc.seconds} s -- ${sc.pen.worstCm} cm inside`
+        + ` at ${sc.pen.insideSamples} of ${sc.pen.samples} sample points`;
+    case 'failed':
+      return `side-car failed: ${sc.error}`;
+    default:
+      return String(sc.state);
+  }
+}
+
+/**
  * What the hand assembly is doing, in the HUD rather than in the console.
  *
  * Three things have to be on screen at all times while arranging, because all
@@ -1388,20 +1411,20 @@ function assemblyRows(row0, cls0) {
   const peak = Math.max(0, ...sim.stitches.filter((x) => x.active).map((x) => x.tensionGf));
 
   const togo = sim.remainingFeedCm ? sim.remainingFeedCm() : 0;
-  let out = row0('phase', {
-    arranging: nSel
-      ? (togo > params.weldTolCm
-        ? `arranging -- ${togo.toFixed(1)} cm of seam left to take up. `
-          + 'W carries on, X welds and drops.'
-        : `arranging ${nSel} piece(s) -- W sews the seams between them, `
-          + 'X welds and drops')
-      : 'arranging -- nothing selected. Click a piece, or A for all.',
-    stitching: `sewing at ${params.sewSpeedCmPerSec} cm/s -- `
-      + `${togo.toFixed(1)} cm to go, about `
-      + `${(togo / Math.max(0.01, params.sewSpeedCmPerSec)).toFixed(0)} s. `
-      + 'W stops it here.',
-    falling: 'sewn, and falling',
-  }[a.phase]);
+  const phaseLine = () => {
+    if (a.phase === 'stitching') {
+      return `sewing at ${params.sewSpeedCmPerSec} cm/s -- ${togo.toFixed(1)} cm to go,`
+        + ` about ${(togo / Math.max(0.01, params.sewSpeedCmPerSec)).toFixed(0)} s.`
+        + ' W stops it here.';
+    }
+    if (a.phase === 'falling') return 'sewn, and falling';
+    if (!nSel) return 'arranging -- nothing selected. Click a piece, or A for all.';
+    return togo > params.weldTolCm
+      ? `arranging -- ${togo.toFixed(1)} cm of seam left to take up.`
+        + ' W carries on, X welds and drops.'
+      : `arranging ${nSel} piece(s) -- W sews the seams between them, X welds and drops`;
+  };
+  let out = row0('phase', phaseLine());
   if (a.phase !== 'falling') {
     out += row0('selected', nSel
       ? `${nSel} of ${a.pattern.panels.length}: ${names}${nSel > 6 ? ' …' : ''}`
@@ -1489,12 +1512,8 @@ function updateHUD() {
         ? `${r.deepestPenetrationCm.toFixed(2)} cm (between the vertices)`
         : `${r.deepestPenetrationCm.toFixed(2)} cm`,
         cls0(r.deepestPenetrationCm < 0.1))
-      + (sidecar ? row0('drape', {
-        running: `side-car working… (${((Date.now() - sidecar.since) / 1000).toFixed(0)} s)`,
-        done: `${sidecar.backend}, ${sidecar.seconds} s -- `
-          + `${sidecar.pen.worstCm} cm inside at ${sidecar.pen.insideSamples} points`,
-        failed: `side-car failed: ${sidecar.error}`,
-      }[sidecar.state], cls0(sidecar.state !== 'failed')) : '')
+      + (sidecar ? row0('drape', sidecarLine(sidecar),
+        cls0(sidecar.state !== 'failed')) : '')
       + row0('stretch mean / max', `${r.meanStrainPct} / ${r.maxStretchPct} %`,
         cls0(r.maxStretchPct < 10))
       + row0('seams stretched', `${r.stretchedSeamsPct} %`)
