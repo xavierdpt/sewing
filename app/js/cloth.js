@@ -152,6 +152,43 @@ export const DEFAULTS = {
   // so it stops where the girth matches, which is what cloth does.
   maxStrain: null,
   collisionMargin: 0.10,  // cm; half the cloth's thickness, held off the body
+  // Collide the MIDPOINT of each edge as well as the vertices.
+  //
+  // Contact is a point query per vertex, so without this the cloth is held off
+  // the body at its vertices and nowhere else, and a flat triangle spanning a
+  // convex bulge dips below the surface in between -- the chord sag s^2/8R
+  // that docs/01-geometry.md section 6 computes for ease, showing up here as
+  // the body visibly poking through the cloth.
+  //
+  // It matters most exactly when the garment is least settled. Measured on a
+  // half-sewn four-panel skirt, where only 12 of ~1000 vertices are touching
+  // and the cloth bridges between them: every vertex correctly outside, and
+  // 40 edge midpoints up to 0.42 cm INSIDE the body. One triangle's own sag is
+  // only about 0.07 cm at a 3 cm edge, so this is not really per-triangle --
+  // it is the unsupported span between the few vertices in contact.
+  //
+  // The midpoint is not a real degree of freedom: pushing both endpoints out
+  // by d moves the midpoint out by d, so the correction is shared between them
+  // and the triangle is lifted off as a whole.
+  //
+  // OFF by default, and that is an admission rather than a preference. Sampling
+  // more points is not how this problem is solved -- the standard treatment is
+  // proximity and continuous detection on the real primitive pairs, vertex-face
+  // and edge-edge (Bridson & Fedkiw 2002), or a barrier formulation that
+  // guarantees an intersection-free state (IPC, Li et al. 2020). Midpoints
+  // reduce the error without bounding it: measured on a half-sewn skirt, 40
+  // edge midpoints inside the body at 0.42 cm became 4 at 0.26 cm, not 0.
+  //
+  // And it is a positional correction added to a Gauss-Seidel loop whose
+  // relaxation constants above were tuned by measurement against the drop
+  // test, so switching it on globally costs that test its settle: 3 cm/s rms
+  // after 9 s against 0.2 for settled cloth.
+  //
+  // So it is on only where it earns its keep and nothing depends on settling
+  // -- arranging and sewing by hand, where the cloth bridges between a handful
+  // of contacts and the body visibly comes through. Drape belongs to a solver
+  // that does this properly; see docs/11-cloth.md on the Blender side-car.
+  edgeCollision: false,
   // How far a vertex may be pushed out of the body in one substep.
   //
   // This is the single most delicate number in the file. A positional push is
@@ -320,9 +357,43 @@ export class BodyCollider {
   }
 
   /** Could a point at p be in contact at all? One field lookup. */
+  /**
+   * Broad phase: is this point worth a full contact query?
+   *
+   * It has to ask the LIMBS as well as the torso. The level set covers the
+   * torso only, so a point sitting a long way from the torso surface -- beside
+   * a thigh, say -- gives a large positive distance and used to be rejected
+   * here, which meant `query` was never called for it and the capsule it was
+   * actually inside never got a chance to push it out. A capsule distance is a
+   * few arithmetic operations, so asking is cheap; being wrong is a limb
+   * silently passing through the cloth.
+   */
   near(p, skin) {
     const d = this.sdf.at(p);
-    return Number.isFinite(d) ? d < skin : this.hasLimbs;
+    if (Number.isFinite(d) && d < skin) return true;
+    if (!this.hasLimbs) return false;
+    const s = this.surface;
+    for (const [on, fn] of [[s.includeArms, s.closestArm], [s.includeLegs, s.closestLeg]]) {
+      if (!on || !fn) continue;
+      const c = fn.call(s, p);
+      if (c && c.signed < skin) return true;
+    }
+    return false;
+  }
+
+  /** Signed distance to the WHOLE body: the torso level set and the limbs. */
+  signedAt(p) {
+    let d = this.sdf.at(p);
+    if (!Number.isFinite(d)) d = Infinity;
+    if (this.hasLimbs) {
+      const s = this.surface;
+      for (const [on, fn] of [[s.includeArms, s.closestArm], [s.includeLegs, s.closestLeg]]) {
+        if (!on || !fn) continue;
+        const c = fn.call(s, p);
+        if (c && c.signed < d) d = c.signed;
+      }
+    }
+    return d;
   }
 
   /**
@@ -446,6 +517,17 @@ export class Cloth {
     // a skin that wide makes the cached list conservative.
     this.nearBody = new Array(N).fill(true);
     this.pairs = [];
+    // Edge-midpoint contacts, found once per substep like the vertex ones and
+    // then projected against the cached plane in every sweep.
+    this.edgeContact = [];
+    this.edgeN = [];
+    this.edgeQ = [];
+    // the indices of the edges actually in contact, rebuilt once per frame, so
+    // the eighty projection sweeps iterate a handful rather than thousands
+    this.edgeHits = [];
+    this._edgeDx = null;
+    this._edgeCount = null;
+    this._edgeTouched = [];
 
     // ---- mass from areal density. A vertex carries a third of each triangle
     // it belongs to, which is the standard lumped-mass assembly and makes the
@@ -467,6 +549,11 @@ export class Cloth {
     this.stretch = [...asm.edges.values()]
       .filter((e) => e.target > 1e-9)
       .map((e) => ({ a: e.a, b: e.b, rest: e.target }));
+    this.edgeContact = new Array(this.stretch.length).fill(false);
+    this.edgeN = this.stretch.map(() => [0, 0, 0]);
+    this.edgeQ = this.stretch.map(() => [0, 0, 0]);
+    this._edgeDx = new Float64Array(N * 3);
+    this._edgeCount = new Int32Array(N);
     this.bend = [];
     for (const e of asm.edges.values()) {
       const c = flatCrossLength(asm, e);
@@ -579,6 +666,7 @@ export class Cloth {
       }
     }
     if (o.selfCollision) this._findPairs(o.clothThickness + reach);
+    this._findEdgeContacts(o.collisionMargin + reach);
     for (let s = 0; s < n; s++) this._substep(h);
     // Quasi-static sewing: the cloth follows the feed and carries no momentum
     // of its own.
@@ -732,6 +820,13 @@ export class Cloth {
     // ---- 6. a last contact projection, so the substep ends outside the body
     // whatever the bending and self-collision passes did.
     this._projectContacts(margin, maxPush, h);
+    // Edge midpoints once per substep, not inside every sweep. The vertex
+    // contact has to be in the sweep because it argues with the seams and the
+    // two must agree within the substep; the edge pass has nothing to argue
+    // with -- it only lifts a triangle whose corners are already outside. Run
+    // nine times a substep it injects nine times the motion, and the drop test
+    // stopped settling (3 cm/s rms after 9 s against 0.2 for settled cloth).
+    this._projectEdgeContacts(margin, maxPush);
 
     // ---- 7. velocities from the actual motion, which is what makes the
     // position-level friction and collision show up as damping rather than
@@ -810,6 +905,117 @@ export class Cloth {
    * below, its neighbours inherit the kick through the seams and nothing
    * cancels theirs. Hence the limit.
    */
+  /**
+   * Which edge midpoints are against the body, and which way is out.
+   *
+   * Once per FRAME, not per substep, and that is the difference between this
+   * costing something and costing too much: there are about three times as
+   * many edges as vertices, and every contact query walks the limb capsules as
+   * well as the level set, so searching them ten times a frame made the whole
+   * solver 2.3x slower. A vertex cannot travel further than maxSpeed*dt within
+   * a frame, so widening the search skin by that much makes the cached planes
+   * conservative for the whole frame -- exactly the argument the vertex broad
+   * phase and the self-collision hash already use.
+   */
+  _findEdgeContacts(skin) {
+    this.edgeHits.length = 0;
+    if (!this.collider || !this.opts.edgeCollision) return;
+    const V = this.asm.verts, W = this.invMass;
+    for (let k = 0; k < this.stretch.length; k++) {
+      const e = this.stretch[k];
+      this.edgeContact[k] = false;
+      if (!W[e.a] && !W[e.b]) continue;
+      // an edge is worth asking about only if one of its ends is near the body
+      if (!this.nearBody[e.a] && !this.nearBody[e.b]) continue;
+      const a = V[e.a], b = V[e.b];
+      const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+      const c = this.collider.query(m, skin);
+      if (!c) continue;
+      this.edgeContact[k] = true;
+      this.edgeQ[k][0] = c.point[0];
+      this.edgeQ[k][1] = c.point[1];
+      this.edgeQ[k][2] = c.point[2];
+      this.edgeN[k][0] = c.normal[0];
+      this.edgeN[k][1] = c.normal[1];
+      this.edgeN[k][2] = c.normal[2];
+      this.edgeHits.push(k);
+      // `skin` only widens the SEARCH. `c.point` is the point on the body
+      // itself, so the projection below measures against the real surface and
+      // holds the midpoint `collisionMargin` off it, exactly as it would have
+      // with a tight search. Shifting the cached plane out by the extra skin
+      // instead -- which is what the first version did -- asks the cloth to
+      // stand off by a distance that grows with its own speed, and that is a
+      // positive feedback loop: measured, it took the drape to 10 % stretch
+      // and 4 cm of penetration, and the solve from 14 s to 211 s.
+    }
+  }
+
+  /**
+   * Lift the middles of the edges out of the body by moving their ends.
+   *
+   * The midpoint is the average of the endpoints, so displacing both by `d`
+   * along the normal displaces the midpoint by `d` -- the correction is shared
+   * rather than doubled. Mass weighting keeps that true when one end is
+   * pinned: the free end takes the whole of it, and the midpoint still moves
+   * by `d` rather than half of it.
+   *
+   * AVERAGED PER VERTEX, not accumulated, and that is not a refinement -- the
+   * Gauss-Seidel version destabilised the whole solver. A vertex belongs to
+   * about six edges, so applying each edge's push in turn moved it roughly
+   * seven times as far as its own contact asked for. Measured: the drop test
+   * stopped settling (0.89 cm/s rms after 9 s, against 0.2 for settled cloth),
+   * a disc rebounded twice as far, and a skirt's folds came out 18.6 cm deep
+   * instead of 24.8. Collecting the corrections and applying the mean puts the
+   * vertex where the edges jointly ask for, which is what they mean.
+   *
+   * It deliberately does NOT mark the endpoints as being in contact. Contact
+   * carries friction and contact damping (step 7), and those belong to a
+   * vertex genuinely resting on the body, which the vertex pass already
+   * detects. Adding them here changes the drape rather than the penetration.
+   */
+  _projectEdgeContacts(margin, maxPush) {
+    if (!this.collider || !this.edgeHits.length) return;
+    const V = this.asm.verts, W = this.invMass;
+    const relax = this.opts.contactRelax;
+    const dx = this._edgeDx, cnt = this._edgeCount;
+    const touched = this._edgeTouched;
+    touched.length = 0;
+
+    for (let h = 0; h < this.edgeHits.length; h++) {
+      const k = this.edgeHits[h];
+      const e = this.stretch[k];
+      const wa = W[e.a], wb = W[e.b], wsum = wa + wb;
+      if (wsum <= 0) continue;
+      const a = V[e.a], b = V[e.b];
+      const q = this.edgeQ[k], n = this.edgeN[k];
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, mz = (a[2] + b[2]) / 2;
+      const sgn = (mx - q[0]) * n[0] + (my - q[1]) * n[1] + (mz - q[2]) * n[2] - margin;
+      if (sgn >= 0) continue;
+      const d = Math.min(-sgn * relax, maxPush);
+      const ka = 2 * wa / wsum, kb = 2 * wb / wsum;
+      for (const [i, kk] of [[e.a, ka], [e.b, kb]]) {
+        if (!W[i]) continue;
+        if (cnt[i] === 0) touched.push(i);
+        cnt[i]++;
+        dx[i * 3] += n[0] * d * kk;
+        dx[i * 3 + 1] += n[1] * d * kk;
+        dx[i * 3 + 2] += n[2] * d * kk;
+      }
+    }
+
+    for (let t = 0; t < touched.length; t++) {
+      const i = touched[t];
+      const c = cnt[i];
+      const p = V[i];
+      let ex = dx[i * 3] / c, ey = dx[i * 3 + 1] / c, ez = dx[i * 3 + 2] / c;
+      const m = Math.hypot(ex, ey, ez);
+      if (m > maxPush) { const f = maxPush / m; ex *= f; ey *= f; ez *= f; }
+      p[0] += ex; p[1] += ey; p[2] += ez;
+      cnt[i] = 0;
+      dx[i * 3] = 0; dx[i * 3 + 1] = 0; dx[i * 3 + 2] = 0;
+    }
+  }
+
   _projectContacts(margin, maxPush, h) {
     if (!this.collider) return;
     const V = this.asm.verts, W = this.invMass, vel = this.vel;
@@ -1400,13 +1606,7 @@ export class Cloth {
     // surface.closestPoint: the latter is the unreliable nearest-sample test
     // this module exists to get away from, and it reports vertices resting
     // beside a shoulder as being a centimetre inside the body.
-    let deepest = 0;
-    if (this.collider) {
-      for (const p of V) {
-        const d = this.collider.sdf.at(p);
-        if (Number.isFinite(d) && d < deepest) deepest = d;
-      }
-    }
+    const pen = this.penetration();
     const com = V.reduce((a, p, i) => {
       const m = this.mass[i];
       return [a[0] + p[0] * m, a[1] + p[1] * m, a[2] + p[2] * m];
@@ -1426,8 +1626,52 @@ export class Cloth {
       stretchedSeamsPct: +(100 * pos.filter((s) => s > 0.02).length / pos.length).toFixed(1),
       contactVerts: contacts,
       contactPct: +(100 * contacts / V.length).toFixed(1),
-      deepestPenetrationCm: +(-deepest).toFixed(2),
+      deepestPenetrationCm: pen.worstCm,
+      deepestVertexCm: pen.vertexCm,
+      deepestEdgeCm: pen.edgeCm,
     };
+  }
+
+  /**
+   * How far the cloth is inside the body -- measured where it actually is,
+   * not only where its vertices are.
+   *
+   * Sampling vertices alone is what made the viewer report "inside the body:
+   * 0.00 cm" while the dress form was plainly visible through a half-sewn
+   * skirt: every vertex WAS outside, and the triangles between them were not.
+   * Measured on that case, before edge collision existed -- 0 vertices inside,
+   * 40 edge midpoints inside, deepest 0.42 cm, and 10 face centroids inside,
+   * deepest 0.45 cm.
+   *
+   * It is also measured against the whole body rather than the torso level set
+   * alone, so a limb passing through the cloth is counted too.
+   */
+  penetration() {
+    const out = { vertexCm: 0, edgeCm: 0, faceCm: 0, worstCm: 0, insideSamples: 0 };
+    if (!this.collider) return out;
+    const V = this.asm.verts;
+    const worst = (p) => {
+      const d = this.collider.signedAt(p);
+      if (!Number.isFinite(d) || d >= 0) return 0;
+      out.insideSamples++;
+      return -d;
+    };
+    for (const p of V) out.vertexCm = Math.max(out.vertexCm, worst(p));
+    for (const c of this.stretch) {
+      const a = V[c.a], b = V[c.b];
+      out.edgeCm = Math.max(out.edgeCm,
+        worst([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]));
+    }
+    for (const t of this.asm.tiles) {
+      const [a, b, c] = t.v.map((i) => V[i]);
+      out.faceCm = Math.max(out.faceCm, worst([
+        (a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3]));
+    }
+    out.vertexCm = +out.vertexCm.toFixed(2);
+    out.edgeCm = +out.edgeCm.toFixed(2);
+    out.faceCm = +out.faceCm.toFixed(2);
+    out.worstCm = +Math.max(out.vertexCm, out.edgeCm, out.faceCm).toFixed(2);
+    return out;
   }
 
   /** Per-vertex fields for colouring: stretch, and height fallen. */

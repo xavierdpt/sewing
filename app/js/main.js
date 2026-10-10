@@ -162,6 +162,11 @@ const params = {
   // the cutting table
   tool: 'select', intakeDeg: 15, spreadDeg: 20,
   selfCollision: true, clothColour: 'stretch', slowMo: 1,
+  // Collide edge midpoints as well as vertices while ARRANGING, so the body
+  // does not bulge through the middle of a triangle while the cloth is still
+  // bridging between a handful of contacts. Off for free drape, where it costs
+  // the drop test its settle. See docs/15-manual-sewing.md.
+  edgeCollision: true,
 };
 
 // when a pattern has been sewn onto the body, this holds the fit result
@@ -509,6 +514,7 @@ function startAssembly() {
       friction: params.friction,
       substeps: params.substeps,
       selfCollision: params.selfCollision,
+      edgeCollision: params.edgeCollision,
       gravityScale: 0,
       stitches: laid.stitches,
       maxTensionGf: params.maxTensionGf,
@@ -753,6 +759,7 @@ function finishAssembly() {
     friction: params.friction,
     substeps: params.substeps,
     selfCollision: params.selfCollision,
+    edgeCollision: params.edgeCollision,
     // The seams that would not close keep their basting threads through the
     // fall. They are still held as well as the thread can hold them, they
     // still report their tension, and they are visibly still open -- which is
@@ -1392,7 +1399,12 @@ function updateHUD() {
       + row0('simulated', `${r.seconds.toFixed(2)} s`)
       + row0('still?', `${r.rmsSpeedCmPerSec} cm/s rms`, cls0(r.rmsSpeedCmPerSec < 0.3))
       + row0('touching the body', `${r.contactVerts} vertices (${r.contactPct} %)`)
-      + row0('inside the body', `${r.deepestPenetrationCm.toFixed(2)} cm`,
+      // Vertices AND edge midpoints. Reporting vertices alone said "0.00 cm"
+      // while the dress form was plainly visible through a half-sewn skirt:
+      // every vertex was outside and the triangles between them were not.
+      + row0('inside the body', r.deepestEdgeCm > r.deepestVertexCm
+        ? `${r.deepestPenetrationCm.toFixed(2)} cm (between the vertices)`
+        : `${r.deepestPenetrationCm.toFixed(2)} cm`,
         cls0(r.deepestPenetrationCm < 0.1))
       + row0('stretch mean / max', `${r.meanStrainPct} / ${r.maxStretchPct} %`,
         cls0(r.maxStretchPct < 10))
@@ -1691,6 +1703,8 @@ fDrop.add(params, 'internalDamping', 0, 1, 0.05).name('internal damping (0 = fab
 fDrop.add(params, 'terminalCmPerSec', 0, 400, 10).name('air drag: terminal cm/s');
 fDrop.add(params, 'substeps', 4, 24, 1).name('substeps / frame');
 fDrop.add(params, 'selfCollision').name('self-collision');
+fDrop.add(params, 'edgeCollision')
+  .name('collide edge midpoints (body pokes through without it)');
 fDrop.add(params, 'slowMo', 0.1, 1, 0.1).name('slow motion');
 fDrop.add(params, 'clothColour', ['stretch', 'panel', 'selection', 'contact', 'gap', 'plain'])
   .name('colour by').onChange(updateClothMesh);
@@ -2244,4 +2258,22 @@ globalThis.__dbg = () => (assembling ? JSON.stringify({
   feedLeftCm: +sim.remainingFeedCm().toFixed(2),
   widestGapCm: +sim.maxStitchGap().toFixed(2),
 }) : 'no assembly');
-globalThis.__pump = (n) => { for (let i = 0; i < n; i++) sim.step(1 / 60); };
+// A frame pump for headless checks: requestAnimationFrame does not fire in
+// headless Chrome, so the render loop never runs there and the canvas stays
+// blank. This drives the same work the loop does, so a screenshot taken after
+// it shows what the viewer would show.
+globalThis.__pump = (n = 1) => {
+  for (let i = 0; i < n; i++) {
+    if (playing && sim) {
+      if (assembling && assembling.phase === 'stitching'
+        && !sim.isSewing() && sim.rmsSpeed() < 1.0) pauseSewing('sewn');
+      sim.step(1 / 60);
+      updateClothMesh();
+      updateStitchLines();
+    }
+    controls.update();
+    renderer.render(scene, camera);
+  }
+};
+Object.assign(globalThis, { renderer, camera, controls, frameScene });
+globalThis.__sel = (ids) => setSelection(ids);
