@@ -71,6 +71,18 @@ record.
 
 Removed from the queue and recorded in [18-validation.md](18-validation.md):
 
+- **A substep floor, or a warning, for the run that slid off the body** —
+  done 2026-10-11. Swept a wool crepe disc: 2 substeps slides off entirely
+  (97 cm, never settles), 4 is confidently wrong (names the shoulder instead
+  of the neck, grain at 1.9× the tear limit, body 2.3 cm through the cloth),
+  6 is the floor for a right answer and 10 for the strain limit to hold.
+  `healthy()` catches none of it — it only looks for NaN. The obvious
+  diagnostic failed: the strain limiter's residual is zero at every substep
+  count, since it converges to its ceiling every time. The signal that works
+  is `report().grainOverLimit`, the grain strain against the fabric's own
+  `maxStrain`, which warns once above 1.2 — 1.88 at 4 substeps, 0.80 at 10,
+  0.36 at 16. Recorded at [18-validation.md](18-validation.md) §6.7.
+
 - **Make the cantilever an actual Peirce test: bisect the overhang** — done
   2026-10-11. `peirce()` solves for the free length by regula falsi on the tip
   angle and reports `c = L/2` with its convergence state. Width-independent

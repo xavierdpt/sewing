@@ -878,11 +878,41 @@ than a max. Until then, `deepestEdgeCm` should not be compared across mesh
 sizes.
 
 ### 6.7 A run with `substeps: 4` slid off the body
-**State:** open — needs a substep floor or a warning
+**State:** done 2026-10-11 — `grainOverLimit` warns; floor measured at 6, trustworthy from 10
 
-Wool crepe, `slipCm 96.97`, `hemYcm −59.29`, `contactPct 63.9`,
-`maxStretchPct 6.0`. Other runs used 10–17. Worth a stability floor, or a
-warning, once Step 5 exists.
+Wool crepe, `slipCm 96.97`, `hemYcm −59.29`, `contactPct 63.9`. Swept on a
+wool crepe disc at edge 2.2, where `maxStrain` is 6 %:
+
+| substeps | verdict | grain % | body through cloth | settled |
+|---|---|---|---|---|
+| 2 | **slid off, 97.05 cm** | 3.2 | 0 | **no** |
+| 4 | shoulder — **wrong** | **11.29** | **2.3 cm** | yes |
+| 6 | neck | 9.8 | 0.23 cm | yes |
+| 8 | neck | 7.1 | 0.21 cm | yes |
+| 10 | neck | 4.79 | 0.17 cm | yes |
+| 16 | neck | 2.15 | 0.17 cm | yes |
+
+**So 6 is the floor for a qualitatively right answer and 10 is the floor for
+the fabric's own strain limit to hold.** At 4 substeps the run is confidently
+wrong: it names the shoulder instead of the neck, stretches the grain to 1.9×
+the fabric's tear limit, and lets the body 2.3 cm through the cloth — while
+`healthy()` returns **true**, because that only looks for NaN.
+
+**Two diagnostics were tried, and the first one failed**, which is worth
+recording because it was the obvious one. The strain limiter's own residual is
+**zero at every substep count**: it converges to its per-edge ceiling every
+time. What it cannot do is stop the cloth *arriving* at that ceiling. So the
+signal is the ceiling being reached on **grain** edges — warp and weft are the
+inextensible part of a woven, which is the whole premise of `maxStrain`.
+`report().grainOverLimit` is that ratio, and it fires once with a specific
+message above 1.2: **1.88 at 4 substeps, 0.80 at 10, 0.36 at 16.**
+
+Note the shear defaults masked this. With `biasCompliance: 25` the per-edge
+ceiling is 6× looser on bias edges, so at 4 substeps `maxStretchPct` read 16.6
+while the limiter reported itself converged; with the defaults inert it reads
+6.12, pinned exactly at the limit. The instability is the same either way —
+the wrong verdict appears at 4 substeps regardless — but the *measurement* of
+it only works on the grain split. One more reason for §8 decision 1.
 ### 6.8 Bending is miscalibrated, and mesh-dependent
 **State:** open — queue item 1 of [19-todo.md](19-todo.md)
 

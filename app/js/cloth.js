@@ -1224,11 +1224,21 @@ export class Cloth {
     }
 
     if (this.maxStrain > 0) {
+      // How far the strain limiter still was from its own limit when it
+      // stopped. Reported because it is cheap and because its ANSWER was
+      // informative: it is zero at every substep count tested, so the
+      // limiter always converges -- which rules it out as the mechanism
+      // behind an under-resolved step, and the obvious diagnostic with it.
+      // See `_grainOverLimit` for the signal that does work.
       this.strainSweeps = 0;
+      let worst = 0;
       for (let k = 0; k < o.strainPasses; k++) {
         this.strainSweeps++;
-        if (this._clampStrain() <= o.strainTol) break;
+        worst = this._clampStrain();
+        if (worst <= o.strainTol) break;
       }
+      this.strainResidual = worst;
+      if (worst > o.strainTol) this.strainUnconverged = (this.strainUnconverged || 0) + 1;
     }
   }
 
@@ -2490,6 +2500,12 @@ export class Cloth {
       // -- and the whole point of the shear mode is to let it. If these two
       // move together, the cloth is still being stretched isotropically and
       // the anisotropy is not doing anything.
+      // Did the integration actually resolve this garment? `healthy()` only
+      // looks for NaN, and a run can slide off the body or stretch to three
+      // times its tear limit while staying finite.
+      strainResidualPct: +(100 * (this.strainResidual || 0)).toFixed(2),
+      strainUnconvergedSubsteps: this.strainUnconverged || 0,
+      grainOverLimit: this._grainOverLimit(),
       ...this._shearReport(),
       // The cloth through ITSELF, which stack height cannot tell you: a heap
       // can be the right height with every layer crossing.
@@ -2498,6 +2514,55 @@ export class Cloth {
       deepestVertexCm: pen.vertexCm,
       deepestEdgeCm: pen.edgeCm,
     };
+  }
+
+  /**
+   * Are the YARNS past the fabric's own tear limit, and by how much?
+   *
+   * Too few substeps does not announce itself, and nothing in the solver was
+   * catching it. Measured on a wool crepe disc (edge 2.2, `maxStrain` 6 %):
+   *
+   *   substeps  2 -- slid off the body entirely, 97 cm, never settled
+   *   substeps  4 -- grain strain 11.3 % (1.9x the limit), body 2.3 cm
+   *                  through the cloth, and a confident "caught on the
+   *                  shoulder -- it is a yoke"
+   *   substeps  6 -- qualitatively right (the neck), grain 9.8 %
+   *   substeps 10 -- grain 4.8 %, body 0.17 cm through
+   *   substeps 16 -- grain 2.2 %, body 0.17 cm through
+   *
+   * `healthy()` returned true for all of them, because it only looks for NaN,
+   * and the strain limiter's own residual was zero throughout -- it converges
+   * to its per-edge ceiling every substep. What it cannot do is stop the
+   * cloth arriving at that ceiling, so the ceiling being REACHED on grain
+   * edges is the signal. Grain yarns do not stretch 11 %: a woven's warp and
+   * weft are the inextensible part, which is the whole premise of `maxStrain`.
+   *
+   * Ratio against the fabric's own limit, so it reads the same for a denim at
+   * 2 % and a jersey at 25 %. Over about 1.2 the run is not trustworthy
+   * whatever its verdict says.
+   */
+  _grainOverLimit() {
+    if (!(this.maxStrain > 0)) return null;
+    const V = this.asm.verts;
+    let worst = 0;
+    for (const c of this.stretch) {
+      if ((c.bias || 0) > 0.5) continue;           // bias edges may shear
+      const a = V[c.a], b = V[c.b];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+      const e = (L - c.rest) / c.rest;
+      if (e > worst) worst = e;
+    }
+    const ratio = +(worst / this.maxStrain).toFixed(2);
+    if (ratio > 1.2 && !this._warnedGrain) {
+      this._warnedGrain = true;
+      console.warn(`cloth: the grain is stretched ${(100 * worst).toFixed(1)} %,`
+        + ` ${ratio}x this fabric's ${(100 * this.maxStrain).toFixed(0)} % limit,`
+        + ` at ${this.opts.substeps} substeps. Yarns do not stretch that far:`
+        + ' the step is under-resolved. Raise `substeps` -- 6 is a floor and'
+        + ' 10+ held the limit on a coarse disc -- and do not trust this'
+        + ' run\'s verdict.');
+    }
+    return ratio;
   }
 
   /**
