@@ -48,12 +48,8 @@ It is as simple as it sounds, and it is about a hundred lines.
   cotton. Fabric is sold by gsm, so the presets are real numbers.
 - **Stretch**: one XPBD distance constraint per seam, rest length taken from the
   pattern — what the cut cloth holds the garment to.
-- **Bending**: a spring across each interior edge, between the two vertices opposite
-  it, three orders of magnitude slacker than stretch. Its rest length is computed by
-  **unfolding the two triangles from their cut side lengths**, not by measuring the
-  mesh where it happens to be standing. The cheap version bakes the initial placement's
-  curvature in as the relaxed state, and a garment offered up to a body would then
-  treat the body's curvature as flat and refuse to lie down.
+- **Bending**: the quadratic (isometric) bending model — see §2a, which is a
+  correction of what this section used to say.
 - **Strain limiting** (Provot): a hard positional projection at the fabric's yield,
   applied *after* the velocity update and deliberately so. Run before it, the yank
   becomes velocity, the velocity re-stretches the edge, and the cloth buzzes for ever.
@@ -72,6 +68,117 @@ as 10 % over-stretched.
 with no body present. It settles to **0.022 cm/s rms** — numerically still — with 2 %
 self-weight strain. It is in the test suite. Every difficulty in building this was in
 the collision, not in the cloth.
+
+## 2a — Bending, and two models that did not work
+
+> This section replaces the one-line description of bending above. It is
+> here because the first two models were wrong in ways that only a
+> measurement caught, and the measurement is the useful part.
+
+**The instrument** is `tools/fabric.mjs`: the Peirce cantilever test, which is
+how a textile lab measures stiffness. A strip is clamped at one end and
+droops under its own weight; the overhang at which the tip's chord reaches
+41.5° below horizontal is twice the **bending length** `c`, in centimetres,
+and `c` is a number you can look up for real cloth — or measure yourself with
+a table edge and a ruler.
+
+What it found:
+
+| model | poplin | linen | habotai | denim | interfacing | compliance = 0 |
+|---|---|---|---|---|---|---|
+| cross-edge spring (was) | 0.76 | 0.76 | 0.76 | 0.76 | 0.77 | **0.76** |
+| published | 1.5–2.0 | 2.0–2.6 | 0.9–1.4 | 2.8–3.8 | 4.0–6.0 | |
+| quadratic bending (is) | **1.76** | **2.02** | **1.00** | 2.27 | 2.27 | |
+
+The old model was **inert**. Every preset, and a compliance of zero, gave the
+same answer, limper than the limpest real cloth. A spring between the two
+vertices opposite a shared edge has a gradient nearly parallel to the stretch
+constraints it shares those vertices with, and stretch is four orders stiffer
+and solved first, so it simply undoes the correction. That is what "the drape
+creases like paper instead of folding like cloth" *is*: cloth with no bending
+resistance creases at the mesh scale rather than folding at a wavelength its
+stiffness sets.
+
+The obvious replacement, a **dihedral-angle** constraint, is correct and
+unusable here: its gradient carries a 1/sin(angle) that is singular exactly
+at the rest state, and the strip never stopped moving — 30 to 340 cm/s of
+residual flailing where settled cloth reads 0.2.
+
+What works is the **quadratic (isometric) bending model** (Bergou et al.
+2006). For each interior edge there is a vector of four cotangent weights
+`K`, fixed by the flat rest shape, with the property that `sum(K_i x_i) = 0`
+for every flat arrangement of those four points and nothing else — verified
+in the gate to 1e-14 on both test pieces. It is **linear in the positions**:
+constant gradients, no trigonometry, nothing singular, and sweeps converge
+instead of ringing.
+
+Three things came out of making it work, each measured:
+
+* **The fabric parameter is now a measurable property.** `FABRICS` carries
+  `bendLengthCm`, and the flexural rigidity follows: `B = w g c³`. Five of
+  the seven presets now measure back in the published range. Denim and
+  interfaced twill saturate at 2.27 cm — the solver's ceiling at eight bend
+  sweeps — so the stiffest cloths are limper than they should be, by 1.2x and
+  1.8x. Raising `bendSweeps` to 24 lifts the ceiling to about 4 cm and costs
+  proportionally.
+* **Bending belongs in the same sweep as stretch and contact.** Run after
+  the contact projection it pushes cloth into the body and has its answer
+  undone a substep later, which is an oscillator: the yoke disc plateaued at
+  0.99 cm/s for twenty seconds. Solved together it settles in under two.
+* **The multiplier has to accumulate across sweeps.** Without it each sweep
+  re-applies the whole correction and the pass puts energy in.
+
+**Against Blender.** The side-car mapping in `drapejob.js` used to send our
+compliance straight through as Blender's *stiffness* — so denim arrived as
+the limpest cloth in the list and habotai as the stiffest, exactly upside
+down. It is now scaled from the flexural rigidity and anchored on the one
+preset Blender ships as "Cotton" (bending 0.5). Everything else follows from
+this project's bending lengths, and lands on Blender's own presets without
+being told them:
+
+| | ours, from `c` | Blender's own preset |
+|---|---|---|
+| cotton poplin | 0.5 (the anchor) | 0.5 |
+| denim | 10.4 | 10 |
+| silk habotai | 0.068 | 0.05 |
+
+That agreement was not fitted — only the anchor was chosen — and it is the
+best available independent check that these bending lengths are real.
+
+## 2b — The accordion drop: does the cloth have thickness?
+
+`tools/accordion.mjs`, `dropAccordion()` in `app/js/droptest.js`.
+
+A strip pleated into a concertina and dropped on the floor must land as a
+**stack**. Cloth has thickness, and a fold traps air, so N layers occupy N
+times something — and a solver without self-collision answers zero, every
+layer in the same plane. It is the most recognisable way simulated cloth
+looks wrong.
+
+Nothing in the test imposes the answer: the comparison is against the
+solver's own contact distance (`clothThickness`, 0.4 cm) and against the
+identical strip with self-collision switched off.
+
+```
+silk habotai, 8 pleats of 8 cm        stack    footprint
+  self-collision on                   1.61 cm   15.8 cm
+  self-collision off                  0.10 cm   16.0 cm
+```
+
+Sixteen times taller with the layers talking to each other. It resolves
+about four layers' worth of the eight, because contact here is vertex
+against vertex and layers can nest between each other's vertices — the same
+limitation §4 describes for the body, seen from the other side.
+
+A stiff cloth is a different measurement: poplin keeps its loft and stands
+4.75 cm tall whether or not self-collision is on, because the bending model
+now holds the folds open. That is physical, and it is why the test uses a
+limp silk to isolate the contact.
+
+The strip is cut by `rectanglePattern()` and pleated by a *placement*, so it
+is an ordinary pattern piece that happens to be folded before it is dropped:
+the viewer's "cut it as a pattern piece instead" puts the same piece on the
+cutting table.
 
 ## 3 — Why fabric does not bounce
 

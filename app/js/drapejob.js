@@ -13,7 +13,7 @@
 // differ, and the headless checks would stop being checks of the thing the
 // viewer does. So it is written once, here, and imported by both.
 
-import { FABRICS } from './cloth.js';
+import { FABRICS, rigidityOf } from './cloth.js';
 
 /** The body as a plain indexed triangle mesh, in cm. */
 export function bodyMesh(surface, { nu = 96, nv = 64 } = {}) {
@@ -63,7 +63,20 @@ export function clothSettings(fabric, areaCm2, vertexCount, {
     tension: stiff(f.stretch, 2, 40),
     compression: stiff(f.stretch, 2, 40),
     shear: stiff(f.stretch, 1, 20),
-    bending: Math.max(0.05, 0.5 * (f.bend / 4e-3)),
+    // Blender's bending stiffness, scaled from the fabric's flexural
+    // rigidity and anchored on the preset Blender itself ships as "Cotton"
+    // (bending 0.5). This replaced a mapping that sent the compliance
+    // straight through: our old `bend` was an INVERSE stiffness, so denim
+    // arrived at Blender as the limpest cloth in the list (0.05) and silk
+    // habotai as the stiffest (3.75) -- exactly upside down.
+    //
+    // Anchored this way the numbers land on Blender's own presets without
+    // being told them: denim comes out at 10.3 against Blender's Denim
+    // preset of 10, and silk habotai at 0.067 against its Silk of 0.05.
+    // That agreement is the check that these bending lengths are real.
+    bending: +(0.5 * (rigidityOf(f.gsm, f.bendLengthCm)
+      / rigidityOf(FABRICS['cotton poplin'].gsm,
+        FABRICS['cotton poplin'].bendLengthCm))).toFixed(3),
     damping: 5 * (f.damp ?? 0.75) / 0.75,
     airDamping: 1.0,
     clothThicknessCm,

@@ -2,6 +2,9 @@
 //   node tools/trace.mjs                  this project's solver throughout
 //   node tools/trace.mjs --sidecar        hand the drape to the side-car
 //   node tools/trace.mjs --json out.json  machine-readable, for diffing runs
+//   node tools/trace.mjs --above 20       lift the arrangement 20 cm first
+//   node tools/trace.mjs --no-pin         do not pin the waist before the drape
+//   node tools/trace.mjs --fabric linen   any key of cloth.js FABRICS
 //
 // This is what the viewer's J, W and X do, with the state of the garment
 // printed at every phase instead of looked at. The headline column is
@@ -21,6 +24,12 @@ const args = process.argv.slice(2);
 const useSidecar = args.includes('--sidecar');
 const jsonAt = args.includes('--json') ? args[args.indexOf('--json') + 1] : null;
 const objAt = args.includes('--obj') ? args[args.indexOf('--obj') + 1] : null;
+// The arrangement the pieces are sewn in. Lifting it is what someone does by
+// hand with "up / down" before pressing W, and it changes what X means: the
+// garment is welded where it was put, not where it belongs.
+const aboveCm = args.includes('--above') ? +args[args.indexOf('--above') + 1] : 0;
+const pinWaist = !args.includes('--no-pin');
+const fabric = args.includes('--fabric') ? args[args.indexOf('--fabric') + 1] : 'cotton poplin';
 
 const b = new Body();
 b.includeArms = true; b.includeLegs = true;
@@ -35,10 +44,16 @@ const pattern = flaredSkirtPattern({
 const rows = [];
 const mark = (phase, asm, sim, extra = {}) => {
   const c = clearance(asm, b, { collider });
+  // Where the garment IS, not just how it fits: a garment that never fell is
+  // invisible in the clearance columns -- it has no contact to report -- and
+  // reads as a perfect drape. The waist height says whether it fell at all.
+  const ys = asm.verts.map((p) => p[1]);
   const row = {
     phase,
     seconds: sim ? +sim.time.toFixed(2) : 0,
     vertices: asm.verts.length,
+    'top y cm': +Math.max(...ys).toFixed(1),
+    'low y cm': +Math.min(...ys).toFixed(1),
     // the clearance tail: what you would see
     'inside area %': c.insideAreaPct,
     'deepest cm': c.deepestCm,
@@ -53,6 +68,7 @@ const mark = (phase, asm, sim, extra = {}) => {
 
 // ---- J: arrange. rigid placement, nothing simulated.
 const laid = layOut(pattern, b, { standoffCm: 6 });
+if (aboveCm) for (const v of laid.asm.verts) v[1] += aboveCm;
 const gapOf = (verts, st) => {
   const p = verts[st.a], q = verts[st.b];
   return Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]);
@@ -65,7 +81,7 @@ mark('J arranged', laid.asm, null, {
 
 // ---- W: sew. the seams are fed closed at a constant rate.
 const sew = new Cloth(laid.asm, b, {
-  fabric: 'cotton poplin', gravityScale: 0, stitches: laid.stitches,
+  fabric, gravityScale: 0, stitches: laid.stitches,
   selfCollision: false, substeps: 10, sewSpeedCmPerSec: 12, edgeCollision: true,
 });
 sew.stitchStrength = 1;
@@ -95,7 +111,7 @@ for (const p of pattern.panels) for (const r of p.runs || []) {
   if (r.kind !== 'top') continue;
   for (const i of r.pts) if (laid.v3Of.has(p.pts[i].v3)) waistIds.add(w.map[laid.v3Of.get(p.pts[i].v3)]);
 }
-for (const i of waistIds) w.asm.pinned[i] = true;
+if (pinWaist) for (const i of waistIds) w.asm.pinned[i] = true;
 mark('welded', w.asm, null, { 'welded %': w.weldedPct });
 
 // ---- X: drape
@@ -103,13 +119,13 @@ let final;
 if (useSidecar) {
   const { drapeWithBlender } = await import('../sim/drape.mjs');
   const r = drapeWithBlender(w.asm, b, {
-    fabric: 'cotton poplin', seconds: 6, pinned: [...waistIds], selfCollision: true,
+    fabric, seconds: 6, pinned: pinWaist ? [...waistIds] : [], selfCollision: true,
   });
   r.verts.forEach((p, i) => { w.asm.verts[i][0] = p[0]; w.asm.verts[i][1] = p[1]; w.asm.verts[i][2] = p[2]; });
   final = mark(`X draped (${r.backend || 'blender'})`, w.asm, null, { wall: r.seconds });
 } else {
   const drop = new Cloth(w.asm, b, {
-    fabric: 'cotton poplin', floorY: floorOf(b), substeps: 10,
+    fabric, floorY: floorOf(b), substeps: 10,
   });
   const t0 = Date.now();
   const settle = drop.settle({ maxSeconds: 6 });
@@ -119,6 +135,8 @@ if (useSidecar) {
   });
 }
 
+console.log(`fabric ${fabric}, arranged ${aboveCm} cm above where it belongs, `
+  + `waist ${pinWaist ? 'pinned' : 'free'}`);
 console.table(rows);
 const hem = hemProfile(w.asm);
 console.log(`hem ${hem.hemLengthCm} cm (cut 160), ${hem.folds} folds,`

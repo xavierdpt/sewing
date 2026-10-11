@@ -13,9 +13,9 @@ import { patternSVG } from '../app/js/patternsvg.js';
 import { exportPatternJSON, importPatternJSON, sew, drape, fitReport } from '../app/js/patternio.js';
 import { sewFlat } from '../app/js/patternio.js';
 import { SDF } from '../app/js/sdf.js';
-import { Cloth, BodyCollider } from '../app/js/cloth.js';
+import { Cloth, BodyCollider, FABRICS } from '../app/js/cloth.js';
 import { annulusPattern, rectanglePattern } from '../app/js/testpieces.js';
-import { dropDisc, neckFrame, floorOf } from '../app/js/droptest.js';
+import { dropDisc, dropAccordion, neckFrame, floorOf } from '../app/js/droptest.js';
 import { flaredSkirtPattern, placeSkirt, hemProfile, waistRing } from '../app/js/skirt.js';
 import { layOut, weldStitched, assembleGarment } from '../app/js/assemble.js';
 import { takeOutWedge, letInWedge, check as patternCheck,
@@ -740,6 +740,178 @@ line('the level set: is the body solid?');
     falseInside === 0, `${falseInside} of ${tested} (nearest-sample test: ${oldFalse})`);
 }
 
+line('bending: the model itself');
+{
+  // The two properties the bending model has to have, and the second one is
+  // here because its absence is visible in the viewer: a model that is not
+  // invariant to rotation scores a large fold as if it were a stretch, so a
+  // stiff cloth lands like sheet metal and bounces back off its own rim.
+  const hinge = (foldDeg) => {
+    const a = new Assembly({ u: 1, weldTol: 1e-9 });
+    const t = foldDeg * Math.PI / 180;
+    const h = Math.sqrt(3);                       // apex height of a 2 cm equilateral
+    for (const p of [[0, 0, 0], [2, 0, 0], [1, 0, -h],
+      [1, Math.sin(t) * h, h * Math.cos(t)]]) { a.verts.push(p); a.pinned.push(false); }
+    a.addRawTile([0, 1, 2], [2, 2, 2], 'A');
+    a.addRawTile([0, 1, 3], [2, 2, 2], 'B');
+    return a;
+  };
+  const angleOf = (asm) => {
+    const V = asm.verts;
+    const sub2 = (p, q) => [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+    const cr = (p, q) => [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2],
+      p[0] * q[1] - p[1] * q[0]];
+    const nrm = (p) => { const l = Math.hypot(...p); return p.map((x) => x / l); };
+    const n1 = nrm(cr(sub2(V[1], V[0]), sub2(V[2], V[0])));
+    const n2 = nrm(cr(sub2(V[1], V[0]), sub2(V[3], V[0])));
+    return Math.acos(Math.max(-1, Math.min(1, -(n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2]))))
+      * 180 / Math.PI;
+  };
+
+  const folded = hinge(50);
+  const before = angleOf(folded);
+  const sim = new Cloth(folded, null, {
+    fabric: 'cotton poplin', gravityScale: 0, substeps: 10,
+    selfCollision: false, floorY: null, terminalCmPerSec: 0, linearDragPerSec: 0,
+  });
+  sim.run(0.5);
+  const after = angleOf(folded);
+  console.log(`  a hinge folded ${before.toFixed(1)} deg relaxes to ${after.toFixed(1)} deg`);
+  check('a fold opens towards flat rather than closing', after < before - 5,
+    `${before.toFixed(1)} -> ${after.toFixed(1)} deg`);
+
+  // Rotation invariance: the SAME fold, turned in space, must cost the same.
+  // Nothing about a hinge's energy may depend on which way the pair is facing.
+  const spin = (asm, ang) => {
+    for (const p of asm.verts) {
+      const x = p[0] * Math.cos(ang) - p[2] * Math.sin(ang);
+      const z = p[0] * Math.sin(ang) + p[2] * Math.cos(ang);
+      p[0] = x; p[2] = z;
+    }
+    return asm;
+  };
+  const plain = hinge(60);
+  const turned = spin(hinge(60), 0.9);
+  for (const asm of [plain, turned]) {
+    const s2 = new Cloth(asm, null, {
+      fabric: 'cotton poplin', gravityScale: 0, substeps: 10,
+      selfCollision: false, floorY: null, terminalCmPerSec: 0, linearDragPerSec: 0,
+    });
+    s2.run(0.3);
+  }
+  console.log(`  the same fold, one of them turned 52 deg in space:`
+    + ` ${angleOf(plain).toFixed(3)} and ${angleOf(turned).toFixed(3)} deg after relaxing`);
+  check('a fold costs the same whichever way it faces in space',
+    Math.abs(angleOf(plain) - angleOf(turned)) < 0.01,
+    `${angleOf(plain).toFixed(3)} vs ${angleOf(turned).toFixed(3)} deg`);
+}
+
+line('bending: a cantilever, in centimetres');
+{
+  // The Peirce cantilever, which is how a textile lab measures stiffness and
+  // why "bending length" is a number you can look up. A strip is clamped and
+  // droops; the overhang at which the tip reaches 41.5 degrees below
+  // horizontal is twice the bending length. tools/fabric.mjs is the same
+  // measurement over every preset.
+  const edge = 0.5, overhang = 16, clamp = 4, width = 2;
+  const cantilever = (fabric, bend = null) => {
+    const pat = rectanglePattern({ width, height: overhang + clamp, edge });
+    const asm = sewFlat(pat, { y: 0 });
+    const clampTo = -(overhang + clamp) / 2 + clamp;
+    asm.verts.forEach((p, i) => { asm.pinned[i] = p[2] <= clampTo + 1e-6; });
+    const xs = [...new Set(asm.verts.map((p) => +p[0].toFixed(5)))];
+    const xMid = xs.reduce((a, x) => (Math.abs(x) < Math.abs(a) ? x : a), xs[0]);
+    const line2 = asm.verts
+      .map((p, i) => ({ i, x: p[0], z: p[2] }))
+      .filter((q) => Math.abs(q.x - xMid) < 1e-6 && q.z >= clampTo - 1e-6)
+      .sort((a, b) => a.z - b.z).map((q) => q.i);
+    const sim = new Cloth(asm, null, {
+      fabric, bend, substeps: 20, selfCollision: false, floorY: null,
+      terminalCmPerSec: 0, linearDragPerSec: 1.0,
+    });
+    const settle = sim.settle({ maxSeconds: 12 });
+    const o = asm.verts[line2[0]];
+    let sLen = 0, c = null;
+    for (let k = 1; k < line2.length; k++) {
+      const a = asm.verts[line2[k - 1]], b2 = asm.verts[line2[k]];
+      sLen += Math.hypot(b2[0] - a[0], b2[1] - a[1], b2[2] - a[2]);
+      const ang = Math.atan2(o[1] - b2[1],
+        Math.max(1e-9, Math.hypot(b2[0] - o[0], b2[2] - o[2]))) * 180 / Math.PI;
+      if (c === null && ang >= 41.5) c = sLen / 2;
+    }
+    return { c, settled: !!settle.settled, rms: sim.rmsSpeed() };
+  };
+
+  const poplin = cantilever('cotton poplin');
+  console.log(`  cotton poplin: asked for ${FABRICS['cotton poplin'].bendLengthCm} cm`
+    + ` of bending length, measured ${poplin.c === null ? '>8' : poplin.c.toFixed(2)} cm`);
+  check('a fabric bends by as much as it was asked to',
+    poplin.c !== null && Math.abs(poplin.c - FABRICS['cotton poplin'].bendLengthCm) < 0.4,
+    `${poplin.c} cm against ${FABRICS['cotton poplin'].bendLengthCm}`);
+  check('and the cantilever comes to rest', poplin.settled,
+    `${poplin.rms.toFixed(2)} cm/s`);
+
+  // The parameter has to MEAN something: this is the check the old
+  // cross-spring model failed, with every fabric and even a compliance of
+  // zero giving the same 0.76 cm.
+  const limp = cantilever('cotton poplin', 1.1);
+  const stiff = cantilever('cotton poplin', 2.3);
+  console.log(`  the same cloth at 1.1 and 2.3 cm: ${limp.c} vs ${stiff.c} cm measured`);
+  check('a limper fabric droops sooner than a stiffer one',
+    limp.c !== null && stiff.c !== null && stiff.c > limp.c + 0.5,
+    `${limp.c} cm against ${stiff.c} cm`);
+
+  // Resolution independence: the same cloth on a coarser mesh is the same
+  // cloth. This is what the discrete-shells scaling buys.
+  const coarse = (() => {
+    const pat = rectanglePattern({ width: 3, height: overhang + clamp, edge: 1.0 });
+    const asm = sewFlat(pat, { y: 0 });
+    const clampTo = -(overhang + clamp) / 2 + clamp;
+    asm.verts.forEach((p, i) => { asm.pinned[i] = p[2] <= clampTo + 1e-6; });
+    const sim = new Cloth(asm, null, {
+      fabric: 'cotton poplin', substeps: 20, selfCollision: false, floorY: null,
+      terminalCmPerSec: 0, linearDragPerSec: 1.0,
+    });
+    sim.settle({ maxSeconds: 12 });
+    const tip = asm.verts.reduce((a, p) => (p[2] > a[2] ? p : a), asm.verts[0]);
+    return Math.hypot(tip[0], tip[2]);
+  })();
+  console.log(`  tip reach: ${poplin.c === null ? '?' : ''}0.5 cm mesh vs 1.0 cm mesh`
+    + ` -> ${coarse.toFixed(2)} cm at 1.0`);
+  check('the same cloth on a coarser mesh is still the same cloth',
+    coarse > 2.0 && coarse < 6.0, `${coarse.toFixed(2)} cm of reach`);
+}
+
+line('the accordion drop: does the cloth have thickness');
+{
+  // A pleated strip dropped on the floor must land as a STACK. Nothing here
+  // tells the solver how tall: the comparison is against its own contact
+  // distance, and against the same strip with self-collision switched off.
+  const b2 = new Body();
+  // A LIMP cloth -- 0.3 cm of bending length, a chiffon -- because it has no
+  // stiffness of its own to hold its folds open, so whatever stack it makes
+  // is the contact doing it. An ordinary cloth adds loft on top and would
+  // stand up on its own even with self-collision off, which makes it useless
+  // as a control. (tools/accordion.mjs shows both.)
+  const common = {
+    widthCm: 20, lengthCm: 64, pleatCm: 8, edge: 2.0, seconds: 6,
+    fabric: 'silk habotai',
+  };
+  const on = dropAccordion(b2, { ...common, cloth: { selfCollision: true, bend: 0.3 } });
+  const off = dropAccordion(b2, { ...common, cloth: { selfCollision: false, bend: 0.3 } });
+  console.log(`  ${on.layers} limp layers: ${on.stackCm} cm of stack with`
+    + ` self-collision, ${off.stackCm} cm without`
+    + ` (one layer is ${on.perLayerCm} cm of contact distance)`);
+  check('the heap has thickness', on.stackCm > 4 * on.perLayerCm,
+    `${on.stackCm} cm, which is ${(on.stackCm / on.perLayerCm).toFixed(1)} layers' worth`);
+  check('and the thickness is the self-collision doing it',
+    on.stackCm > 5 * off.stackCm,
+    `${on.stackCm} cm against ${off.stackCm} cm with it off`);
+  check('the strip lands on the floor rather than falling through it',
+    Math.abs(on.restingOnFloorCm) < 0.5, `${on.restingOnFloorCm} cm`);
+  check('and it settles', on.settled, `${on.seconds} s`);
+}
+
 line('cloth physics: elastics and weights');
 {
   // A disc hung from its own hole, with no body at all. This isolates the
@@ -849,13 +1021,26 @@ line('fabric does not bounce');
   console.log(`  fastest vertex / impact speed: ${now.ratio.toFixed(2)}`
     + ` (no air drag: ${noDrag.ratio.toFixed(2)}; neither: ${noVisc.ratio.toFixed(2)})`);
   check('the cloth does not rebound', now.rebound < 0.15, `${now.rebound.toFixed(3)} cm`);
-  check('nothing whips to more than twice the impact speed', now.ratio < 2.05,
+  // The limit was 2.05 when the cloth had no working bending model. With one,
+  // the RIM of a stiff disc snaps as it lands -- which is what a stiff cloth
+  // does -- and the ratio moves with the bending length: 1.92 at 0.2 cm of
+  // bending length, 2.26 at poplin's 1.7. The claim being tested is that the
+  // cloth does not BOUNCE, and that is the rebound check above, which reads
+  // 0.013 cm. This one is a ceiling on how violently a single vertex may
+  // move, and it is set from the measured range with a margin.
+  check('nothing whips to more than two and a half times the impact speed',
+    now.ratio < 2.5,
     `${now.ratio.toFixed(2)} x`);
   check('it is still after a couple of seconds', now.rms < 0.8, `${now.rms.toFixed(2)} cm/s`);
+  // Only the rebound. The whip ratio used to rise when drag was removed and
+  // now does not (2.26 with drag, 2.14 without), because with bending in the
+  // model the rim's snap is set by the fold it is coming out of rather than
+  // by how fast the cloth arrives. The rebound still tells the story it was
+  // written to tell: 0.013 cm with drag and viscosity, 0.838 cm without.
   check('air drag and viscosity are what stop the bounce -- removing both brings it back',
-    noVisc.rebound > now.rebound * 2 && noVisc.ratio > now.ratio,
-    `rebound ${now.rebound.toFixed(3)} -> ${noVisc.rebound.toFixed(3)} cm,`
-    + ` whip ${now.ratio.toFixed(2)} -> ${noVisc.ratio.toFixed(2)} x`);
+    noVisc.rebound > now.rebound * 2 && noVisc.rebound > 0.3,
+    `rebound ${now.rebound.toFixed(3)} -> ${noVisc.rebound.toFixed(3)} cm`
+    + ` (whip ${now.ratio.toFixed(2)} -> ${noVisc.ratio.toFixed(2)} x, no longer the signal)`);
   check('heavier cloth falls faster: terminal speed goes as sqrt(gsm)',
     Math.abs(new Cloth(sewFlat(annulusPattern({ innerR: 8, outerR: 20, edge: 4 }), { y: 0 }), null,
       { fabric: 'denim' }).vTerm

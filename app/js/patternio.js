@@ -565,6 +565,21 @@ export function sewFlat(pattern, { y = 0, center = [0, 0], scale = 1 } = {}) {
       }
       asm.verts.push([center[0] + q.x * scale, y, center[1] + q.y * scale]);
       asm.pinned.push(false);
+      // THE MATERIAL FRAME: where this vertex sat on the flat cloth.
+      //
+      // The assembly otherwise records the rest state intrinsically, as side
+      // lengths per triangle, which says how long each yarn is but not which
+      // way the yarns run -- so a solver reading it cannot tell a warp-wise
+      // edge from a bias one, and has to treat shear as stiff as tension.
+      // That is the `No fabric shear` limitation in docs/09-pattern.md, and
+      // it is why cloth in this project stretches where real cloth shears and
+      // creases. The pattern knows the answer, here, and nowhere else.
+      //
+      // Grain is assumed to run along the pattern axes, which is what the
+      // generators draft to. A true bias cut would rotate this frame, and
+      // that belongs on the panel rather than here.
+      (asm.material || (asm.material = []))[asm.verts.length - 1] =
+        [q.x * scale, q.y * scale];
       const idx = asm.verts.length - 1;
       if (hasId) { vertOf.set(q.v3, idx); seamCount.set(q.v3, 1); }
       local.push(idx);

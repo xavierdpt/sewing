@@ -45,10 +45,18 @@ export const G = 981;
  * Fabric presets. `gsm` is grams per square metre, which is how fabric is
  * actually sold, so these are real numbers rather than solver units.
  *
- * `stretch` and `bend` are XPBD compliances (inverse stiffness): 0 is
- * inextensible, larger is slacker. A woven is nearly inextensible along the
- * grain and bends easily; a knit stretches; an interfaced or coated cloth
- * resists bending, which is what makes a collar stand up instead of flopping.
+ * `stretch` is an XPBD compliance (inverse stiffness): 0 is inextensible,
+ * larger is slacker. A woven is nearly inextensible along the grain; a knit
+ * stretches.
+ *
+ * `bendLengthCm` is the PEIRCE BENDING LENGTH -- the measurement a textile lab
+ * makes by hanging a strip off a table edge and reading how far it must
+ * overhang before its tip droops 41.5 degrees. It is a property of the cloth,
+ * published for real fabrics, in centimetres, and `tools/fabric.mjs` measures
+ * it back out of the simulation. It replaced an opaque compliance that the
+ * same instrument showed was doing NOTHING: every preset, and a compliance of
+ * zero, gave the same 0.76 cm -- limper than any real cloth, which is why the
+ * drape creased like paper instead of folding.
  *
  * `damp` is the internal viscosity -- see `internalDamping` below -- and it is
  * as much a property of a cloth as its stiffness. A crepe or a heavy twill
@@ -60,15 +68,26 @@ export const G = 981;
  * what decide whether a hole can be forced over a shoulder.
  */
 export const FABRICS = {
-  //                        gsm  stretch   bend    mu   damp  maxStrain
-  'cotton poplin':   { gsm: 120, stretch: 2e-7, bend: 4e-3, friction: 0.40, damp: 0.75, maxStrain: 0.04 },
-  'linen':           { gsm: 190, stretch: 3e-7, bend: 3e-3, friction: 0.45, damp: 0.80, maxStrain: 0.03 },
-  'wool crepe':      { gsm: 220, stretch: 8e-7, bend: 1.2e-2, friction: 0.35, damp: 0.85, maxStrain: 0.06 },
-  'silk habotai':    { gsm:  60, stretch: 5e-7, bend: 3e-2, friction: 0.22, damp: 0.55, maxStrain: 0.04 },
-  'cotton jersey':   { gsm: 180, stretch: 2e-5, bend: 2e-2, friction: 0.50, damp: 0.75, maxStrain: 0.25 },
-  'denim':           { gsm: 340, stretch: 1e-7, bend: 4e-4, friction: 0.55, damp: 0.90, maxStrain: 0.02 },
-  'interfaced twill':{ gsm: 260, stretch: 1e-7, bend: 1e-4, friction: 0.50, damp: 0.90, maxStrain: 0.02 },
+  //                        gsm  stretch   bendCm  mu   damp  maxStrain
+  'cotton poplin':   { gsm: 120, stretch: 2e-7, bendLengthCm: 1.7, friction: 0.40, damp: 0.75, maxStrain: 0.04 },
+  'linen':           { gsm: 190, stretch: 3e-7, bendLengthCm: 2.3, friction: 0.45, damp: 0.80, maxStrain: 0.03 },
+  'wool crepe':      { gsm: 220, stretch: 8e-7, bendLengthCm: 1.9, friction: 0.35, damp: 0.85, maxStrain: 0.06 },
+  'silk habotai':    { gsm:  60, stretch: 5e-7, bendLengthCm: 1.1, friction: 0.22, damp: 0.55, maxStrain: 0.04 },
+  'cotton jersey':   { gsm: 180, stretch: 2e-5, bendLengthCm: 1.4, friction: 0.50, damp: 0.75, maxStrain: 0.25 },
+  'denim':           { gsm: 340, stretch: 1e-7, bendLengthCm: 3.3, friction: 0.55, damp: 0.90, maxStrain: 0.02 },
+  'interfaced twill':{ gsm: 260, stretch: 1e-7, bendLengthCm: 5.0, friction: 0.50, damp: 0.90, maxStrain: 0.02 },
 };
+
+/**
+ * Flexural rigidity in dyn cm, from the bending length a textile lab would
+ * measure: B = w g c^3, with w the areal density in g/cm^2 and c the Peirce
+ * bending length in cm. This is the whole reason the presets are written as a
+ * LENGTH: `c` is a number you can look up for a real cloth, or measure with a
+ * ruler and a table edge, and the solver has to reproduce it.
+ */
+export function rigidityOf(gsm, bendLengthCm) {
+  return (gsm / 10000) * G * bendLengthCm ** 3;
+}
 
 export const DEFAULTS = {
   fabric: 'cotton poplin',
@@ -138,6 +157,13 @@ export const DEFAULTS = {
   //   the contact lost it. At eight sweeps the two agree and the skirt wedges
   //   on the hips, which is what it does.
   stretchSweeps: 8,
+  // Sweeps of the bending pass per substep. One is what the first version
+  // did, and one is not enough to be a stiffness: measured on the cantilever
+  // (tools/fabric.mjs), every preset and even a compliance of ZERO gave the
+  // same 0.76 cm bending length -- the parameter was inert and the cloth had
+  // no bending resistance at all, which is what creases like paper instead of
+  // folding like cloth.
+  bendSweeps: 8,
   // Velocity retained per substep, on top of the drag and the internal
   // damping above. This is pure numerical insurance and should stay close to
   // 1: the dissipation that belongs in the model is in the two terms above.
@@ -151,6 +177,37 @@ export const DEFAULTS = {
   // limit and the body are asking for incompatible things. At 8% it cannot,
   // so it stops where the girth matches, which is what cloth does.
   maxStrain: null,
+  // ---- SHEAR (the trellis), as anisotropy between grain and bias.
+  //
+  // A woven is not an isotropic sheet. Warp and weft are nearly inextensible,
+  // but they can ROTATE against each other -- shear, the trellis mode -- by
+  // 15-25 degrees before locking, and that absorbs Gaussian curvature for
+  // free. docs/01-geometry.md:142 says so, docs/09-pattern.md:192 and
+  // docs/04-software.md:318 both list its absence as a known limitation, and
+  // docs/06-open-questions.md calls measuring it "the question I would answer
+  // first... every other number in this project is downstream of it".
+  //
+  // Without it the cloth has only two outlets for excess length, stretch and
+  // large-scale bending, and it takes the first: measured on a dropped disc,
+  // max strain pinned at 3.6-4.0 % against silk's 4 % yield, i.e. the cloth
+  // tore rather than creased. Real cloth answers the same disc with ~1 cm
+  // creases, redistributing cloth in-plane instead of straining.
+  //
+  // So an edge lying on the bias is made both more compliant and allowed to
+  // yield further than one lying on the grain, interpolated by sin^2(2 theta)
+  // -- 0 along warp or weft, 1 at 45 degrees. It needs a material frame
+  // (`asm.material`, from `sewFlat`); an assembly without one gets today's
+  // isotropic behaviour exactly.
+  //
+  // BOTH NUMBERS ARE ESTIMATES AWAITING THE MEASUREMENT. A woven's bias
+  // modulus is one to two orders of magnitude under its on-grain modulus,
+  // hence 25x; a 20-degree trellis shear lengthens a 45-degree diagonal by
+  // about 17 %, which against a 3 % grain limit is ~6x. Replace them with
+  // docs/06-open-questions.md section 1 once the scraps-and-a-bowl experiment
+  // has been run -- and note that shear alone cannot produce a 1 cm crease on
+  // a mesh whose finest representable wrinkle is 8.8 cm (edge 2.2).
+  biasCompliance: 25,
+  biasStrainFactor: 6,
   collisionMargin: 0.10,  // cm; half the cloth's thickness, held off the body
   // Collide the MIDPOINT of each edge as well as the vertices.
   //
@@ -216,7 +273,45 @@ export const DEFAULTS = {
   // free-hanging folds, which is where the drape's character lives.
   contactDamping: 0.5,
   selfCollision: true,
-  clothThickness: 0.4,    // cm, vertex-vertex separation enforced
+  clothThickness: 0.4,    // cm, the cloth's thickness: see `selfCollisionMode`
+  // HOW THICKNESS IS MODELLED.
+  //
+  // 'slab' -- the cloth is a sheet of real thickness, so its two surfaces are
+  // half a thickness either side of the mesh, and two pieces of cloth are in
+  // contact when their SURFACES touch. That is a distance between primitives:
+  // a vertex against a triangle, and an edge against an edge. It is the only
+  // one of the two that can stop a fold crossing another fold.
+  //
+  // 'vertex' -- the original: push apart pairs of VERTICES closer than
+  // `clothThickness`. It cannot see the triangle between two vertices, so with
+  // 0.4 cm of thickness on a 2 cm mesh two layers can lie 0.05 cm apart and
+  // interpenetrate completely, as long as no vertex of one lands within 0.4 cm
+  // of a vertex of the other -- and the nearest vertices of two stacked layers
+  // are typically edge/sqrt(3) = 1.15 cm apart laterally, which is 2.9x the
+  // detection radius. docs/11-cloth.md:377 records the symptom ("two folds can
+  // cross if they do it between vertices"), and the accordion heap it measures
+  // "resolves about four layers' worth of the eight" for this reason. It is
+  // kept for comparison, and because every recorded number was taken with it.
+  //
+  // The proximity model assumes thickness is not much more than a mesh edge;
+  // below that, elements two rings apart start reporting contact with each
+  // other and inflate the sheet, which is what `selfRingExclude` guards. For
+  // thickness comparable to the edge, the honest answer is a solver built for
+  // it -- C-IPC, carried in `sim/` -- not a bigger margin here.
+  selfCollisionMode: 'slab',
+  // Broad-phase cell, cm, or null for `max(2 * thickness, mean edge * 1.1)`.
+  //
+  // Cloth is a THIN SHEET, and a cell sized to its edge length is the wrong
+  // shape for it: measured on the settled accordion, eight layers inside 3 cm
+  // of height all fell into the same 2.49 cm cell, so the grid separated
+  // nothing in the one direction where the layers actually are. The candidate
+  // count was 23 % of every possible edge pair on a 640-triangle mesh, which
+  // is a grid doing almost no work. Exposed so it can be swept
+  // (`node tools/profile.mjs --cell 1.0`) rather than guessed at.
+  selfCell: null,
+  // How many rings of mesh neighbourhood are exempt from self-contact. One is
+  // right while the thickness is well under an edge length.
+  selfRingExclude: 1,
   maxVelocity: 400,       // cm/s, a sanity clamp that keeps a blow-up local
   // Height of the floor, or null for none. A garment whose hole is too big to
   // catch on anything does not hover: it slides off and lands in a heap, and
@@ -478,6 +573,167 @@ function flatCrossLength(asm, e) {
   return { a: A.c, b: B.c, rest: Math.hypot(dx, dy) };
 }
 
+/**
+ * Closest point on a triangle to p, with its barycentric weights.
+ *
+ * Ericson's region test, in full: a point over an edge or a corner of the
+ * triangle has its closest point THERE, not on the plane, and projecting onto
+ * the plane regardless is how a fold resting on a triangle's rim ends up
+ * reported as a centimetre away from it. The weights come back because the
+ * correction has to be shared out over the three vertices in proportion to
+ * how much each of them owns the contact.
+ */
+// Scratch for the two closest-point routines. They are called once per
+// candidate pair per substep -- on the accordion heap that was about 140
+// million calls, each returning a fresh object, and the profiler put 15.4 %
+// of the run in closestSegs alone with another 2.8 % in the collector. A
+// module-level buffer costs nothing and the callers are strictly sequential.
+const _BARY = new Float64Array(3);
+const _ST = new Float64Array(2);
+
+function closestOnTri(p, a, b, c) {
+  const abx = b[0] - a[0], aby = b[1] - a[1], abz = b[2] - a[2];
+  const acx = c[0] - a[0], acy = c[1] - a[1], acz = c[2] - a[2];
+  const apx = p[0] - a[0], apy = p[1] - a[1], apz = p[2] - a[2];
+  const d1 = abx * apx + aby * apy + abz * apz;
+  const d2 = acx * apx + acy * apy + acz * apz;
+  if (d1 <= 0 && d2 <= 0) { _BARY[0] = 1; _BARY[1] = 0; _BARY[2] = 0; return _BARY; }
+  const bpx = p[0] - b[0], bpy = p[1] - b[1], bpz = p[2] - b[2];
+  const d3 = abx * bpx + aby * bpy + abz * bpz;
+  const d4 = acx * bpx + acy * bpy + acz * bpz;
+  if (d3 >= 0 && d4 <= d3) { _BARY[0] = 0; _BARY[1] = 1; _BARY[2] = 0; return _BARY; }
+  const cpx = p[0] - c[0], cpy = p[1] - c[1], cpz = p[2] - c[2];
+  const d5 = abx * cpx + aby * cpy + abz * cpz;
+  const d6 = acx * cpx + acy * cpy + acz * cpz;
+  if (d6 >= 0 && d5 <= d6) { _BARY[0] = 0; _BARY[1] = 0; _BARY[2] = 1; return _BARY; }
+  const vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+    const t = d1 / (d1 - d3);
+    _BARY[0] = 1 - t; _BARY[1] = t; _BARY[2] = 0; return _BARY;
+  }
+  const vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+    const t = d2 / (d2 - d6);
+    _BARY[0] = 1 - t; _BARY[1] = 0; _BARY[2] = t; return _BARY;
+  }
+  const va = d3 * d6 - d5 * d4;
+  if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+    const t = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+    _BARY[0] = 0; _BARY[1] = 1 - t; _BARY[2] = t; return _BARY;
+  }
+  const den = 1 / (va + vb + vc);
+  const v = vb * den, w = vc * den;
+  _BARY[0] = 1 - v - w; _BARY[1] = v; _BARY[2] = w; return _BARY;
+}
+
+/**
+ * Closest approach of two segments, as the parameters along each.
+ *
+ * Parallel and degenerate cases are handled rather than divided by: two
+ * layers of an accordion lying face to face ARE parallel, which is exactly
+ * the configuration this has to get right.
+ */
+function closestSegs(p1, p2, q1, q2) {
+  const dx1 = p2[0] - p1[0], dy1 = p2[1] - p1[1], dz1 = p2[2] - p1[2];
+  const dx2 = q2[0] - q1[0], dy2 = q2[1] - q1[1], dz2 = q2[2] - q1[2];
+  const rx = p1[0] - q1[0], ry = p1[1] - q1[1], rz = p1[2] - q1[2];
+  const a = dx1 * dx1 + dy1 * dy1 + dz1 * dz1;
+  const e = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
+  const f = dx2 * rx + dy2 * ry + dz2 * rz;
+  let s, t;
+  if (a <= 1e-12 && e <= 1e-12) { _ST[0] = 0; _ST[1] = 0; return _ST; }
+  if (a <= 1e-12) { _ST[0] = 0; _ST[1] = Math.min(1, Math.max(0, f / e)); return _ST; }
+  const c = dx1 * rx + dy1 * ry + dz1 * rz;
+  if (e <= 1e-12) { _ST[0] = Math.min(1, Math.max(0, -c / a)); _ST[1] = 0; return _ST; }
+  const b = dx1 * dx2 + dy1 * dy2 + dz1 * dz2;
+  const den = a * e - b * b;
+  s = den > 1e-12 ? Math.min(1, Math.max(0, (b * f - c * e) / den)) : 0;
+  t = (b * s + f) / e;
+  if (t < 0) { t = 0; s = Math.min(1, Math.max(0, -c / a)); }
+  else if (t > 1) { t = 1; s = Math.min(1, Math.max(0, (b - c) / a)); }
+  _ST[0] = s; _ST[1] = t; return _ST;
+}
+
+/**
+ * Bending, as the HINGE ANGLE across each interior edge, with the gradients
+ * of Bridson et al. 2003 / Grinspun's discrete shells.
+ *
+ * Three models were measured and two thrown away, and the instrument that
+ * caught each is in the repo:
+ *
+ *   1. a spring between the two vertices opposite the shared edge, rest
+ *   length from the flat pattern. The cantilever (tools/fabric.mjs) gave
+ *   every preset AND a compliance of zero the same 0.76 cm of bending
+ *   length -- limper than any real cloth. A cross-spring's gradient is
+ *   nearly parallel to the stretch constraints it shares vertices with, and
+ *   stretch is four orders stiffer and solved first, so it simply undid the
+ *   correction. Cloth with no bending stiffness creases at the mesh scale
+ *   instead of folding at a wavelength its stiffness sets, which is what
+ *   "it looks like paper" is.
+ *
+ *   2. the quadratic (isometric) bending model, Bergou et al. 2006: a fixed
+ *   stencil of four cotangent weights whose sum against the positions
+ *   vanishes on a flat patch. It is linear, it is stable, it calibrated
+ *   beautifully against the cantilever -- and it is only valid for SMALL
+ *   deflections, because being linear in the positions it is not invariant
+ *   to rotation. A fold large enough to rotate a triangle is scored as if
+ *   it were a stretch, so a stiff cloth stops behaving like cloth: a dropped
+ *   denim disc landed like a thin metal plate and bounced back off its rim,
+ *   storing energy in folds that should have cost nothing to hold.
+ *
+ *   3. this one. The constraint is the angle between the two faces and
+ *   nothing else, so rotating the pair rigidly costs exactly zero however
+ *   far it is folded. The angle is taken with atan2 and the gradients are
+ *   the normals over the triangle heights, which is what makes it usable
+ *   where the naive dihedral form is not: the 1/sin(angle) that blows up at
+ *   the flat rest state never appears.
+ *
+ * Energy is (B |e|^2 / A) (theta - theta0)^2 with B the fabric's flexural
+ * rigidity, |e| the shared edge and A the area of the two triangles, so the
+ * compliance per edge is A / (B |e|^2) and the stiffness is
+ * resolution-independent. theta0 is zero: the pattern is flat.
+ */
+function bendingStencils(asm) {
+  const out = [];
+  for (const e of asm.edges.values()) {
+    if (e.tiles.length !== 2 || !(e.target > 1e-9)) continue;
+    const apexOf = (ti) => {
+      const t = asm.tiles[ti];
+      const m = t.v.findIndex((x) => x !== e.a && x !== e.b);
+      if (m < 0) return null;
+      const ia = t.v.indexOf(e.a), ib = t.v.indexOf(e.b);
+      if (ia < 0 || ib < 0) return null;
+      // side i is opposite vertex i, so the two sides meeting at the apex
+      // are the ones opposite the shared edge's two ends
+      return { v: t.v[m], toA: t.sides[ib], toB: t.sides[ia] };
+    };
+    const A = apexOf(e.tiles[0]), B = apexOf(e.tiles[1]);
+    if (!A || !B || A.v === B.v) continue;
+    // Areas from the CUT side lengths, not from where the mesh is standing:
+    // the compliance is a property of the cloth, not of its current pose.
+    const heron = (x, y, z) => {
+      const p = (x + y + z) / 2;
+      return Math.sqrt(Math.max(0, p * (p - x) * (p - y) * (p - z)));
+    };
+    const L = e.target;
+    const area = heron(L, A.toA, A.toB) + heron(L, B.toA, B.toB);
+    if (!(area > 1e-9)) continue;
+    out.push({ v: [A.v, B.v, e.a, e.b], len: L, area });
+  }
+  return out;
+}
+
+/**
+ * The one number relating the model's stiffness to the fabric's. In theory
+ * it is 1 -- the energy IS (B|e|^2/A) theta^2 -- and in practice the solver
+ * reaches a fraction of the stiffness it is asked for, because the bending
+ * pass gets a fixed number of sweeps and shares its vertices with
+ * constraints four orders stiffer. Fixed by measurement: `tools/fabric.mjs
+ * --scan` asks for a bending length and reads one back, and this is the
+ * value that makes those two the same number. See docs/11-cloth.md.
+ */
+export const BEND_SCALE = 30.0;
+
 // ------------------------------------------------------------------ the sim
 
 export class Cloth {
@@ -491,7 +747,11 @@ export class Cloth {
     this.opts = o;
     this.gsm = o.gsm ?? preset.gsm;
     this.alphaStretch = o.stretch ?? preset.stretch;
-    this.alphaBend = o.bend ?? preset.bend;
+    // Flexural rigidity, dyn cm. `bend` stays as a direct override in the
+    // same units as the presets -- a bending length in centimetres -- because
+    // that is the number anyone tuning this has in their hand.
+    this.bendLengthCm = o.bend ?? preset.bendLengthCm ?? 1.7;
+    this.rigidity = rigidityOf(this.gsm, this.bendLengthCm);
     this.mu = o.friction ?? preset.friction;
     this.kd = o.internalDamping ?? preset.damp ?? 0.35;
     // terminal speed scales as sqrt(areal density) under quadratic drag
@@ -554,6 +814,15 @@ export class Cloth {
     this.edgeQ = this.stretch.map(() => [0, 0, 0]);
     this._edgeDx = new Float64Array(N * 3);
     this._edgeCount = new Int32Array(N);
+    // Bending. The dihedral hinges are the model; the cross-springs are kept
+    // because the damping pass uses them as a cheap list of "pairs that move
+    // relative to each other when the cloth folds", which is what internal
+    // viscosity acts on.
+    this.hinges = bendingStencils(asm);
+    this.hingeLambda = new Float64Array(this.hinges.length);
+    for (const g of this.hinges) {
+      g.alpha = g.area / (BEND_SCALE * this.rigidity * g.len * g.len);
+    }
     this.bend = [];
     for (const e of asm.edges.values()) {
       const c = flatCrossLength(asm, e);
@@ -590,10 +859,62 @@ export class Cloth {
     this.maxTensionGf = o.maxTensionGf;
     this.stitchStrength = this.stitches.length ? 0.05 : 0;
 
+    this._classifyGrain(o);
+
     // ---- self-collision hash
     const h = o.clothThickness;
     this.cell = Math.max(h * 2, this._meanEdge() * 1.1);
     this.hash = new Map();
+    // candidate primitive pairs for the 'slab' thickness model
+    this.vtPairs = [];
+    this.eePairs = [];
+    // which stretch constraints are the three sides of each triangle, so an
+    // edge-edge test can be driven off the same grid the triangles are in
+    const eIndex = new Map();
+    for (let k = 0; k < this.stretch.length; k++) {
+      const c = this.stretch[k];
+      eIndex.set(c.a < c.b ? `${c.a}_${c.b}` : `${c.b}_${c.a}`, k);
+    }
+    this.triEdges = this.asm.tiles.map((t) => {
+      const [i, j, k2] = t.v;
+      return [[i, j], [j, k2], [k2, i]]
+        .map(([x, y]) => eIndex.get(x < y ? `${x}_${y}` : `${y}_${x}`))
+        .filter((m) => m !== undefined);
+    });
+  }
+
+  /**
+   * How far each edge lies off the grain, and what that costs it.
+   *
+   * `bias` is sin^2(2 theta) of the edge's direction in the MATERIAL frame:
+   * zero along warp or weft, one at 45 degrees. Which axis is called warp
+   * does not matter -- sin^2(2 theta) is symmetric about 45 degrees -- so
+   * this cannot be got wrong by picking the wrong one.
+   *
+   * Two things follow from it, and both are needed. Softening the compliance
+   * alone achieves nothing, because `_clampStrain` holds every edge at
+   * `maxStrain` regardless of how compliant it is -- a 2 % hard limit on a
+   * bias edge forbids the trellis whatever the stiffness says, which is how
+   * an anisotropic solver can still behave isotropically.
+   */
+  _classifyGrain(o) {
+    const M = this.asm.material;
+    const f = o.biasCompliance ?? 1, g = o.biasStrainFactor ?? 1;
+    this.grainAware = !!M && f !== 1;
+    for (const c of this.stretch) {
+      let bias = 0;
+      if (M && M[c.a] && M[c.b]) {
+        const du = M[c.b][0] - M[c.a][0], dv = M[c.b][1] - M[c.a][1];
+        const l2 = du * du + dv * dv;
+        if (l2 > 1e-12) {
+          const s2 = (2 * du * dv) / l2;        // sin(2 theta)
+          bias = s2 * s2;
+        }
+      }
+      c.bias = bias;
+      c.aMul = 1 + (f - 1) * bias;
+      c.maxLen = c.rest * (1 + this.maxStrain * (1 + (g - 1) * bias));
+    }
   }
 
   _meanEdge() {
@@ -665,7 +986,12 @@ export class Cloth {
           && this.collider.near(this.asm.verts[i], o.collisionMargin + reach);
       }
     }
-    if (o.selfCollision) this._findPairs(o.clothThickness + reach);
+    if (o.selfCollision) {
+      if (o.selfCollisionMode === 'slab') {
+        this._findSelfPrims(o.clothThickness + reach);
+        this._pruneSelfPrims(o.clothThickness + 2 * reach);
+      } else this._findPairs(o.clothThickness + reach);
+    }
     this._findEdgeContacts(o.collisionMargin + reach);
     for (let s = 0; s < n; s++) this._substep(h);
     // Quasi-static sewing: the cloth follows the feed and carries no momentum
@@ -757,6 +1083,7 @@ export class Cloth {
     // that -- propagates its error around the ring at one edge per sweep, so a
     // single sweep leaves the hoop a substep behind everything else.
     const h2 = h * h;
+    this.hingeLambda.fill(0);          // XPBD: one multiplier per substep
     const aS = this.alphaStretch / h2;
     for (let sweep = 0; sweep < o.stretchSweeps; sweep++) {
       for (let k = 0; k < this.stretch.length; k++) {
@@ -768,34 +1095,29 @@ export class Cloth {
         const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
         const L = Math.hypot(dx, dy, dz);
         if (L < 1e-12) continue;
-        const dl = -(L - c.rest) / (wsum + aS);
+        const dl = -(L - c.rest) / (wsum + (c.aMul > 1 ? aS * c.aMul : aS));
         const s = dl / L;
         a[0] -= dx * s * wa; a[1] -= dy * s * wa; a[2] -= dz * s * wa;
         b[0] += dx * s * wb; b[1] += dy * s * wb; b[2] += dz * s * wb;
       }
+      // Bending in the same sweep as stretch and contact, for the reason the
+      // comment above gives: a pass that runs after the contact projection
+      // pushes cloth into the body and has its answer undone a substep later,
+      // and that lag is an oscillator. Measured on the yoke disc, with the
+      // bending pass outside this loop the drop never settled -- it plateaued
+      // at 0.99 cm/s for twenty seconds, a limit cycle rather than a drape.
+      if (sweep < o.bendSweeps) this._solveHinges(h2);
       this._projectContacts(margin, maxPush, h);
       if (this.stitchStrength > 0) this._solveStitches(h2);
     }
     if (this.stitchStrength > 0) this._readStitchTensions(h2);
 
-    // ---- 4. bending, as a spring across each interior edge with its rest
-    // length taken from the flat pattern. Softer than stretch by orders of
-    // magnitude, which is the whole character of cloth: it folds rather than
-    // stretching, and that is why a disc can drape at all.
-    const aB = this.alphaBend / h2;
-    for (let k = 0; k < this.bend.length; k++) {
-      const c = this.bend[k];
-      const a = V[c.a], b = V[c.b];
-      const wa = W[c.a], wb = W[c.b];
-      const wsum = wa + wb;
-      if (wsum <= 0) continue;
-      const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
-      const L = Math.hypot(dx, dy, dz);
-      if (L < 1e-12) continue;
-      const dl = -(L - c.rest) / (wsum + aB);
-      const s = dl / L;
-      a[0] -= dx * s * wa; a[1] -= dy * s * wa; a[2] -= dz * s * wa;
-      b[0] += dx * s * wb; b[1] += dy * s * wb; b[2] += dz * s * wb;
+    // ---- 4. bending, as the dihedral angle across each interior edge, whose
+    // rest value is flat because the pattern is flat. Softer than stretch by
+    // orders of magnitude, which is the whole character of cloth: it folds
+    // rather than stretching, and that is why a disc can drape at all.
+    for (let sweep = o.stretchSweeps; sweep < o.bendSweeps; sweep++) {
+      this._solveHinges(h2);           // if more bending sweeps were asked for
     }
 
     // ---- 4b. the floor.
@@ -815,7 +1137,10 @@ export class Cloth {
     // ---- 5. self-collision, vertex against vertex, on the pairs found at the
     // top of the frame. A collar that folds over itself would otherwise pass
     // through itself, and folding over itself is most of what a collar does.
-    if (o.selfCollision) this._solvePairs();
+    if (o.selfCollision) {
+      if (o.selfCollisionMode === 'slab') this._solveSelfPrims();
+      else this._solvePairs();
+    }
 
     // ---- 6. a last contact projection, so the substep ends outside the body
     // whatever the bending and self-collision passes did.
@@ -1069,6 +1394,105 @@ export class Cloth {
   }
 
   /**
+   * One Gauss-Seidel pass of the bending constraints.
+   *
+   * C = theta, the signed angle between the two faces, zero when flat. The
+   * gradients are the discrete-shells ones: the face normal over the
+   * triangle's height for each apex, and a weighted combination of the two
+   * for the shared edge's ends. They are finite everywhere a triangle has
+   * area -- in particular at theta = 0, where the textbook dihedral gradient
+   * divides by sin(theta) and the solver comes apart -- and they sum to zero,
+   * so the pass cannot translate the cloth.
+   *
+   * Written out rather than called through a vector library because this is
+   * the inner loop: every interior edge of the garment, eight times a
+   * substep, ten substeps a frame.
+   */
+  _solveHinges(h2) {
+    const V = this.asm.verts;
+    const W = this.invMass;
+    const lam = this.hingeLambda;
+    for (let k = 0; k < this.hinges.length; k++) {
+      const g = this.hinges[k];
+      const [ia, ib, i1, i2] = g.v;           // apex A, apex B, edge, edge
+      const wa = W[ia], wb = W[ib], w1 = W[i1], w2 = W[i2];
+      if (wa + wb + w1 + w2 <= 0) continue;
+      const pa = V[ia], pb = V[ib], p1 = V[i1], p2 = V[i2];
+
+      // the shared edge
+      const ex = p2[0] - p1[0], ey = p2[1] - p1[1], ez = p2[2] - p1[2];
+      const eLen = Math.hypot(ex, ey, ez);
+      if (eLen < 1e-12) continue;
+      const ux = ex / eLen, uy = ey / eLen, uz = ez / eLen;
+
+      // face normals, oriented so that a FLAT pair gives theta = 0
+      const a1x = pa[0] - p1[0], a1y = pa[1] - p1[1], a1z = pa[2] - p1[2];
+      const b1x = pb[0] - p1[0], b1y = pb[1] - p1[1], b1z = pb[2] - p1[2];
+      let nax = ey * a1z - ez * a1y;
+      let nay = ez * a1x - ex * a1z;
+      let naz = ex * a1y - ey * a1x;
+      let nbx = b1y * ez - b1z * ey;
+      let nby = b1z * ex - b1x * ez;
+      let nbz = b1x * ey - b1y * ex;
+      const naLen = Math.hypot(nax, nay, naz);
+      const nbLen = Math.hypot(nbx, nby, nbz);
+      if (naLen < 1e-12 || nbLen < 1e-12) continue;      // a sliver
+      // the heights of the two triangles over the shared edge, which is what
+      // turns a normal into an angle gradient
+      const hA = naLen / eLen;
+      const hB = nbLen / eLen;
+      nax /= naLen; nay /= naLen; naz /= naLen;
+      nbx /= nbLen; nby /= nbLen; nbz /= nbLen;
+
+      const cosT = nax * nbx + nay * nby + naz * nbz;
+      // sin from the component of n_a x n_b along the edge, which carries the
+      // SIGN of the fold -- a hinge that folds the other way must be pushed
+      // back the other way
+      const cx = nay * nbz - naz * nby;
+      const cy = naz * nbx - nax * nbz;
+      const cz = nax * nby - nay * nbx;
+      const sinT = cx * ux + cy * uy + cz * uz;
+      const C = Math.atan2(sinT, cosT);                   // rest angle is 0
+      if (C === 0) continue;
+
+      // where each apex projects onto the shared edge, 0 at p1 and 1 at p2
+      const ta = ((pa[0] - p1[0]) * ux + (pa[1] - p1[1]) * uy + (pa[2] - p1[2]) * uz) / eLen;
+      const tb = ((pb[0] - p1[0]) * ux + (pb[1] - p1[1]) * uy + (pb[2] - p1[2]) * uz) / eLen;
+
+      // dtheta/dp. The sign is the one finite differences give: the test
+      // suite checks these gradients against a numerical derivative, because
+      // a sign flip here is invisible in the algebra and unmistakable in the
+      // cloth -- it drives every fold further open instead of closing it.
+      const gax = -nax / hA, gay = -nay / hA, gaz = -naz / hA;
+      const gbx = -nbx / hB, gby = -nby / hB, gbz = -nbz / hB;
+      const g1x = -(1 - ta) * gax - (1 - tb) * gbx;
+      const g1y = -(1 - ta) * gay - (1 - tb) * gby;
+      const g1z = -(1 - ta) * gaz - (1 - tb) * gbz;
+      const g2x = -ta * gax - tb * gbx;
+      const g2y = -ta * gay - tb * gby;
+      const g2z = -ta * gaz - tb * gbz;
+
+      const sum = wa * (gax * gax + gay * gay + gaz * gaz)
+                + wb * (gbx * gbx + gby * gby + gbz * gbz)
+                + w1 * (g1x * g1x + g1y * g1y + g1z * g1z)
+                + w2 * (g2x * g2x + g2y * g2y + g2z * g2z);
+      if (sum < 1e-20) continue;
+
+      // XPBD, with the multiplier accumulated across this substep's sweeps.
+      // Without the accumulation each sweep re-applies the whole correction
+      // and the pass feeds energy in -- measured as a cantilever that never
+      // stopped moving.
+      const a2 = g.alpha / h2;
+      const dLam = (-C - a2 * lam[k]) / (sum + a2);
+      lam[k] += dLam;
+      pa[0] += wa * gax * dLam; pa[1] += wa * gay * dLam; pa[2] += wa * gaz * dLam;
+      pb[0] += wb * gbx * dLam; pb[1] += wb * gby * dLam; pb[2] += wb * gbz * dLam;
+      p1[0] += w1 * g1x * dLam; p1[1] += w1 * g1y * dLam; p1[2] += w1 * g1z * dLam;
+      p2[0] += w2 * g2x * dLam; p2[1] += w2 * g2y * dLam; p2[2] += w2 * g2z * dLam;
+    }
+  }
+
+  /**
    * Draw the seams together. A stitch is a zero-length constraint between two
    * vertices that are the same point of the garment but were cut on different
    * pieces; sewing is the process of making that true -- when it CAN be made
@@ -1162,7 +1586,8 @@ export class Cloth {
       if (s.rest <= 0) { s.rest = 0; s.feeding = false; continue; }
       feeding++;
       // has the cloth kept up? if not, wait for it rather than demanding more
-      if (this.stitchGap(s) - s.rest > slack) continue;
+      if (this.stitchGap(s) - s.rest > slack) { s.waiting = true; continue; }
+      s.waiting = false;
       s.rest = Math.max(0, s.rest - step);
     }
     return feeding;
@@ -1412,12 +1837,21 @@ export class Cloth {
       const armed = list.filter((x) => x.rest !== null);
       const toGo = armed.length ? Math.max(...armed.map((x) => x.rest)) : null;
       const feeding = list.filter((x) => x.feeding).length;
+      // Feeding, but held: the machine is still running and the cloth is not
+      // coming. A thread that cannot drag its seam together stalls the feed
+      // here for ever, and reporting that as "being sewn" hides exactly the
+      // failure the force limit exists to show. Found when the bending model
+      // started working: stiffer cloth needs more thread tension to pull
+      // together, so a seam that used to finish now stalls at 2.4 cm to go.
+      const waiting = list.filter((x) => x.feeding && x.waiting).length;
+      const stalled = waiting > list.length * 0.5 && sat > 0;
       rows.push({
         seam: id,
         pieces: list[0].pa !== undefined ? `${list[0].pa} + ${list[0].pb}` : '-',
         stitches: list.length,
         sewing: !armed.length ? 'no'
-          : feeding ? 'now' : (toGo > closedCm ? 'paused' : 'done'),
+          : stalled ? 'stalled'
+            : feeding ? 'now' : (toGo > closedCm ? 'paused' : 'done'),
         closedPct: +pct.toFixed(0),
         toGoCm: toGo === null ? '-' : +toGo.toFixed(2),
         maxGapCm: +maxGap.toFixed(2),
@@ -1430,15 +1864,17 @@ export class Cloth {
         // the garment -- a short piece elsewhere distorts the whole ring --
         // and a seam that closed at no tension at all did not force anything,
         // whatever its neighbours are doing.
+        waiting,
         verdict: !armed.length ? 'not sewn'
-          : toGo > closedCm
-            ? (feeding ? `being sewn, ${toGo.toFixed(1)} cm to go`
-              : `half sewn, ${toGo.toFixed(1)} cm to go`)
-            : maxGap <= closedCm
-              ? (sat > list.length * 0.1
-                || (pulling && strained >= this.maxStrain * 0.95)
-                ? 'closed, but forced -- it will pucker' : 'closed')
-              : `short by ${maxGap.toFixed(1)} cm (${why})`,
+          : stalled ? `short by ${maxGap.toFixed(1)} cm (${why})`
+            : toGo > closedCm
+              ? (feeding ? `being sewn, ${toGo.toFixed(1)} cm to go`
+                : `half sewn, ${toGo.toFixed(1)} cm to go`)
+              : maxGap <= closedCm
+                ? (sat > list.length * 0.1
+                  || (pulling && strained >= this.maxStrain * 0.95)
+                  ? 'closed, but forced -- it will pucker' : 'closed')
+                : `short by ${maxGap.toFixed(1)} cm (${why})`,
       });
     }
     return rows.sort((a, b) => String(a.seam).localeCompare(String(b.seam)));
@@ -1455,7 +1891,7 @@ export class Cloth {
       if (wsum <= 0) continue;
       const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
       const L = Math.hypot(dx, dy, dz);
-      const max = c.rest * lim;
+      const max = c.maxLen ?? c.rest * lim;
       if (L <= max || L < 1e-12) continue;
       const over = (L - max) / c.rest;
       if (over > worst) worst = over;
@@ -1509,6 +1945,418 @@ export class Cloth {
       }
     }
     return pairs.length / 2;
+  }
+
+  /**
+   * The ring neighbourhood, to `depth` rings, as a set per vertex.
+   *
+   * Self-contact between elements that share mesh neighbours is not contact,
+   * it is the sheet being asked to hold itself apart, and enforcing it
+   * inflates the cloth into a balloon.
+   */
+  _buildRings(depth) {
+    if (this.ringCSR && this.ringCSRDepth === depth) return this.ringCSR;
+    const V = this.asm.verts;
+    const adj = V.map(() => new Set());
+    for (const c of this.stretch) { adj[c.a].add(c.b); adj[c.b].add(c.a); }
+    // Flattened to CSR -- offsets plus a single items array -- because the
+    // per-vertex Set this replaced was consulted once per CANDIDATE PAIR, and
+    // at 2560 triangles that is 100k hash lookups a frame inside the function
+    // the profiler put 37 % of the run in. A stamp compare against a typed
+    // array is an integer load; Set.has is not.
+    const off = new Int32Array(V.length + 1);
+    for (let i = 0; i < V.length; i++) {
+      const seen = new Set([i]);
+      let front = [i];
+      for (let d = 0; d < depth; d++) {
+        const next = [];
+        for (const u of front) for (const w of adj[u]) if (!seen.has(w)) { seen.add(w); next.push(w); }
+        front = next;
+      }
+      off[i + 1] = off[i] + seen.size;
+      adj[i] = seen;                   // reuse the slot to hold the closure
+    }
+    const items = new Int32Array(off[V.length]);
+    for (let i = 0; i < V.length; i++) {
+      let q = off[i];
+      for (const w of adj[i]) items[q++] = w;
+    }
+    this.ringCSR = { off, items };
+    this.ringCSRDepth = depth;
+    this.ringStamp = new Int32Array(V.length).fill(-1);
+    return this.ringCSR;
+  }
+
+  /**
+   * A bounded lattice over the cloth, sized so a cell index is arithmetic.
+   *
+   * Not a hash of string keys: that allocated a string per element per cell
+   * per frame -- about 5k of them, with the Map churn and the garbage
+   * collector behind it -- and the profiler put 27 % of the run in here.
+   * An integer lattice needs no keys at all, and the cell count is capped so
+   * a blown-up mesh widens the cells instead of allocating a grid the size of
+   * its own explosion.
+   */
+  _selfGrid(margin) {
+    const V = this.asm.verts;
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity;
+    let x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    for (let i = 0; i < V.length; i++) {
+      const p = V[i];
+      if (!Number.isFinite(p[0]) || !Number.isFinite(p[1]) || !Number.isFinite(p[2])) return null;
+      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+      if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+      if (p[2] < z0) z0 = p[2]; if (p[2] > z1) z1 = p[2];
+    }
+    // Half a mean edge, floored at twice the thickness. Measured on the
+    // accordion heap with the counting-sort grid: 2.49 cm (one mean edge, the
+    // old default) took 23.9 s, 1.5 took 18.9, 1.0 took 16.4 and 0.6 turned
+    // back up to 20.8 as each element started landing in more cells than it
+    // saved in comparisons. Cloth is a thin sheet, so a cell sized to its
+    // edge length cannot separate the layers in the one direction they are
+    // stacked in -- eight of them shared a single 2.49 cm cell.
+    // Measured both ways, and the optimum is NOT proportional to the element
+    // size -- it tracks how densely the cloth is packed, which is a property
+    // of the heap and not of the mesh. On the accordion: at 2 cm triangles
+    // 1.0 cm was best (16.4 s against 23.9 at 2.49), while at 1 cm triangles
+    // bigger cells won (68.5 s at 0.80, 56.2 at 1.70, 55.7 at 2.30) because
+    // insertion multiplicity beat candidate count. Two scenarios is not a law,
+    // the curve is flat over most of the range, and the whole remaining knob
+    // is worth about 1.2x -- so this is a floor that avoids the bad end of
+    // both, not a fit. Use `--cell` (tools/profile.mjs) per scenario.
+    let c = this.opts.selfCell || Math.max(1.2, this._meanEdge() * 0.5);
+    let nx, ny, nz, pad;
+    for (;;) {
+      pad = margin + c;
+      nx = Math.max(1, Math.ceil((x1 - x0 + 2 * pad) / c));
+      ny = Math.max(1, Math.ceil((y1 - y0 + 2 * pad) / c));
+      nz = Math.max(1, Math.ceil((z1 - z0 + 2 * pad) / c));
+      if (nx * ny * nz <= (1 << 20)) break;
+      c *= 1.5;
+    }
+    // what the grid ACTUALLY used, for the profiler to report: the asked-for
+    // cell and the used one differ whenever the cap widens it
+    this.selfCellUsed = c;
+    this.selfCells = nx * ny * nz;
+    return { c, ox: x0 - pad, oy: y0 - pad, oz: z0 - pad, nx, ny, nz, nCells: nx * ny * nz };
+  }
+
+  /**
+   * Counting sort of elements into cells: two passes, typed arrays, no
+   * allocation after the first frame.
+   *
+   * `boxes` is 6 floats per element. Each element goes into every cell its
+   * box covers, which is what keeps the cell size a performance choice rather
+   * than a correctness one -- a triangle wider than a cell is still found.
+   */
+  _bucketise(role, boxes, n, G) {
+    const bp = this._bp || (this._bp = {});
+    const slot = bp[role] || (bp[role] = {});
+    const { c, ox, oy, oz, nx, ny, nz, nCells } = G;
+    let start = slot.start;
+    if (!start || start.length < nCells + 1) start = slot.start = new Int32Array(nCells + 1);
+    else start.fill(0, 0, nCells + 1);
+    const ranges = slot.ranges && slot.ranges.length >= n * 6
+      ? slot.ranges : (slot.ranges = new Int32Array(Math.max(6, n * 6)));
+    let total = 0;
+    for (let i = 0; i < n; i++) {
+      const b = i * 6, q = i * 6;
+      const ax = Math.min(nx - 1, Math.max(0, ((boxes[b] - ox) / c) | 0));
+      const bx = Math.min(nx - 1, Math.max(0, ((boxes[b + 3] - ox) / c) | 0));
+      const ay = Math.min(ny - 1, Math.max(0, ((boxes[b + 1] - oy) / c) | 0));
+      const by = Math.min(ny - 1, Math.max(0, ((boxes[b + 4] - oy) / c) | 0));
+      const az = Math.min(nz - 1, Math.max(0, ((boxes[b + 2] - oz) / c) | 0));
+      const bz = Math.min(nz - 1, Math.max(0, ((boxes[b + 5] - oz) / c) | 0));
+      ranges[q] = ax; ranges[q + 1] = bx; ranges[q + 2] = ay;
+      ranges[q + 3] = by; ranges[q + 4] = az; ranges[q + 5] = bz;
+      for (let z = az; z <= bz; z++) for (let y = ay; y <= by; y++) for (let x = ax; x <= bx; x++) {
+        start[(x + nx * (y + ny * z)) + 1]++; total++;
+      }
+    }
+    for (let k = 0; k < nCells; k++) start[k + 1] += start[k];
+    let items = slot.items;
+    if (!items || items.length < total) items = slot.items = new Int32Array(Math.max(16, total * 2));
+    let cur = slot.cur;
+    if (!cur || cur.length < nCells + 1) cur = slot.cur = new Int32Array(nCells + 1);
+    cur.set(start.subarray(0, nCells + 1));
+    for (let i = 0; i < n; i++) {
+      const q = i * 6;
+      for (let z = ranges[q + 4]; z <= ranges[q + 5]; z++) {
+        for (let y = ranges[q + 2]; y <= ranges[q + 3]; y++) {
+          for (let x = ranges[q]; x <= ranges[q + 1]; x++) {
+            items[cur[x + nx * (y + ny * z)]++] = i;
+          }
+        }
+      }
+    }
+    slot.n = n;
+    return slot;
+  }
+
+  _findSelfPrims(margin) {
+    const V = this.asm.verts, tris = this.asm.tiles, st = this.stretch;
+    const { off: rOff, items: rItems } = this._buildRings(this.opts.selfRingExclude);
+    const stamp = this.ringStamp;
+    const vt = this.vtPairs; vt.length = 0;
+    const ee = this.eePairs; ee.length = 0;
+    if (!V.length || !tris.length) return;
+    const G = this._selfGrid(margin);
+    if (!G) return;
+    const { nx, ny, nz, c, ox, oy, oz } = G;
+
+    // ---- element boxes, expanded by the margin
+    const bx = this._bp && this._bp.triBox && this._bp.triBox.length >= tris.length * 6
+      ? this._bp.triBox : ((this._bp || (this._bp = {})).triBox = new Float64Array(tris.length * 6));
+    for (let t = 0; t < tris.length; t++) {
+      const v = tris[t].v, a = V[v[0]], b = V[v[1]], d = V[v[2]], o = t * 6;
+      bx[o] = Math.min(a[0], b[0], d[0]) - margin;
+      bx[o + 1] = Math.min(a[1], b[1], d[1]) - margin;
+      bx[o + 2] = Math.min(a[2], b[2], d[2]) - margin;
+      bx[o + 3] = Math.max(a[0], b[0], d[0]) + margin;
+      bx[o + 4] = Math.max(a[1], b[1], d[1]) + margin;
+      bx[o + 5] = Math.max(a[2], b[2], d[2]) + margin;
+    }
+    const triG = this._bucketise('tri', bx, tris.length, G);
+
+    // ---- vertex against triangle: one cell lookup per vertex, because a
+    // triangle sits in every cell its own box covers
+    for (let i = 0; i < V.length; i++) {
+      const p = V[i];
+      const cx = Math.min(nx - 1, Math.max(0, ((p[0] - ox) / c) | 0));
+      const cy = Math.min(ny - 1, Math.max(0, ((p[1] - oy) / c) | 0));
+      const cz = Math.min(nz - 1, Math.max(0, ((p[2] - oz) / c) | 0));
+      const k = cx + nx * (cy + ny * cz);
+      // stamp this vertex's ring, then exclude by integer compare
+      for (let q = rOff[i]; q < rOff[i + 1]; q++) stamp[rItems[q]] = i;
+      for (let q = triG.start[k]; q < triG.start[k + 1]; q++) {
+        const t = triG.items[q];
+        const v = tris[t].v;
+        if (stamp[v[0]] === i || stamp[v[1]] === i || stamp[v[2]] === i) continue;
+        vt.push(i, t);
+      }
+    }
+
+    // ---- edge against edge, off the EDGES' own grid.
+    //
+    // This used to reach edges through triangles -- edge, to cells, to the
+    // triangles there, to each triangle's three edges -- which produced every
+    // pair up to three times over and then de-duplicated 116k of them through
+    // a Set of boxed integers. Hashing the edges themselves removes the
+    // factor of three and the Set; the `mark` stamp removes what is left,
+    // since a pair found in two shared cells is caught by an integer compare
+    // rather than a hash insert.
+    if (!st.length) return;
+    const ebx = this._bp.edgeBox && this._bp.edgeBox.length >= st.length * 6
+      ? this._bp.edgeBox : (this._bp.edgeBox = new Float64Array(st.length * 6));
+    for (let k = 0; k < st.length; k++) {
+      const a = V[st[k].a], b = V[st[k].b], o = k * 6;
+      ebx[o] = Math.min(a[0], b[0]) - margin;
+      ebx[o + 1] = Math.min(a[1], b[1]) - margin;
+      ebx[o + 2] = Math.min(a[2], b[2]) - margin;
+      ebx[o + 3] = Math.max(a[0], b[0]) + margin;
+      ebx[o + 4] = Math.max(a[1], b[1]) + margin;
+      ebx[o + 5] = Math.max(a[2], b[2]) + margin;
+    }
+    const edgeG = this._bucketise('edge', ebx, st.length, G);
+    let mark = this._bp.mark;
+    if (!mark || mark.length < st.length) mark = this._bp.mark = new Int32Array(st.length).fill(-1);
+    const R = edgeG.ranges;
+    // the edge pass stamps with a value that cannot collide with the vertex
+    // pass above
+    const base = V.length + 1;
+    for (let k = 0; k < st.length; k++) {
+      const q = k * 6, ca = st[k].a, cb = st[k].b;
+      const sk = base + k;
+      for (let z = rOff[ca]; z < rOff[ca + 1]; z++) stamp[rItems[z]] = sk;
+      for (let z = rOff[cb]; z < rOff[cb + 1]; z++) stamp[rItems[z]] = sk;
+      for (let z = R[q + 4]; z <= R[q + 5]; z++) {
+        for (let y = R[q + 2]; y <= R[q + 3]; y++) {
+          for (let x = R[q]; x <= R[q + 1]; x++) {
+            const cellK = x + nx * (y + ny * z);
+            for (let j = edgeG.start[cellK]; j < edgeG.start[cellK + 1]; j++) {
+              const m = edgeG.items[j];
+              if (m <= k || mark[m] === k) continue;
+              mark[m] = k;
+              const d = st[m];
+              if (stamp[d.a] === sk || stamp[d.b] === sk) continue;
+              ee.push(k, m);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Throw away the candidates that are not actually near, once per frame.
+   *
+   * The broad phase answers with BOX overlap, which for 2 cm elements is a
+   * far looser question than "are these within a thickness": two edges whose
+   * expanded boxes touch can be a whole element apart. Those pairs were then
+   * re-tested every substep -- ten times a frame, forty million closest-point
+   * calls on the accordion heap, 36 % of the run. One pass of real distances
+   * here replaces ten passes there.
+   *
+   * The threshold carries twice `reach` because both elements may be moving
+   * toward each other, where the box expansion assumed one of them.
+   */
+  _pruneSelfPrims(near) {
+    const V = this.asm.verts, tris = this.asm.tiles, st = this.stretch;
+    const n2 = near * near;
+    const vt = this.vtPairs;
+    let w = 0;
+    for (let k = 0; k < vt.length; k += 2) {
+      const i = vt[k], t = vt[k + 1];
+      const v = tris[t].v, p = V[i];
+      const bary = closestOnTri(p, V[v[0]], V[v[1]], V[v[2]]);
+      const dx = p[0] - (bary[0] * V[v[0]][0] + bary[1] * V[v[1]][0] + bary[2] * V[v[2]][0]);
+      const dy = p[1] - (bary[0] * V[v[0]][1] + bary[1] * V[v[1]][1] + bary[2] * V[v[2]][1]);
+      const dz = p[2] - (bary[0] * V[v[0]][2] + bary[1] * V[v[1]][2] + bary[2] * V[v[2]][2]);
+      if (dx * dx + dy * dy + dz * dz <= n2) { vt[w++] = i; vt[w++] = t; }
+    }
+    vt.length = w;
+
+    const ee = this.eePairs;
+    w = 0;
+    for (let k = 0; k < ee.length; k += 2) {
+      const c1 = st[ee[k]], c2 = st[ee[k + 1]];
+      const p1 = V[c1.a], p2 = V[c1.b], q1 = V[c2.a], q2 = V[c2.b];
+      const stp = closestSegs(p1, p2, q1, q2);
+      const sp = stp[0], tq = stp[1];
+      const dx = (p1[0] + (p2[0] - p1[0]) * sp) - (q1[0] + (q2[0] - q1[0]) * tq);
+      const dy = (p1[1] + (p2[1] - p1[1]) * sp) - (q1[1] + (q2[1] - q1[1]) * tq);
+      const dz = (p1[2] + (p2[2] - p1[2]) * sp) - (q1[2] + (q2[2] - q1[2]) * tq);
+      if (dx * dx + dy * dy + dz * dz <= n2) { ee[w++] = ee[k]; ee[w++] = ee[k + 1]; }
+    }
+    ee.length = w;
+  }
+
+  /**
+   * Hold the cloth's own surfaces `clothThickness` apart.
+   *
+   * The correction is shared over the primitive's vertices by their
+   * barycentric / parametric weights, which is what makes this a constraint
+   * on the SURFACE rather than on whichever vertex happened to be nearest,
+   * and it is limited per substep for the reason `_projectContacts` gives: a
+   * positional push is a velocity, and an unlimited one is an explosion.
+   */
+  _solveSelfPrims() {
+    const V = this.asm.verts, W = this.invMass;
+    const o = this.opts;
+    const h = o.clothThickness;
+    const maxPush = o.maxPushPerSubstepCm;
+    const tris = this.asm.tiles;
+
+    const vt = this.vtPairs;
+    for (let k = 0; k < vt.length; k += 2) {
+      const i = vt[k], t = vt[k + 1];
+      const v = tris[vt[k + 1]].v;
+      const p = V[i], a = V[v[0]], b = V[v[1]], c = V[v[2]];
+      const bary = closestOnTri(p, a, b, c);
+      const u = bary[0], bv = bary[1], w = bary[2];
+      const cx = u * a[0] + bv * b[0] + w * c[0];
+      const cy = u * a[1] + bv * b[1] + w * c[1];
+      const cz = u * a[2] + bv * b[2] + w * c[2];
+      let nx = p[0] - cx, ny = p[1] - cy, nz = p[2] - cz;
+      let d = Math.hypot(nx, ny, nz);
+      if (d >= h) continue;
+      if (d < 1e-9) {
+        // exactly on the triangle: push along its normal, the only direction
+        // that is defined there
+        const e1x = b[0] - a[0], e1y = b[1] - a[1], e1z = b[2] - a[2];
+        const e2x = c[0] - a[0], e2y = c[1] - a[1], e2z = c[2] - a[2];
+        nx = e1y * e2z - e1z * e2y; ny = e1z * e2x - e1x * e2z; nz = e1x * e2y - e1y * e2x;
+        d = Math.hypot(nx, ny, nz);
+        if (d < 1e-12) continue;
+      }
+      nx /= d; ny /= d; nz /= d;
+      const wsum = W[i] + u * u * W[v[0]] + bv * bv * W[v[1]] + w * w * W[v[2]];
+      if (wsum <= 0) continue;
+      const lam = Math.min((h - d) / wsum, maxPush / Math.max(1e-9, wsum));
+      p[0] += nx * lam * W[i]; p[1] += ny * lam * W[i]; p[2] += nz * lam * W[i];
+      // unrolled: the array-of-pairs this replaced allocated two arrays per
+      // contact per substep
+      const g0 = lam * u * W[v[0]], g1 = lam * bv * W[v[1]], g2 = lam * w * W[v[2]];
+      a[0] -= nx * g0; a[1] -= ny * g0; a[2] -= nz * g0;
+      b[0] -= nx * g1; b[1] -= ny * g1; b[2] -= nz * g1;
+      c[0] -= nx * g2; c[1] -= ny * g2; c[2] -= nz * g2;
+    }
+
+    const ee = this.eePairs;
+    for (let k = 0; k < ee.length; k += 2) {
+      const c1 = this.stretch[ee[k]], c2 = this.stretch[ee[k + 1]];
+      const p1 = V[c1.a], p2 = V[c1.b], q1 = V[c2.a], q2 = V[c2.b];
+      const stp = closestSegs(p1, p2, q1, q2);
+      const sp = stp[0], tq = stp[1];
+      const ax = p1[0] + (p2[0] - p1[0]) * sp, ay = p1[1] + (p2[1] - p1[1]) * sp,
+        az = p1[2] + (p2[2] - p1[2]) * sp;
+      const bx = q1[0] + (q2[0] - q1[0]) * tq, by = q1[1] + (q2[1] - q1[1]) * tq,
+        bz = q1[2] + (q2[2] - q1[2]) * tq;
+      let nx = ax - bx, ny = ay - by, nz = az - bz;
+      const d = Math.hypot(nx, ny, nz);
+      if (d >= h || d < 1e-9) continue;
+      nx /= d; ny /= d; nz /= d;
+      const w1 = (1 - sp) * (1 - sp) * W[c1.a] + sp * sp * W[c1.b];
+      const w2 = (1 - tq) * (1 - tq) * W[c2.a] + tq * tq * W[c2.b];
+      const wsum = w1 + w2;
+      if (wsum <= 0) continue;
+      const lam = Math.min((h - d) / wsum, maxPush / Math.max(1e-9, wsum));
+      const apply = (idx, bw, sign) => {
+        const g = lam * bw * W[idx] * sign;
+        V[idx][0] += nx * g; V[idx][1] += ny * g; V[idx][2] += nz * g;
+      };
+      apply(c1.a, 1 - sp, 1); apply(c1.b, sp, 1);
+      apply(c2.a, 1 - tq, -1); apply(c2.b, tq, -1);
+    }
+  }
+
+  /**
+   * How far the cloth is through itself, as a count and a worst case.
+   *
+   * The scalar-with-a-threshold version of this question was `stackCm`, which
+   * is a proxy: a heap can be the right height with every layer crossing. So
+   * this reports WHERE the surfaces are inside each other and by how much,
+   * over the same primitive pairs the solver sees.
+   */
+  selfOverlaps() {
+    const V = this.asm.verts, tris = this.asm.tiles;
+    const h = this.opts.clothThickness;
+    if (!this.vtPairs.length && !this.eePairs.length) {
+      this._findSelfPrims(h + 0.1);
+    }
+    // A pair at 0.39 cm of a 0.40 cm thickness is in CONTACT, not through
+    // itself, and counting those made a settled stack look catastrophic. What
+    // matters is how deep: `deep` counts surfaces more than half way through
+    // each other, which no amount of contact convergence produces.
+    let n = 0, worst = 0, sum = 0, deep = 0;
+    for (let k = 0; k < this.vtPairs.length; k += 2) {
+      const v = tris[this.vtPairs[k + 1]].v;
+      const p = V[this.vtPairs[k]];
+      const bary = closestOnTri(p, V[v[0]], V[v[1]], V[v[2]]);
+      const u = bary[0], bv = bary[1], w = bary[2];
+      const d = Math.hypot(
+        p[0] - (u * V[v[0]][0] + bv * V[v[1]][0] + w * V[v[2]][0]),
+        p[1] - (u * V[v[0]][1] + bv * V[v[1]][1] + w * V[v[2]][1]),
+        p[2] - (u * V[v[0]][2] + bv * V[v[1]][2] + w * V[v[2]][2]));
+      if (d < h) { n++; sum += h - d; if (d < h / 2) deep++; if (h - d > worst) worst = h - d; }
+    }
+    for (let k = 0; k < this.eePairs.length; k += 2) {
+      const c1 = this.stretch[this.eePairs[k]], c2 = this.stretch[this.eePairs[k + 1]];
+      const stp = closestSegs(V[c1.a], V[c1.b], V[c2.a], V[c2.b]);
+      const sp = stp[0], tq = stp[1];
+      const d = Math.hypot(
+        (V[c1.a][0] + (V[c1.b][0] - V[c1.a][0]) * sp) - (V[c2.a][0] + (V[c2.b][0] - V[c2.a][0]) * tq),
+        (V[c1.a][1] + (V[c1.b][1] - V[c1.a][1]) * sp) - (V[c2.a][1] + (V[c2.b][1] - V[c2.a][1]) * tq),
+        (V[c1.a][2] + (V[c1.b][2] - V[c1.a][2]) * sp) - (V[c2.a][2] + (V[c2.b][2] - V[c2.a][2]) * tq));
+      if (d < h) { n++; sum += h - d; if (d < h / 2) deep++; if (h - d > worst) worst = h - d; }
+    }
+    return {
+      inContact: n,
+      deepOverlaps: deep,
+      deepOverlapPct: +(100 * deep / Math.max(1, n)).toFixed(1),
+      worstOverlapCm: +worst.toFixed(3),
+      meanOverlapCm: +(n ? sum / n : 0).toFixed(3),
+    };
   }
 
   _solvePairs() {
@@ -1626,9 +2474,47 @@ export class Cloth {
       stretchedSeamsPct: +(100 * pos.filter((s) => s > 0.02).length / pos.length).toFixed(1),
       contactVerts: contacts,
       contactPct: +(100 * contacts / V.length).toFixed(1),
+      // Grain against bias, because one number over all the edges cannot say
+      // whether the cloth is shearing or tearing. A woven answers excess
+      // length by rotating its yarns -- strain on the bias, none on the grain
+      // -- and the whole point of the shear mode is to let it. If these two
+      // move together, the cloth is still being stretched isotropically and
+      // the anisotropy is not doing anything.
+      ...this._shearReport(),
+      // The cloth through ITSELF, which stack height cannot tell you: a heap
+      // can be the right height with every layer crossing.
+      ...(this.opts.selfCollision ? this.selfOverlaps() : {}),
       deepestPenetrationCm: pen.worstCm,
       deepestVertexCm: pen.vertexCm,
       deepestEdgeCm: pen.edgeCm,
+    };
+  }
+
+  /**
+   * The strain split by direction: along the yarns, and across them.
+   *
+   * `shearPct` is the trellis -- a bias edge lengthening because warp and
+   * weft rotated apart -- and `grainPct` is the yarns themselves being
+   * pulled, which real cloth barely does. The ratio is the diagnostic: cloth
+   * should answer a drape mostly in the first column.
+   */
+  _shearReport() {
+    const V = this.asm.verts;
+    let gN = 0, gMax = 0, gSum = 0, bN = 0, bMax = 0, bSum = 0;
+    for (const c of this.stretch) {
+      const a = V[c.a], b = V[c.b];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+      const e = Math.max(0, (L - c.rest) / c.rest);
+      if ((c.bias || 0) > 0.5) { bN++; bSum += e; if (e > bMax) bMax = e; }
+      else { gN++; gSum += e; if (e > gMax) gMax = e; }
+    }
+    return {
+      grainAware: !!this.grainAware,
+      biasEdgesPct: +(100 * bN / Math.max(1, gN + bN)).toFixed(0),
+      grainPct: +(100 * gMax).toFixed(2),
+      shearPct: +(100 * bMax).toFixed(2),
+      meanGrainPct: +(100 * gSum / Math.max(1, gN)).toFixed(3),
+      meanShearPct: +(100 * bSum / Math.max(1, bN)).toFixed(3),
     };
   }
 

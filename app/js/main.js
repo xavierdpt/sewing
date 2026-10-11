@@ -16,9 +16,9 @@ import { makePattern } from './panels.js';
 import { patternSVG } from './patternsvg.js';
 import { exportPatternJSON, importPatternJSON, sew, drape, fitField, fitReport,
   sewFlat } from './patternio.js';
-import { Cloth, BodyCollider, FABRICS } from './cloth.js';
-import { annulusPattern } from './testpieces.js';
-import { neckFrame, floorOf } from './droptest.js';
+import { Cloth, BodyCollider, FABRICS, rigidityOf } from './cloth.js';
+import { annulusPattern, rectanglePattern } from './testpieces.js';
+import { neckFrame, floorOf, accordion, besideTheBody, dropOutcome } from './droptest.js';
 import { flaredSkirtPattern, placeSkirt, hemProfile, assemblyReport,
   waistRing } from './skirt.js';
 import { layOut, weldStitched } from './assemble.js';
@@ -152,7 +152,15 @@ const params = {
   skirtPanels: 4, skirtHemCm: 160, skirtLengthCm: 55, skirtGather: 1.0,
   skirtEaseCm: 1.0, skirtEdge: 3.0,
   // assembling from separate pieces
+  // the accordion drop: a pleated strip, dropped to see whether the heap it
+  // lands in has any thickness
+  accWidthCm: 20, accLengthCm: 60, accPleatCm: 10, accGapCm: 1.2, accAngleDeg: 45,
+  accEdge: 2.0, accDropCm: 10,
   standoffCm: 6, stitchSeconds: 2.5, pinWaist: true,
+  // How far from the body's waist LEVEL the top ring may be and still have a
+  // waistband pinned to it. Beyond this there is nothing to pin to and the
+  // garment falls instead -- see waistPinReach().
+  waistPinReachCm: 10,
   // Sewing by hand (docs/15-manual-sewing.md). `stepCm` and `stepDeg` are how
   // far one press of a transform button moves the selection.
   stepCm: 1, stepDeg: 5, weldTolCm: 0.25,
@@ -217,9 +225,28 @@ let seamLines = null;
 let makehuman = null;      // cached MeshSurface
 
 const busy = document.getElementById('busy');
+/**
+ * Run something slow with the busy overlay up.
+ *
+ * The work is deferred so the overlay gets painted first -- rAF, then a
+ * timeout, is what reliably puts a paint between the two in a real browser.
+ * But headless Chrome never fires rAF (see `__pump`), so under
+ * `tools/viewshot.py` the rAF path meant the work NEVER RAN: a scripted
+ * `startDrop()` returned cleanly, built nothing, and left `sim` null, so
+ * every headless check of a drop was measuring an empty scene. Hence the
+ * race: whichever of the two fires first does the work, once.
+ */
 const withBusy = (label, fn) => {
   busy.textContent = label; busy.style.display = 'grid';
-  requestAnimationFrame(() => { setTimeout(() => { try { fn(); } finally { busy.style.display = 'none'; } }, 0); });
+  let ran = false;
+  const go = () => {
+    if (ran) return;
+    ran = true;
+    try { fn(); } finally { busy.style.display = 'none'; }
+  };
+  requestAnimationFrame(() => { setTimeout(go, 0); });
+  // the fallback, for any context where rAF does not tick
+  setTimeout(go, 50);
 };
 
 // --------------------------------------------------------------- surfaces
@@ -460,6 +487,17 @@ function startDrop() {
       floorY: floorOf(surface),
     });
     sim.pattern = pattern;
+    // What was dropped, kept on the sim so the settle can say what it was
+    // measuring. `holeIds`/`hemIds` are what dropOutcome needs to read the
+    // verdict off the mesh later, and `neck` is the ring the slip is measured
+    // against -- all three are known here and nowhere else.
+    sim.drop = {
+      kind: 'disc',
+      neck,
+      holeIds: pattern.panels[0].hole.slice(),
+      hemIds: pattern.panels[0].loop.slice(),
+      pattern,
+    };
     // clearShell() first: it nulls `asm`, so assigning the disc before calling
     // it would throw the disc away and leave an empty scene.
     clearShell();
@@ -470,8 +508,130 @@ function startDrop() {
       + `${pattern.meta.holeCircumferenceCm} cm) against a ${neck.girthCm.toFixed(1)} cm neck; `
       + `${pattern.panels[0].tris.length} triangles, ${garmentAsm.verts.length} vertices, `
       + `${sim.weightG.toFixed(0)} g of ${params.fabric}`);
+    tlog('drop-start', phaseMetrics({
+      test: 'disc',
+      holeRcm: params.holeR,
+      discRcm: params.discR,
+      edgeCm: params.discEdge,
+      dropCm: params.dropCm,
+      holeCircumferenceCm: pattern.meta.holeCircumferenceCm ?? null,
+      neckGirthCm: +neck.girthCm.toFixed(2),
+      weightG: +sim.weightG.toFixed(1),
+      selfCollision: params.selfCollision,
+      substeps: params.substeps,
+    }));
     updateHUD();
   });
+}
+
+/**
+ * Drop a pleated strip and watch the heap it lands in.
+ *
+ * The question is thickness. Six layers of cloth on the floor are six layers
+ * thick -- the cloth's own thickness plus the air each fold traps -- and a
+ * solver without self-collision puts them all in the same plane. Measured
+ * headlessly (`node tools/accordion.mjs`): 1.8 cm of stack with
+ * self-collision on and 0.1 cm with it off, against 6 x 0.4 cm of contact
+ * distance the solver was given.
+ */
+function startAccordion() {
+  withBusy('folding the strip…', () => {
+    const floorY = floorOf(surface);
+    const pattern = rectanglePattern({
+      width: params.accWidthCm, height: params.accLengthCm, edge: params.accEdge,
+    });
+    const garmentAsm = accordion(pattern, {
+      pleatCm: params.accPleatCm,
+      gapCm: params.accGapCm,
+      pleatAngleDeg: params.accAngleDeg,
+      y0: floorY + params.accDropCm,
+      // on the floor beside the figure: this test is cloth against cloth
+      center: besideTheBody(surface, params.accWidthCm),
+    });
+    sim = new Cloth(garmentAsm, surface, {
+      fabric: params.fabric,
+      friction: params.friction,
+      substeps: params.substeps,
+      // the whole point of this test
+      selfCollision: true,
+      terminalCmPerSec: params.terminalCmPerSec,
+      internalDamping: params.internalDamping > 0 ? params.internalDamping : null,
+      floorY,
+    });
+    sim.pattern = pattern;
+    sim.drop = { kind: 'accordion' };
+    clearShell();
+    asm = garmentAsm;
+    loadedPattern = pattern;
+    loadedName = `accordion-${params.accWidthCm}x${params.accLengthCm}`;
+    buildClothMesh();
+    playing = true;
+    const layers = Math.max(1, Math.round(params.accLengthCm / params.accPleatCm));
+    console.log(`accordion: ${layers} layers of ${params.accPleatCm} cm, `
+      + `${garmentAsm.verts.length} vertices, ${sim.weightG.toFixed(0)} g of `
+      + `${params.fabric}. A settled heap should be about `
+      + `${(layers * sim.opts.clothThickness).toFixed(1)} cm tall.`);
+    tlog('accordion-start', phaseMetrics({
+      test: 'accordion',
+      widthCm: params.accWidthCm,
+      lengthCm: params.accLengthCm,
+      pleatCm: params.accPleatCm,
+      gapCm: params.accGapCm,
+      pleatAngleDeg: params.accAngleDeg,
+      ...(garmentAsm.fold || {}),
+      edgeCm: params.accEdge,
+      dropCm: params.accDropCm,
+      layers,
+      oneLayerCm: sim.opts.clothThickness,
+      expectedCm: +(layers * sim.opts.clothThickness).toFixed(2),
+      weightG: +sim.weightG.toFixed(1),
+      selfCollision: true,
+      substeps: params.substeps,
+    }));
+    updateHUD();
+  });
+}
+
+/**
+ * The two test pieces, as patterns.
+ *
+ * They are drafted by the same generators the drop tests use, so what goes on
+ * the cutting table is exactly the piece that gets dropped -- a disc with a
+ * hole is a circular yoke, and a pleated strip is a pleated strip. Either can
+ * then be darted, printed, sewn to something else, or saved.
+ */
+function discPattern() {
+  return annulusPattern({
+    innerR: params.holeR, outerR: params.discR, edge: params.discEdge,
+  });
+}
+
+function accordionPattern() {
+  return rectanglePattern({
+    width: params.accWidthCm, height: params.accLengthCm, edge: params.accEdge,
+  });
+}
+
+/** Put a pattern in hand and lay it on the cutting table. */
+function putOnTable(pattern, name) {
+  loadedPattern = pattern;
+  loadedName = name;
+  openTable();
+}
+
+/** How tall the heap on the floor is, which is what the accordion test asks. */
+function stackReport() {
+  if (!sim || !asm) return null;
+  const floorY = floorOf(surface);
+  const ys = asm.verts.map((p) => p[1]);
+  const layers = Math.max(1, Math.round(params.accLengthCm / params.accPleatCm));
+  return {
+    layers,
+    stackCm: +(Math.max(...ys) - floorY).toFixed(2),
+    oneLayerCm: sim.opts.clothThickness,
+    expectedCm: +(layers * sim.opts.clothThickness).toFixed(2),
+    rmsCmPerSec: +sim.rmsSpeed().toFixed(2),
+  };
 }
 
 /**
@@ -789,6 +949,21 @@ function pauseSewing(why = 'stopped') {
 }
 
 /** Phase 2 -> 3: weld the closed seams and switch gravity on. */
+/**
+ * How far the ring that would be pinned is from the body's own waist.
+ *
+ * Vertical distance, not distance to the skin: a waistband sits at the waist
+ * LEVEL and may be a good handspan out from it on a gathered skirt, so the
+ * radial gap says nothing. Being 20 cm up in the air does.
+ */
+function waistPinReach(target, ids) {
+  if (!ids || !ids.length) return { onBody: false, offCm: Infinity };
+  const yRing = ids.reduce((a, i) => a + target.verts[i][1], 0) / ids.length;
+  const yWaist = surface.point(0, surface.landmarkV('waist'))[1];
+  const offCm = Math.abs(yRing - yWaist);
+  return { onBody: offCm <= params.waistPinReachCm, offCm };
+}
+
 function finishAssembly() {
   if (!assembling || assembling.phase === 'falling') return;
   const { pattern, laid } = assembling;
@@ -848,11 +1023,27 @@ function finishAssembly() {
   });
   if (welded.openStitches.length) next.stitchStrength = 1;
   welded.velocities.forEach((v, i) => { next.vel[i] = v; });
-  if (params.pinWaist && welded.asm.meta.waistIds.length) {
-    for (const i of welded.asm.meta.waistIds) {
+  // A waistband holds the garment ON THE BODY. Pinning the top ring wherever
+  // the pieces happened to be arranged is not a waistband, it is a hook in
+  // mid-air: arrange a piece 25 cm above the figure, sew it and press X, and
+  // the garment stays up there and crumples into itself under its own
+  // weight, which is exactly what it should do when hung from its waist --
+  // and not at all what pressing "drop" is asking for.
+  //
+  // Measured with `node tools/trace.mjs --above 25`: welded at a top edge of
+  // 19.8 cm, the pinned version ends the drape at 19.9 cm, having gone
+  // nowhere; with the pin skipped it falls to -5.0 cm and lands on the body.
+  const waistIds = welded.asm.meta.waistIds;
+  const reach = waistPinReach(welded.asm, waistIds);
+  if (params.pinWaist && waistIds.length && reach.onBody) {
+    for (const i of waistIds) {
       welded.asm.pinned[i] = true;
       next.invMass[i] = 0;
     }
+  } else if (params.pinWaist && waistIds.length) {
+    console.warn(`the waist ring is ${reach.offCm.toFixed(1)} cm from the body's waist`
+      + ' -- there is nothing there to pin a waistband to, so it falls instead.'
+      + ' Move the pieces onto the body before X, or turn the waistband off.');
   }
   next.pattern = pattern;
   sim = next;
@@ -1559,11 +1750,62 @@ function phaseMetrics(extra = {}) {
       playing,
       widestSeamGapCm: +sim.maxStitchGap().toFixed(3),
       feedLeftCm: +sim.remainingFeedCm().toFixed(2),
-      fabric: params.fabric,
+      // The fabric the CLOTH was built from, not the one the dropdown is
+      // showing now. Those are the same thing only until someone changes the
+      // dropdown while a drop is still falling, and then this event gets
+      // stamped with a fabric that never touched the simulation: a settle in
+      // the log read `interfaced twill` over a 13.7 g silk disc, and another
+      // read `denim` over a cotton jersey. Every number here comes from the
+      // sim, so the label has to as well.
+      fabric: sim.opts.fabric ?? params.fabric,
+      // Whether the solver in this tab is the grain-aware one, and how hard
+      // the bias is. Without this a run that shows no change is ambiguous
+      // between "the shear mode does nothing" and "the page is running
+      // yesterday's modules out of the browser cache", and three drops were
+      // logged before anyone could tell which. A config that changes the
+      // physics belongs in every event, not in a release note.
+      grainAware: !!sim.grainAware,
+      biasCompliance: sim.opts.biasCompliance,
+      biasStrainFactor: sim.opts.biasStrainFactor,
+      // Which thickness model this tab is running. 'slab' holds the cloth's
+      // SURFACES apart (vertex-triangle and edge-edge); 'vertex' only pushes
+      // vertex pairs apart and lets folds cross between them. Without this in
+      // the event, a run that looks unchanged is ambiguous between the model
+      // doing nothing and the browser serving cached modules.
+      selfCollisionMode: sim.opts.selfCollisionMode,
+      clothThicknessCm: sim.opts.clothThickness,
+      selfCellCm: sim.selfCellUsed ? +sim.selfCellUsed.toFixed(2) : null,
       ...extra,
     };
   } catch (e) {
     return { metricsError: String(e && e.message || e), ...extra };
+  }
+}
+
+/**
+ * The drop tests' own phase boundary: the moment the cloth stops moving.
+ *
+ * The drop test had no telemetry at all until now -- its numbers went to
+ * `console.table` and died with the tab, which is why two runs (silk habotai
+ * and interfaced twill) left nothing but a `session-start` in the log. The
+ * interesting measurement is not the release, it is where the cloth ENDED UP,
+ * so this is called from the settle test in the render loop.
+ *
+ * The verdict comes from `dropOutcome`, the same function `dropDisc` uses
+ * headlessly, so `restingAt` and `slipCm` here are comparable with
+ * `tools/trace.mjs` rather than merely similar to it.
+ */
+function logDropSettled(outcome) {
+  if (!sim || !sim.drop || sim.drop.logged) return;
+  sim.drop.logged = true;
+  try {
+    const extra = sim.drop.kind === 'accordion'
+      ? { test: 'accordion', ...(stackReport() || {}), ...sim.selfOverlaps() }
+      : { test: 'disc', ...dropOutcome(sim, surface, sim.drop) };
+    tlog(`${sim.drop.kind === 'accordion' ? 'accordion' : 'drop'}-${outcome}`,
+      phaseMetrics({ ...extra, healthy: sim.healthy() }));
+  } catch (e) {
+    tlog(`${sim.drop.kind}-${outcome}`, { outcomeError: String(e && e.message || e) });
   }
 }
 
@@ -2071,33 +2313,78 @@ fFiles.add({ i: importPatternFile }, 'i').name('load a pattern and try it on [I]
 fFiles.add({ p: exportPattern }, 'p').name('print the pattern SVG [P]');
 fFiles.add({ e: exportOBJ }, 'e').name('export the garment OBJ [E]');
 
+// ------------------------------------------------- the two drop tests
+//
+// Two pieces, two questions, two dialogs. The disc asks whether cloth stays
+// ON a body; the accordion asks whether cloth has THICKNESS. The cloth
+// settings they share -- fabric, friction, substeps, drag -- are in a dialog
+// of their own, so changing the fabric changes it for both and there is only
+// one place to look for it.
+//
+// Both pieces are ordinary pattern pieces, and each dialog can put its piece
+// on the cutting table: a disc with a hole in it is a circular yoke, and a
+// pleated strip is a pleated strip. Nothing about them is special to the
+// test except that the test drops them.
+
+const clothDialog = dialogGUI({
+  id: 'cloth', label: 'cloth', title: 'the cloth itself -- shared by every test', width: 430,
+});
+const fCloth = clothDialog.gui;
+fCloth.add(params, 'fabric', Object.keys(FABRICS)).name('fabric')
+  .onChange((v) => {
+    const f = FABRICS[v];
+    console.log(`${v}: ${f.gsm} gsm, bending length ${f.bendLengthCm} cm `
+      + `(flexural rigidity ${rigidityOf(f.gsm, f.bendLengthCm).toFixed(0)} dyn cm), `
+      + `friction mu ${f.friction}`);
+  });
+fCloth.add(params, 'friction', 0, 1, 0.05).name('friction mu');
+fCloth.add(params, 'internalDamping', 0, 1, 0.05).name('internal damping (0 = fabric)');
+fCloth.add(params, 'terminalCmPerSec', 0, 400, 10).name('air drag: terminal cm/s');
+fCloth.add(params, 'substeps', 4, 24, 1).name('substeps / frame');
+fCloth.add(params, 'selfCollision').name('self-collision');
+// The short name is the one that fits: a lil-gui label wide enough to say
+// "the body pokes through without it" pushes its own checkbox off the panel.
+fCloth.add(params, 'edgeCollision').name('collide edge midpoints')
+  .domElement.title = 'off: the body pokes through the cloth between vertices';
+fCloth.add(params, 'slowMo', 0.1, 1, 0.1).name('slow motion');
+fCloth.add(params, 'clothColour', ['stretch', 'panel', 'selection', 'contact', 'gap', 'plain'])
+  .name('colour by').onChange(updateClothMesh);
+fCloth.add({ p: () => { playing = !playing; } }, 'p').name('pause / resume [space]');
+fCloth.add({ s: () => { if (sim) { sim.step(1 / 60); updateClothMesh(); updateHUD(); } } }, 's')
+  .name('one frame');
+fCloth.add({ r: () => { if (sim) console.table(sim.report()); } }, 'r').name('report');
+fCloth.add({ x: clearDrop }, 'x').name('clear');
+
 const dropDialog = dialogGUI({
-  id: 'droptest', label: 'drop test', title: 'drop test -- real cloth physics', width: 430,
+  id: 'droptest', label: 'drop: disc', title: 'drop test -- the disc with a hole', width: 430,
 });
 const fDrop = dropDialog.gui;
 fDrop.add(params, 'holeR', 3, 24, 0.5).name('hole radius cm');
 fDrop.add(params, 'discR', 12, 60, 1).name('disc radius cm');
 fDrop.add(params, 'discEdge', 1.2, 5, 0.1).name('triangle edge cm');
 fDrop.add(params, 'dropCm', 0, 20, 1).name('release height cm');
-fDrop.add(params, 'fabric', Object.keys(FABRICS)).name('fabric');
-fDrop.add(params, 'friction', 0, 1, 0.05).name('friction mu');
-fDrop.add(params, 'internalDamping', 0, 1, 0.05).name('internal damping (0 = fabric)');
-fDrop.add(params, 'terminalCmPerSec', 0, 400, 10).name('air drag: terminal cm/s');
-fDrop.add(params, 'substeps', 4, 24, 1).name('substeps / frame');
-fDrop.add(params, 'selfCollision').name('self-collision');
-// The short name is the one that fits: a lil-gui label wide enough to say
-// "the body pokes through without it" pushes its own checkbox off the panel.
-fDrop.add(params, 'edgeCollision').name('collide edge midpoints')
-  .domElement.title = 'off: the body pokes through the cloth between vertices';
-fDrop.add(params, 'slowMo', 0.1, 1, 0.1).name('slow motion');
-fDrop.add(params, 'clothColour', ['stretch', 'panel', 'selection', 'contact', 'gap', 'plain'])
-  .name('colour by').onChange(updateClothMesh);
 fDrop.add({ d: startDrop }, 'd').name('drop it [D]');
-fDrop.add({ p: () => { playing = !playing; } }, 'p').name('pause / resume [space]');
-fDrop.add({ s: () => { if (sim) { sim.step(1 / 60); updateClothMesh(); updateHUD(); } } }, 's')
-  .name('one frame');
-fDrop.add({ r: () => { if (sim) console.table(sim.report()); } }, 'r').name('report');
-fDrop.add({ x: clearDrop }, 'x').name('clear');
+fDrop.add({ t: () => putOnTable(discPattern(), `disc-${params.holeR}x${params.discR}`) }, 't')
+  .name('cut it as a pattern piece instead');
+
+const accDialog = dialogGUI({
+  id: 'accordion', label: 'drop: accordion', width: 430,
+  title: 'drop test -- the pleated strip, for thickness',
+});
+const fAcc = accDialog.gui;
+fAcc.add(params, 'accWidthCm', 5, 60, 1).name('strip width cm');
+fAcc.add(params, 'accLengthCm', 20, 200, 5).name('strip length cm');
+fAcc.add(params, 'accPleatCm', 3, 30, 1).name('pleat (one layer) cm');
+fAcc.add(params, 'accGapCm', 0.4, 6, 0.1).name('crease diameter cm (fold tightness)');
+fAcc.add(params, 'accAngleDeg', 0, 80, 5).name('pleat opens at this angle, deg');
+fAcc.add(params, 'accEdge', 1.0, 4, 0.1).name('triangle edge cm');
+fAcc.add(params, 'accDropCm', 0, 40, 1).name('release height cm');
+fAcc.add({ a: startAccordion }, 'a').name('fold it and drop it [A]');
+fAcc.add({ m: () => { const r = stackReport(); if (r) console.table([r]); } }, 'm')
+  .name('measure the heap');
+fAcc.add({ t: () => putOnTable(accordionPattern(),
+  `strip-${params.accWidthCm}x${params.accLengthCm}`) }, 't')
+  .name('cut it as a pattern piece instead');
 
 const fSkirt = gui.addFolder('flare and gathers -- pattern pieces assembled');
 fSkirt.add(params, 'skirtPanels', 2, 8, 1).name('panels (2, 4, 6, 8)');
@@ -2112,6 +2399,8 @@ fSkirt.add({ w: toggleSewing }, 'w').name('2. sew / stop the seams [W]');
 fSkirt.add(params, 'standoffCm', 2, 20, 1).name('arrange this far out, cm');
 fSkirt.add(params, 'stitchSeconds', 0.5, 6, 0.5).name('seconds to sew the seams');
 fSkirt.add(params, 'pinWaist').name('waistband (off = it slides off)');
+fSkirt.add(params, 'waistPinReachCm', 2, 40, 1)
+  .name('waistband reaches this far, cm');
 fSkirt.add({ f: () => { if (sim && asm.meta && asm.meta.skirt) console.table(hemProfile(asm)); } },
   'f').name('count the folds');
 fSkirt.add({ a: () => { if (loadedPattern) console.table(assemblyReport(loadedPattern)); } },
@@ -2586,6 +2875,7 @@ addEventListener('keydown', (ev) => {
     if (sim) playing = !playing; else doRelax(20);
   }
   else if (k === 'd') startDrop();
+  else if (k === 'a' && !assembling) startAccordion();
   else if (k === 'k') startSkirt();
   else if (k === 'j') startAssembly();
   else if (k === 'w') toggleSewing();
@@ -2619,53 +2909,80 @@ frameScene(true);
 rebuildMeasurementGUI();
 updateHUD();
 
+/**
+ * One frame of simulation: step, push the geometry at the GPU, and decide
+ * whether the cloth has stopped moving.
+ *
+ * This is a function and not the body of the render loop because `__pump`
+ * also has to run it. The pump was a second copy of the loop that stepped and
+ * redrew but left OUT the healthy/settled test, so headless runs never
+ * stopped, never reported, and -- once the drop tests got telemetry -- would
+ * have logged nothing, while the same drop in a browser logged a settle. That
+ * is rule 7 exactly: the two paths have to do the same thing, so there is now
+ * only one of them.
+ */
+function stepFrame() {
+  if (!(playing && sim)) return;
+  // A sewing pass: ramp the thread tension, then stop and report.
+  //
+  // The ramp is on the FORCE LIMIT now, not on the correction -- the same
+  // thread pulled progressively harder, which is what drawing a seam closed
+  // by hand is. And the end of a pass returns to arranging rather than
+  // welding the whole garment, so the next pieces can be chosen: that is
+  // what makes the assembly progressive.
+  // Sewing is a constant-rate feed now (cloth.js `_feedStitches`), so there
+  // is no ramp to drive here. It stops itself once every seam being sewn has
+  // had its whole gap taken up and the cloth has caught up with the feed --
+  // or the moment W is pressed again, whichever comes first.
+  if (assembling && assembling.phase === 'stitching') {
+    if (!sim.isSewing() && sim.rmsSpeed() < 1.0) pauseSewing('sewn');
+  }
+  sim.step((1 / 60) * params.slowMo);
+  updateClothMesh();
+  updateStitchLines();
+  if (!sim.healthy()) {
+    playing = false;
+    logDropSettled('blew-up');
+    console.error('the cloth solver blew up; try more substeps or a smaller triangle');
+  } else if (sim.rmsSpeed() < 0.3 && sim.time > 0.5
+    && !(assembling && assembling.phase === 'stitching')) {
+    if (assembling && assembling.phase === 'falling' && !assembling.previewLogged) {
+      assembling.previewLogged = true;
+      tlog('preview-settled', phaseMetrics({}));
+    }
+    // A sewing pass is quasi-static by design -- the cloth creeps along at
+    // the feed rate, which is well under this threshold -- so the
+    // settled-and-stop test has to leave it alone or it would pause the
+    // sewing on its first frame.
+    playing = false;
+    logDropSettled('settled');
+    console.table(sim.report());
+    updateHUD();
+  }
+}
+
 (function loop() {
   requestAnimationFrame(loop);
   // The cloth is stepped here, in the render loop, because the point of the
   // test mode is to WATCH it fall. It stops itself once the cloth is still,
   // so a settled drape costs nothing.
-  if (playing && sim) {
-    // A sewing pass: ramp the thread tension, then stop and report.
-    //
-    // The ramp is on the FORCE LIMIT now, not on the correction -- the same
-    // thread pulled progressively harder, which is what drawing a seam closed
-    // by hand is. And the end of a pass returns to arranging rather than
-    // welding the whole garment, so the next pieces can be chosen: that is
-    // what makes the assembly progressive.
-    // Sewing is a constant-rate feed now (cloth.js `_feedStitches`), so there
-    // is no ramp to drive here. It stops itself once every seam being sewn has
-    // had its whole gap taken up and the cloth has caught up with the feed --
-    // or the moment W is pressed again, whichever comes first.
-    if (assembling && assembling.phase === 'stitching') {
-      if (!sim.isSewing() && sim.rmsSpeed() < 1.0) pauseSewing('sewn');
-    }
-    sim.step((1 / 60) * params.slowMo);
-    updateClothMesh();
-    updateStitchLines();
-    if (!sim.healthy()) {
-      playing = false;
-      console.error('the cloth solver blew up; try more substeps or a smaller triangle');
-    } else if (sim.rmsSpeed() < 0.3 && sim.time > 0.5
-      && !(assembling && assembling.phase === 'stitching')) {
-      if (assembling && assembling.phase === 'falling' && !assembling.previewLogged) {
-        assembling.previewLogged = true;
-        tlog('preview-settled', phaseMetrics({}));
-      }
-      // A sewing pass is quasi-static by design -- the cloth creeps along at
-      // the feed rate, which is well under this threshold -- so the
-      // settled-and-stop test has to leave it alone or it would pause the
-      // sewing on its first frame.
-      playing = false;
-      console.table(sim.report());
-      updateHUD();
-    }
-  }
+  stepFrame();
   controls.update();
   renderer.render(scene, camera);
 })();
 
 // expose for console poking
-Object.assign(globalThis, { THREE, scene, torso, get asm() { return asm; }, params, relax, quantize, settle, buildGridShell, LIBRARY });
+Object.assign(globalThis, {
+  THREE, scene, torso, params, relax, quantize, settle, buildGridShell, LIBRARY,
+});
+// Live, not a snapshot. `Object.assign` with a getter in the literal CALLS
+// the getter and copies the value, so `globalThis.asm` used to be whatever
+// asm was at module-evaluation time -- null -- for the whole session.
+// defineProperty is the one that forwards.
+for (const [name, get] of [['asm', () => asm], ['sim', () => sim],
+  ['garment', () => garment]]) {
+  Object.defineProperty(globalThis, name, { get, configurable: true });
+}
 // A one-line summary of the hand-assembly state, for headless checks of the
 // viewer: what is selected, what is armed, and how far there is to go.
 globalThis.__dbg = () => (assembling ? JSON.stringify({
@@ -2685,16 +3002,14 @@ globalThis.__dbg = () => (assembling ? JSON.stringify({
 // it shows what the viewer would show.
 globalThis.__pump = (n = 1) => {
   for (let i = 0; i < n; i++) {
-    if (playing && sim) {
-      if (assembling && assembling.phase === 'stitching'
-        && !sim.isSewing() && sim.rmsSpeed() < 1.0) pauseSewing('sewn');
-      sim.step(1 / 60);
-      updateClothMesh();
-      updateStitchLines();
-    }
+    stepFrame();
     controls.update();
     renderer.render(scene, camera);
   }
 };
 Object.assign(globalThis, { renderer, camera, controls, frameScene });
+// Headless runs end by closing the tab, which is sooner than the 4 s
+// telemetry flush: without this a scripted drop measured everything and
+// posted none of it.
+globalThis.__flushTelemetry = flushTelemetry;
 globalThis.__sel = (ids) => setSelection(ids);
