@@ -111,6 +111,18 @@ function cantilever(fabric, { bend = null } = {}) {
   let s = 0;
   let bendLengthCm = null;
   let tipDropCm = 0;
+  // The 41.5 degree crossing lands BETWEEN two rows of vertices, and it has
+  // to be interpolated there rather than snapped to the row that straddles
+  // it. Snapping quantised the whole instrument to `edge/2`: every reading
+  // came back as an integer multiple of half a triangle, so at 1.5 cm
+  // triangles fabrics asking for bending lengths of 0.8, 1.1 and 1.4 cm all
+  // measured 0.75, and silk habotai measured 0.50 / 0.75 / 1.13 / 1.50 at
+  // edges 1.0 / 1.5 / 2.2 / 3.0 -- which is edge/2 every time and nothing to
+  // do with the silk. Every verdict this tool printed was that artifact,
+  // including a spurious "in range" for a fabric whose stiffness it could not
+  // resolve at all, and an "interfaced twill is 1.6x too stiff" that was
+  // thirteen rows of 0.75.
+  let prevS = 0, prevAngle = 0;
   for (let k = 1; k < mid.length; k++) {
     const a = mid[k - 1].p, b = mid[k].p;
     s += Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
@@ -118,7 +130,14 @@ function cantilever(fabric, { bend = null } = {}) {
     const dh = Math.hypot(b[0] - origin[0], b[2] - origin[2]);
     const angleDeg = Math.atan2(dy, Math.max(1e-9, dh)) / DEG;
     tipDropCm = dy;
-    if (bendLengthCm === null && angleDeg >= PEIRCE_DEG) bendLengthCm = s / 2;
+    if (bendLengthCm === null && angleDeg >= PEIRCE_DEG) {
+      const span = angleDeg - prevAngle;
+      const t = span > 1e-9
+        ? Math.max(0, Math.min(1, (PEIRCE_DEG - prevAngle) / span)) : 0;
+      bendLengthCm = (prevS + t * (s - prevS)) / 2;
+    }
+    prevS = s;
+    prevAngle = angleDeg;
   }
   const f = FABRICS[fabric];
   const wMgPerCm2 = f.gsm / 100;            // g/m2 -> mg/cm2
@@ -129,7 +148,7 @@ function cantilever(fabric, { bend = null } = {}) {
     // when the mesh is too coarse to resolve the 41.5 degree crossing.
     reachCm: +Math.hypot(tip[0] - origin[0], tip[2] - origin[2]).toFixed(2),
     rmsCmPerSec: +sim.rmsSpeed().toFixed(2),
-    bendLengthCm: bendLengthCm === null ? null : +bendLengthCm.toFixed(2),
+    bendLengthCm: bendLengthCm === null ? null : +bendLengthCm.toFixed(3),
     rigidityMgCm: bendLengthCm === null ? null
       : +(wMgPerCm2 * bendLengthCm ** 3).toFixed(0),
     tipDropCm: +tipDropCm.toFixed(1),

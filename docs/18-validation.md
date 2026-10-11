@@ -410,19 +410,46 @@ from 0.29 to 18.95 cm. And across meshes, silk habotai read 0.50 / 0.75 /
 **Build.** Interpolate the 41.5° chord crossing *within* a triangle row
 instead of snapping to the row boundary.
 
-**Acceptance criteria.**
-- The scan's measured column tracks the asked column monotonically and
-  continuously, with no repeated values.
-- Silk habotai's bending length is mesh-independent to within 5 % over a 3×
-  refinement (Step 1 checks this).
-- **Re-run all seven presets afterwards and rewrite the verdicts.** Several
-  are expected to move in both directions. Specifically withdraw:
-  - silk habotai "1.2× too limp" / "in range" / "1.8× too limp" — all three
-    were `edge/2` at different edges;
-  - interfaced twill "1.6× too stiff" at 9.76 cm — that was 13 rows × 0.75,
-    and its configured bend of 5.0 cm is the top of its published 4–6 range.
-  - Any claim that the twill is "stiffer than office paper" or comparable to a
-    0.05–0.1 mm steel shim. That rested on the inflated reading.
+**DONE 2026-10-11** (was [19-todo.md](19-todo.md) item 3). The crossing is now
+interpolated linearly in chord angle between the two rows that straddle it.
+
+- ✅ *Continuity.* The `--scan` column is monotone with no repeats:
+  0.412 / 0.496 / 0.613 / 0.780 / 1.739 / 3.701 / 9.607 for asks of
+  0.8 / 1.1 / 1.4 / 1.7 / 2.3 / 3.3 / 5.0 — against the old
+  0.75 / 0.75 / 0.75 / 1.50 / 2.25 / 3.76 / 9.76.
+- ❌ *Mesh-independence.* **Fails, and the failure now belongs to the solver.**
+  Silk habotai measures 0.403 / 0.496 / 0.533 / 0.786 at edges
+  1.0 / 1.5 / 2.2 / 3.0 — a 1.95× spread over a 3× refinement, against the 5 %
+  the criterion asked for. It was exactly 3.0× before, i.e. pure quantisation;
+  what is left is sub-linear and real. See §6.8.
+- ✅ *Verdicts rewritten*, and **one earlier withdrawal was itself wrong**:
+
+| fabric | asked | measured | published | verdict |
+|---|---|---|---|---|
+| cotton poplin | 1.7 | 0.779 | 1.5–2.0 | 1.9× too limp |
+| linen | 2.3 | 1.72 | 2.0–2.6 | 1.2× too limp |
+| wool crepe | 1.9 | 1.111 | 1.6–2.2 | 1.4× too limp |
+| silk habotai | 1.1 | 0.496 | 0.9–1.4 | 1.8× too limp |
+| cotton jersey | 1.4 | 0.636 | 1.1–1.8 | 1.7× too limp |
+| denim | 3.3 | 3.692 | 2.8–3.8 | **in range** |
+| interfaced twill | 5.0 | 9.587 | 4.0–6.0 | 1.6× too stiff |
+
+**Withdrawn, correctly:** silk habotai's "1.2× too limp" / "in range" /
+"1.8× too limp" readings of 0.75 / 1.13 — those were `edge/2` at different
+edges, and the honest figure at edge 1.5 is 0.496, i.e. **1.8× too limp**.
+
+**Un-withdrawn:** interfaced twill's "1.6× too stiff". Its old 9.76 cm
+interpolates to **9.587 cm** — essentially the same number, because
+quantisation only bites where the crossing falls inside the first row or two.
+At thirteen rows out it is negligible. So that verdict stands, and the
+withdrawal of it in this document's first draft was wrong.
+
+**Which changes the sheet-metal conclusion rather than retracting it.** The
+preset asks for 5.0 cm, inside its published 4–6 range; the solver *delivers*
+9.59 cm, which is in the thin-steel band (8.4 cm for a 0.05 mm shim, 13.4 cm
+for 0.1 mm). So the metal look is real, and it is the **solver's calibration
+error**, not the preset's value. That is a better answer than either of the
+two I gave before.
 
 ---
 
@@ -779,6 +806,30 @@ document predicts. Confirm by halving `cell` and checking the figure scales,
 rather than treating it as a new contact bug — though the vertex-clean /
 edge-penetrating *pattern* is still rule 2's failure mode and worth keeping in
 the report.
+
+### 6.8 Bending is miscalibrated, and mesh-dependent
+**Found 2026-10-11, once the cantilever stopped quantising** (Step 3). Two
+separate defects in the same subsystem, both previously masked by the
+instrument:
+
+1. **Asked ≠ achieved, nonlinearly.** measured/asked across the presets:
+   0.46, 0.75, 0.58, 0.45, 0.45, 1.12, **1.92**. Limp cloths come out at
+   about 0.45× of the bending length they were given, stiff ones at up to
+   1.9×, crossing over near 3 cm. Six of the seven presets are now out of
+   their published range — five too limp, one too stiff — and only denim is
+   in. A single monotone correction on `BEND_SCALE` should move all seven,
+   because this is one curve, not seven fabrics.
+2. **Achieved depends on the mesh.** Silk habotai: 0.403 / 0.496 / 0.533 /
+   0.786 cm at edges 1.0 / 1.5 / 2.2 / 3.0. Refining the mesh makes the cloth
+   **limper** — a ~2× swing over a 3× refinement. The hinge compliance is
+   `g.area / (BEND_SCALE · rigidity · g.len²)`, so the normalisation against
+   element size is the thing to check.
+
+(1) explains the interfaced twill reading as sheet metal on screen, and (2)
+means no bending verdict is meaningful without stating the edge length it was
+measured at. Both are prerequisites for Step 4 and Step 6: fitting shear or
+plasticity on top of a bending model that is 2× out and mesh-dependent would
+fit the error.
 
 ### 6.7 A run with `substeps: 4` slid off the body
 Wool crepe, `slipCm 96.97`, `hemYcm −59.29`, `contactPct 63.9`,
