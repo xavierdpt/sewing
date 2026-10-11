@@ -122,10 +122,12 @@ function cantilever(fabric, { bend = null } = {}) {
   // including a spurious "in range" for a fabric whose stiffness it could not
   // resolve at all, and an "interfaced twill is 1.6x too stiff" that was
   // thirteen rows of 0.75.
-  let prevS = 0, prevAngle = 0;
+  let prevS = 0, prevAngle = 0, pitchCm = 0;
   for (let k = 1; k < mid.length; k++) {
     const a = mid[k - 1].p, b = mid[k].p;
-    s += Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    const ds = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    if (k === 1) pitchCm = ds;
+    s += ds;
     const dy = origin[1] - b[1];
     const dh = Math.hypot(b[0] - origin[0], b[2] - origin[2]);
     const angleDeg = Math.atan2(dy, Math.max(1e-9, dh)) / DEG;
@@ -142,7 +144,21 @@ function cantilever(fabric, { bend = null } = {}) {
   const f = FABRICS[fabric];
   const wMgPerCm2 = f.gsm / 100;            // g/m2 -> mg/cm2
   const tip = mid[mid.length - 1].p;
+  // HOW MANY ROWS THE CROSSING SPANS -- the resolution of this reading, which
+  // belongs beside it. Interpolating the 41.5 degree crossing removed the
+  // quantisation to edge/2, but a crossing that falls inside the FIRST row is
+  // still being extrapolated across a single element: the answer then depends
+  // on where that one vertex sits, not on the cloth. A limp silk on a 30 cm
+  // overhang crosses within the first row at every edge from 3.0 down to 1.0,
+  // which is why its measured length kept tracking the mesh. Under about two
+  // rows, the number is a bound, not a measurement -- so say so rather than
+  // print it with a verdict attached.
+  const rows = bendLengthCm === null ? null
+    : (2 * bendLengthCm) / Math.max(1e-9, pitchCm);
   return {
+    rowsToCrossing: rows === null ? null : +rows.toFixed(1),
+    resolved: rows === null ? false : rows >= 2,
+    rowPitchCm: +pitchCm.toFixed(2),
     // How far the tip reaches out from the clamp: a second, smooth reading of
     // the same stiffness, with no threshold in it, so it still says something
     // when the mesh is too coarse to resolve the 41.5 degree crossing.
@@ -164,6 +180,7 @@ if (scan) {
     rows.push({
       'asked cm': ask,
       'measured cm': r.bendLengthCm ?? `> ${(overhangCm / 2).toFixed(0)}`,
+      rows: r.rowsToCrossing,
       'reach cm': r.reachCm,
       'rms cm/s': r.rmsCmPerSec,
       settled: r.settled,
@@ -181,14 +198,17 @@ for (const name of names) {
   const r = cantilever(name);
   const want = PUBLISHED[name];
   const verdict = r.bendLengthCm === null ? 'did not reach 41.5 deg -- stiffer than paper'
-    : r.bendLengthCm < want[0] ? `${(want[0] / r.bendLengthCm).toFixed(1)}x too limp`
-      : r.bendLengthCm > want[1] ? `${(r.bendLengthCm / want[1]).toFixed(1)}x too stiff`
-        : 'in range';
+    : !r.resolved ? `UNRESOLVED: crossing inside ${r.rowsToCrossing} rows`
+      + ` -- use edge <= ${(r.bendLengthCm).toFixed(2)} cm`
+      : r.bendLengthCm < want[0] ? `${(want[0] / r.bendLengthCm).toFixed(1)}x too limp`
+        : r.bendLengthCm > want[1] ? `${(r.bendLengthCm / want[1]).toFixed(1)}x too stiff`
+          : 'in range';
   rows.push({
     fabric: name,
     gsm: FABRICS[name].gsm,
     'bend cm (asked)': FABRICS[name].bendLengthCm,
     'bending length cm': r.bendLengthCm ?? `> ${(overhangCm / 2).toFixed(0)}`,
+    rows: r.rowsToCrossing,
     'published cm': `${want[0]} - ${want[1]}`,
     'G mg cm': r.rigidityMgCm,
     'tip drop cm': r.tipDropCm,

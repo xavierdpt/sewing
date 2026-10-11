@@ -807,10 +807,56 @@ rather than treating it as a new contact bug — though the vertex-clean /
 edge-penetrating *pattern* is still rule 2's failure mode and worth keeping in
 the report.
 
+### 6.9 The cantilever is not the Peirce test
+**Found 2026-10-11, chasing §6.8.** `tools/fabric.mjs` clamps a **fixed**
+overhang and finds the arclength at which the chord from the clamp crosses
+41.5°. The Peirce test does the opposite: it slides the specimen out until
+**the tip** droops to 41.5°, and reports `c = L/2` for that overhang. The
+second quantity is a material property; the first is not, because the strip's
+whole shape depends on how much of it is hanging.
+
+Measured, silk habotai at edge 0.4, varying only the specimen length:
+
+| overhang | measured c | rows to crossing |
+|---|---|---|
+| 4 cm | no crossing | — |
+| 6 cm | **2.423** | 12.1 |
+| 10 cm | **1.204** | 6.0 |
+| 30 cm | **0.588** | 2.9 |
+
+A 4× spread from a parameter that should not appear in the answer, and the
+default is the worst of them: a 30 cm overhang on a ~1 cm bending length
+hangs nearly vertical, which is the least sensitive regime for a chord-angle
+threshold. Lab practice sizes the overhang to a couple of bending lengths —
+for these presets that is 2–10 cm, not 30.
+
+**Consequence: every bending verdict this project has recorded is conditioned
+on an arbitrary 30 cm overhang**, including the two that survived the
+quantisation fix. Denim's "in range" and interfaced twill's "1.6× too stiff"
+are withdrawn along with the rest — not because the readings were noisy, but
+because the quantity being read is not the one the published ranges describe.
+**And the sheet-metal conclusion goes with them, for the third time**: the
+twill's 9.587 cm at a 30 cm overhang cannot be compared with a 4–6 cm
+published range or with a steel shim's 8.4–13.4 cm until the instrument
+measures the same thing the literature does. What stands is the direct
+observation, which never used the cantilever: the twill drapes plate-like on
+the disc (2.9 % contact, 2.60 cm median gap, 17.5° chord against the silk's
+28.3°).
+
+**Fix:** bisect the overhang until the tip chord is 41.5°, then report
+`c = L/2`. Each trial is a short strip and therefore cheap. Keep the
+interpolation from Step 3 for locating the tip angle between rows, and keep
+`rowsToCrossing` as the resolution guard.
+
 ### 6.8 Bending is miscalibrated, and mesh-dependent
+**Superseded in large part by §6.9 — read that first.** The numbers below were
+taken at the default 30 cm overhang, which §6.9 shows is not a valid Peirce
+measurement, so the *absolute* calibration claims here are withdrawn. What
+survives is the shape of the problem: the achieved bending length varies with
+mesh and with specimen length in ways a material property must not.
+
 **Found 2026-10-11, once the cantilever stopped quantising** (Step 3). Two
-separate defects in the same subsystem, both previously masked by the
-instrument:
+apparent defects, both now known to be confounded by the instrument:
 
 1. **Asked ≠ achieved, nonlinearly.** measured/asked across the presets:
    0.46, 0.75, 0.58, 0.45, 0.45, 1.12, **1.92**. Limp cloths come out at
@@ -819,11 +865,23 @@ instrument:
    their published range — five too limp, one too stiff — and only denim is
    in. A single monotone correction on `BEND_SCALE` should move all seven,
    because this is one curve, not seven fabrics.
-2. **Achieved depends on the mesh.** Silk habotai: 0.403 / 0.496 / 0.533 /
-   0.786 cm at edges 1.0 / 1.5 / 2.2 / 3.0. Refining the mesh makes the cloth
-   **limper** — a ~2× swing over a 3× refinement. The hinge compliance is
-   `g.area / (BEND_SCALE · rigidity · g.len²)`, so the normalisation against
-   element size is the thing to check.
+2. **Achieved appears to depend on the mesh — but it is not the solver.**
+   Silk habotai: 0.403 / 0.496 / 0.533 / 0.786 cm at edges 1.0 / 1.5 / 2.2 /
+   3.0, and going finer, 0.470 at 0.6, 0.588 at 0.4, 0.442 at 0.25 — a
+   non-monotonic scatter that never converges. Three things were eliminated:
+   - **not solver convergence**: 3× the bend sweeps gives 0.403 → 0.403, and
+     3× the substeps 0.403 → 0.412;
+   - **not the hinge compliance formula**:
+     `g.area / (BEND_SCALE · rigidity · g.len²)` is the standard
+     `k = D·|e|²/A_e` form, which is mesh-independent for a regular mesh;
+   - **it is the instrument**, per §6.9, plus the resolution problem below.
+
+   At a 30 cm overhang the 41.5° crossing for a limp cloth falls **inside the
+   first row** at every edge from 3.0 down to 1.0 (`s* = 0.81 cm` against a
+   1.0 cm pitch), so the reading was tracking where one vertex sat. The tool
+   now reports `rowsToCrossing` and `rowPitchCm` and refuses to print a
+   stiffness verdict under two rows, saying `UNRESOLVED` and naming the edge
+   length that would resolve it. That guard is the lasting part of this entry.
 
 (1) explains the interfaced twill reading as sheet metal on screen, and (2)
 means no bending verdict is meaningful without stating the edge length it was

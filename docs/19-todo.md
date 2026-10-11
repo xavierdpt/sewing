@@ -17,42 +17,51 @@ record.
 
 ## Open
 
-- [ ] **Calibrate the bending model: asked vs achieved, and its mesh
-      dependence.** [18-validation.md](18-validation.md) §6.8. With the
-      cantilever no longer quantising, two defects are visible. Measured over
-      asked across the presets is 0.46, 0.75, 0.58, 0.45, 0.45, 1.12, 1.92 —
-      limp cloths come out at ~0.45× the bending length they were given and
-      stiff ones at up to 1.9×, crossing near 3 cm, leaving six of seven
-      presets outside their published range. And the achieved length depends
-      on the mesh: silk habotai reads 0.403 / 0.496 / 0.533 / 0.786 cm at
-      edges 1.0 / 1.5 / 2.2 / 3.0, so refining makes the cloth limper by ~2×
-      over a 3× refinement.
+- [ ] **Make the cantilever an actual Peirce test: bisect the overhang.**
+      [18-validation.md](18-validation.md) §6.9. The tool clamps a fixed
+      overhang and finds where along it the chord crosses 41.5°; the Peirce
+      test slides the specimen out until *the tip* reaches 41.5° and reports
+      `c = L/2`. Only the second is a material property. Measured on silk
+      habotai at edge 0.4, varying only the specimen length: no crossing at
+      4 cm, 2.423 at 6, 1.204 at 10, 0.588 at 30 — a 4× spread from a
+      parameter that must not appear in the answer, with the default at the
+      worst end.
 
-      *Do:* the hinge compliance is
-      `g.area / (BEND_SCALE · rigidity · g.len²)` — check that normalisation
-      against element size first, since a mesh-dependent stiffness will also
-      show up as an asked-vs-achieved error at whichever edge the calibration
-      was done at. Then re-fit `BEND_SCALE` against the published ranges with
-      `node tools/fabric.mjs --scan`, and confirm with an edge sweep.
+      *Do:* bisect the free length until the tip chord angle is 41.5°, then
+      report `c = L/2`. Each trial is a short strip and cheap. Keep the
+      within-row interpolation for locating the tip angle, and keep
+      `rowsToCrossing` as the resolution guard. A sensible bracket is
+      0.5–8× the asked bending length.
 
-      *Acceptance:* achieved bending length within 5 % over a 3× refinement,
-      and asked-vs-achieved within 10 % across the full 0.8–5.0 cm range.
-      Re-run all seven presets and record the verdicts in
-      [18-validation.md](18-validation.md) Step 3. Then re-run the gate: this
-      changes a tuned constant, so it needs a baseline (currently 276 pass /
-      2 fail) and a regression run.
+      *Acceptance:* the reported `c` is independent of the initial bracket and
+      of the specimen width, and mesh-independent to within 5 % over a 3×
+      refinement. Then re-run all seven presets and rewrite Step 3's table a
+      third time — and only then is §6.8's calibration question answerable.
 
-      *Why it is first:* bending is the only axis of the model nominally
-      calibrated against published values, and it is out by up to 1.9× and
-      mesh-dependent. Fitting shear (Step 4) or plasticity (Step 6) on top
-      would fit the error. It also explains the interfaced twill reading as
-      sheet metal: the preset asks for 5.0 cm, the solver delivers 9.59.
+      *Why it is first:* every bending verdict this project holds is
+      conditioned on an arbitrary 30 cm overhang, so the one axis of the model
+      that is nominally calibrated against published values currently has no
+      valid measurement at all. `BEND_SCALE` cannot be fitted against a
+      quantity the literature does not report.
 
 ---
 
 ## Done
 
 Removed from the queue and recorded in [18-validation.md](18-validation.md):
+
+- **Fix the cantilever readout so it stops quantising to `edge/2`** — done
+  2026-10-11, and it uncovered two deeper faults. The interpolation works: the
+  scan is monotone and repeat-free (0.412 … 9.607 against the old
+  0.75 / 0.75 / 0.75 / 1.50 …). The tool now also reports `rowsToCrossing`,
+  `rowPitchCm` and `resolved`, and refuses a stiffness verdict when the
+  crossing falls inside fewer than two rows — the limp presets were all in
+  that state at the default settings. But mesh-independence still fails and
+  does not converge (0.403 / 0.470 / 0.588 / 0.442 at edges 1.0 / 0.6 / 0.4 /
+  0.25), and the cause is §6.9: the test is not Peirce's, and its answer
+  depends on the specimen length. Carried as item 1. Recorded at
+  [18-validation.md](18-validation.md) Step 3, §6.8 and §6.9.
+
 
 - **Fix the cantilever readout so it stops quantising to `edge/2`** — done
   2026-10-11. The 41.5° crossing is interpolated within the row. The scan is
