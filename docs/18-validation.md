@@ -940,7 +940,7 @@ while the limiter reported itself converged; with the defaults inert it reads
 the wrong verdict appears at 4 substeps regardless — but the *measurement* of
 it only works on the grain split. One more reason for §8 decision 1.
 ### 6.8 Bending is miscalibrated, and mesh-dependent
-**State:** cause found 2026-10-11 — under-convergence, not normalisation; the fix is queue item 1
+**State:** done 2026-10-11 — cause and cost both measured; the remedy is a decision (§8.6)
 
 **CONFIRMED 2026-10-11 on a valid measurement.** Once §6.9's Peirce bisection
 existed, with width-independence established and convergence checked, the
@@ -995,11 +995,50 @@ apparent mesh-dependence follows: convergence quality falls as the element
 count rises, so a finer mesh at a fixed sweep budget is limper. It was never a
 normalisation error.
 
-**What remains is a cost decision, not a bug.** 80 substeps and 32 sweeps is
-roughly 16× the work of the defaults, and §6.5 already records that the viewer
-cannot afford what it has. Either bending gets many more sweeps by default,
-or it needs a solve that converges without them — an implicit or hierarchical
-treatment rather than more Gauss-Seidel. That is queue item 1.
+**The cost, measured 2026-10-11.** Work per frame is
+`substeps × (stretchSweeps + bendSweeps)`; the defaults spend **160**.
+
+| substeps | stretch | bend | work | dropRatio | c_eff |
+|---|---|---|---|---|---|
+| 10 | 8 | 8 — **the defaults** | 160 | 71.2 | 0.796 |
+| 20 | 4 | 4 | 160 | 62.5 | 0.832 |
+| 40 | 2 | 2 | 160 | 48.4 | 0.906 |
+| 80 | 1 | 1 | 160 | **30.9** | **1.051** |
+| 20 | 8 | 8 | 320 | 49.2 | 0.90 |
+| 40 | 8 | 8 | 640 | 18.2 | 1.255 |
+| 80 | 8 | 8 | 1280 | 4.81 | 1.955 |
+| 40 | 8 | 32 | 1600 | 4.77 | 1.96 |
+| 80 | 8 | 16 | 1920 | 1.65 | 2.794 |
+| **160** | **8** | **8** | **2560** | **1.151** | **3.149** |
+| 80 | 8 | 32 | 3200 | 1.128 | 3.17 |
+
+**Substeps dominate sweeps at equal cost** — 80/8/8 (1280) beats 40/8/32
+(1600) for the same answer, and 160/8/8 (2560) beats 80/8/32 (3200). An
+earlier note in this document claimed the reverse, reading "cheaper" off the
+sweep count without converting to work; that was wrong and is corrected here.
+
+**Two conclusions.**
+
+1. **Reallocating the existing budget buys 2.3× for free.** `cloth.js:142`
+   says *"XPBD wants many substeps, one sweep each"*, and the defaults ship
+   the opposite allocation; 80/1/1 is 2.3× more accurate than 10/8/8 at
+   identical work. **But this must not be adopted on this evidence**: the beam
+   is a flat strip with no closed rings and no contact, and `cloth.js:872`
+   records that `stretchSweeps: 8` exists precisely because *"a closed ring of
+   edges under tension — the hole of a disc caught on a neck is exactly that —
+   propagates its error around the ring at one edge per sweep"*. It needs the
+   disc, the skirt and the gate before it is a default.
+2. **Calibrated bending costs 16× the default budget.** 10 % accuracy needs
+   `dropRatio ≤ 1.33`; the cheapest cell reaching it is 160/8/8 at 2560
+   against the defaults' 160. §6.5 already records that the viewer cannot
+   afford what it currently spends, so this is not available interactively.
+
+So the remedy is **not** a tuning change, and the honest position is §8.6: at
+interactive settings this solver's bending is about **4× limper than its
+presets ask for** (`c_eff` 0.80 against 3.3), and no drape number taken there
+is quantitative. The long-term fix is a solve that converges without 16× the
+work — implicit or hierarchical bending rather than more Gauss-Seidel — which
+is a substantial piece of work and not a constant.
 
 ---
 
@@ -1196,6 +1235,15 @@ These are not mine to make.
    and most of Step 2's calibration depends on it. The two that unblock the
    most: the hemisphere cap diameter before wrinkling (shear), and the crease
    pitch plus fold count on a draped disc (drape and resolution).
+6. **Bending at interactive settings is ~4× too limp. Accept, or pay, or
+   rewrite the solve?** (§6.8.) Three options, all measured: *accept* — keep
+   the defaults, document that interactive bending is not quantitative, and
+   trust only headless runs at 160 substeps; *pay* — raise the default budget
+   16×, which §6.5 says the viewer cannot afford; *rewrite* — implicit or
+   hierarchical bending, which converges without the budget but is a
+   substantial piece of work. There is also a free 2.3× in reallocating the
+   existing budget toward substeps, which needs the disc, the skirt and the
+   gate before it can be a default.
 5. **Adopt the measured strain limits from `sim/cipc/fabrics.md`?**
    **Now the strongest-evidenced item on this list:** it is the root cause of
    the dart-closing gate failure (§6.3) *and* of the disc's strain pinning

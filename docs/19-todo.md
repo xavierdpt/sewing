@@ -17,38 +17,46 @@ record.
 
 ## Open
 
-- [ ] **Converge the bending solve, or make it converge cheaply.**
-      [18-validation.md](18-validation.md) §6.8. The model is correct: at 80
-      substeps and 32 bend sweeps the solver reproduces closed-form beam
-      theory to 13 % and the asked bending length to 4 %, with `BEND_SCALE`
-      unchanged. At the defaults (20 substeps, 8 sweeps) the same denim
-      behaves as `c` = 0.90 cm instead of 3.3 — **3.7× too limp** — and the
-      viewer runs 10 substeps.
+- [ ] **Decide §8.6: accept, pay, or rewrite the bending solve.** Nothing
+      smaller is now blocking, and the three options are measured
+      ([18-validation.md](18-validation.md) §6.8). This one is a decision
+      rather than a task, so it sits here until it is made.
 
-      *So this is a cost problem, not a calibration one.* 80/32 is ~16× the
-      work, and §6.5 already records that the viewer cannot afford what it has.
+      *If "accept":* the work is documentation plus a `--calibrated` preset
+      (160 substeps) for headless runs, and re-running the Peirce table there.
+      Half a day.
 
-      *Options, to be decided by measurement:* raise `bendSweeps` alone (it
-      was the cheaper of the two axes — 20/32 beat 80/8 on cost for similar
-      gain); solve bending implicitly or hierarchically instead of adding
-      Gauss-Seidel sweeps; or accept a documented stiffness deficit at
-      interactive settings and run calibrated numbers only headless.
+      *If "pay":* raise the default budget, then gate and profile — it trades
+      directly against §6.5, where the viewer already cannot afford what it
+      spends.
 
-      *Acceptance:* `node tools/fabric.mjs --beam` within 10 % of the closed
-      form at the DEFAULT settings, for at least denim and silk habotai, at
-      two row sizes. Then re-run the Peirce table, which is currently measuring
-      an under-converged cloth, and re-check every bending verdict. Gate it
-      (277 pass / 1 fail) and profile it — this trades directly against §6.5.
+      *If "rewrite":* implicit or hierarchical bending. Substantial, and the
+      only option that makes calibrated bending affordable interactively.
 
-      *Why it is first:* every bending number this project holds was measured
-      under-converged, which includes the drape results that the shear and
-      plasticity programmes are supposed to build on.
+      *Free either way, but not yet licensed:* reallocating the existing
+      budget toward substeps is 2.3× more accurate at identical cost
+      (80/1/1 against the defaults' 10/8/8), which is what `cloth.js:142`
+      says XPBD wants. It needs the disc, the skirt and the gate first,
+      because the beam cannot see the closed-ring case that `stretchSweeps: 8`
+      exists for.
 
 ---
 
 ## Done
 
 Removed from the queue and recorded in [18-validation.md](18-validation.md):
+
+- **Converge the bending solve, or make it converge cheaply** — done
+  2026-10-11: the cost is measured and the answer is that it cannot be made
+  cheap by tuning. Work per frame is `substeps × (stretch + bend sweeps)` and
+  the defaults spend 160. Reaching 10 % accuracy needs 2560 — **16×** — at
+  160 substeps. Substeps dominate sweeps at equal cost (160/8/8 at 2560 beats
+  80/8/32 at 3200), correcting an earlier note here that said the reverse.
+  Reallocating the existing 160 toward substeps gives 2.3× for free but not
+  the 30× needed. So the remedy is a decision, now §8.6, and the long-term
+  answer is an implicit solve rather than a constant. Recorded at
+  [18-validation.md](18-validation.md) §6.8.
+
 
 - **Fix the discrete bending model's normalisation against element size** —
   done 2026-10-11, and **there was nothing wrong with the normalisation.**

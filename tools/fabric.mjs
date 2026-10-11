@@ -56,6 +56,14 @@ const overhangCm = +flag('--overhang', 30);
 const widthCm = +flag('--width', 5);
 const substeps = +flag('--substeps', 20);
 const bendSweeps = +flag('--sweeps', 8);
+// Exposed because cloth.js:142 says "XPBD wants many substeps, one sweep
+// each", while DEFAULTS ships 10 substeps with 8 stretch and 8 bend sweeps --
+// the opposite allocation. Measured on the beam, doubling substeps is worth
+// quadrupling bend sweeps exactly (40/8 and 20/32 both give dropRatio 18.1;
+// 80/8 and 40/32 both give 4.8), so the question is whether the same total
+// work spent on substeps instead of sweeps buys accuracy for free.
+const stretchSweeps = args.includes('--stretchsweeps')
+  ? +flag('--stretchsweeps', 8) : null;
 // A sweep of asked-for bending lengths through the instrument, which is how
 // the one calibration constant in cloth.js was fixed: ask for a length, read
 // one back, and see whether the two are the same number.
@@ -132,6 +140,7 @@ function beam(fabric, { bend = null, rows = 12, Lcm = null } = {}) {
   const sim = new Cloth(asm, null, {
     fabric, bend, substeps, bendSweeps, selfCollision: false, floorY: null,
     terminalCmPerSec: 0, linearDragPerSec: 1.0,
+    ...(stretchSweeps ? { stretchSweeps } : {}),
   });
   const settle = sim.settle({ maxSeconds: 12 });
   const o = asm.verts[line[0]], t = asm.verts[line[line.length - 1]];
@@ -140,6 +149,11 @@ function beam(fabric, { bend = null, rows = 12, Lcm = null } = {}) {
   const cEff = delta > 1e-9 ? ((L ** 4) / (8 * delta)) ** (1 / 3) : null;
   return {
     specimenCm: L,
+    // Constraint-solve work per frame, in sweep units: substeps x (stretch +
+    // bend sweeps). The wall clock on a 150-vertex specimen is dominated by
+    // node's startup and by how early the settle terminates, so it is not a
+    // cost proxy; this is.
+    workPerFrame: substeps * ((stretchSweeps ?? 8) + bendSweeps),
     rowCm: +eff.toFixed(3),
     rowsInL: +(L / eff).toFixed(1),
     dropCm: +delta.toFixed(4),
@@ -205,6 +219,7 @@ function peirce(fabric, { bend = null, rows = 12, maxEvals = maxSettles } = {}) 
     const sim = new Cloth(asm, null, {
       fabric, bend, substeps, bendSweeps, selfCollision: false, floorY: null,
       terminalCmPerSec: 0, linearDragPerSec: 1.0,
+      ...(stretchSweeps ? { stretchSweeps } : {}),
     });
     sim.settle({ maxSeconds: 10 });
     const o = asm.verts[line[0]], t = asm.verts[line[line.length - 1]];
