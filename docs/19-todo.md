@@ -46,6 +46,18 @@ record.
 
 Removed from the queue and recorded in [18-validation.md](18-validation.md):
 
+- **Per-frame impact tracking, and the reported denim bounce** (the small half
+  of Step 5) — done 2026-10-11. `_trackMotion()` reports `reboundCm`,
+  `bounces`, `peakSpeedCmPerSec`. The bounce is real: denim rebounds 1.84 cm
+  over 6 bounces, interfaced twill 2.45 cm over 8, silk habotai **zero**. It
+  tracks flexural rigidity (7.8 / 1198 / 3188) and not damping — the two that
+  bounce have the *higher* `damp` — so it is bending energy, not tensile
+  elasticity. It is also partly numerical: 8× the substeps halves the rebound
+  (1.84 → 0.92) without removing it. `impactSpeedCmPerSec` is marked
+  untrustworthy in the code (131–200 cm/s for the same drop). The energy-drift
+  half and the analytic cases are still open. Recorded at
+  [18-validation.md](18-validation.md) Step 5.
+
 - **Converge the bending solve, or make it converge cheaply** — done
   2026-10-11: the cost is measured and the answer is that it cannot be made
   cheap by tuning. Work per frame is `substeps × (stretch + bend sweeps)` and

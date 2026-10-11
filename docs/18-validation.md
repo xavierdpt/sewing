@@ -543,7 +543,7 @@ and no data.
 ---
 
 ### Step 5 — Energy and stability diagnostics `tools/energy.mjs`
-**State:** open
+**State:** part done 2026-10-11 — impact tracking built and the bounce answered; energy drift and the analytic cases remain
 
 
 **Why.** The denim bounce is unresolved and it is an energy question.
@@ -560,6 +560,49 @@ twice the 108 cm/s impact speed") with no instrument that reproduces it.
 - Report `impactSpeedCmPerSec`, `reboundCm`, `bounces` in `drop-settled`.
 - Analytic cases: a hanging catenary (closed form), a pinned sheet's static
   deflection, and free fall (checks gravity and drag integration).
+
+**DONE 2026-10-11: the per-frame tracking, and with it the reported bounce.**
+`_trackMotion()` runs once per frame and `report()` carries
+`peakSpeedCmPerSec`, `impactSpeedCmPerSec`, `reboundCm` and `bounces`. A
+bounce is a trough in the centre of mass followed by a crest, with a 0.05 cm
+floor — half a cloth thickness — so jitter crossing zero does not count.
+
+The reported denim bounce is **real and measured**. Disc r 15, hole 9.5, drop
+4 cm, 10 substeps:
+
+| fabric | weight | rebound | bounces | rigidity | `damp` |
+|---|---|---|---|---|---|
+| denim | 14.3 g | **1.838 cm** | **6** | 1198.6 | 0.90 |
+| interfaced twill | 10.9 g | **2.447 cm** | **8** | 3188.3 | 0.90 |
+| silk habotai | 2.5 g | **0** | **0** | 7.8 | 0.55 |
+
+**It tracks flexural rigidity, not damping** — the two that bounce are the two
+with the *highest* internal damping, and the limp silk does not bounce at all.
+So it is stored bending energy returning, which is what was argued from the
+presets earlier and is now measured rather than asserted. "Denim has no
+elasticity" is true of its *tensile* behaviour and irrelevant to this: a
+cantilever stores energy in curvature.
+
+**And it is partly numerical.** Denim, substeps swept:
+
+| substeps | rebound | bounces | `grainOverLimit` |
+|---|---|---|---|
+| 10 | 1.838 | 6 | 0.68 |
+| 20 | 1.856 | 6 | 0.24 |
+| 40 | 1.534 | 5 | 0.06 |
+| 80 | **0.918** | **4** | 0.01 |
+
+Eight times the substeps **halves** the rebound but does not remove it, so
+there is a genuine elastic component with a solver component on top. Settling
+which is which needs the energy-drift half of this step, below.
+
+**`impactSpeedCmPerSec` is not trustworthy** and is marked so in the code: it
+is the peak speed at whichever frame contact was first *detected*, and it read
+131 / 200 / 140 / 159 cm/s for the same drop across that sweep. `reboundCm`
+and `bounces` converge; that one samples. Note also that `peakSpeed` exceeds
+`impactSpeed` for every fabric including the silk, which is partly the hem
+whipping as the centre decelerates — a real effect — and cannot be read as
+energy injection without the drift measurement.
 
 **Acceptance criteria.**
 - Energy drift per step bounded and reported for every preset.

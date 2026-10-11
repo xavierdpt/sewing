@@ -1019,7 +1019,60 @@ export class Cloth {
     }
     this.time += dt;
     this.steps++;
+    this._trackMotion();
     return this;
+  }
+
+  /**
+   * What happened DURING the fall, not just where it ended up.
+   *
+   * A reported bounce could not be checked against anything: `drop-settled`
+   * samples at a phase boundary, so its `maxSpeedCmPerSec` is the speed at
+   * REST, and the impact had been over for seconds. `cloth.js` already
+   * contained the measurement that matters -- "undamped, the centre of mass
+   * rebounded 0.3 cm and individual vertices reached 225 cm/s, twice the
+   * 108 cm/s impact speed" -- as a comment, with no instrument that
+   * reproduces it.
+   *
+   * Once per frame, not per substep: the peak and the centre of mass are both
+   * O(N) and the question is about frames.
+   *
+   * A bounce is a trough in the centre of mass followed by a crest: falling,
+   * then rising, then falling again. `reboundCm` is the largest such rise.
+   * The threshold exists because numerical jitter crosses zero constantly and
+   * a real rebound does not have to be large to be visible -- 0.05 cm is half
+   * a cloth thickness.
+   */
+  _trackMotion() {
+    const m = this._motion || (this._motion = {
+      peakSpeed: 0, impactSpeed: 0, touched: false,
+      bounces: 0, reboundCm: 0, trough: null, prev: null, rising: false,
+    });
+    const sp = this.maxSpeed();
+    if (sp > m.peakSpeed) m.peakSpeed = sp;
+    // the speed it was doing when it first met something is the impact speed
+    if (!m.touched) {
+      let any = 0;
+      for (const c of this.contact) if (c) { any = 1; break; }
+      if (any) { m.touched = true; m.impactSpeed = m.peakSpeed; }
+    }
+    let com = 0, mass = 0;
+    const V = this.asm.verts;
+    for (let i = 0; i < V.length; i++) { com += V[i][1] * this.mass[i]; mass += this.mass[i]; }
+    com /= Math.max(1e-9, mass);
+    if (m.prev !== null) {
+      const up = com > m.prev + 1e-6, down = com < m.prev - 1e-6;
+      if (!m.rising && up) { m.rising = true; m.trough = m.prev; }
+      else if (m.rising && down) {
+        m.rising = false;
+        const rise = m.prev - (m.trough ?? m.prev);
+        if (rise > 0.05) {
+          m.bounces++;
+          if (rise > m.reboundCm) m.reboundCm = rise;
+        }
+      }
+    }
+    m.prev = com;
   }
 
   /** Run for `seconds` of simulated time. */
@@ -2513,6 +2566,15 @@ export class Cloth {
       deepestPenetrationCm: pen.worstCm,
       deepestVertexCm: pen.vertexCm,
       deepestEdgeCm: pen.edgeCm,
+      // what happened during the fall -- see `_trackMotion()`
+      peakSpeedCmPerSec: +((this._motion && this._motion.peakSpeed) || 0).toFixed(1),
+      // NOT a reliable number: it is the peak speed at whichever frame contact
+      // was first DETECTED, so it moves with the sampling. Measured 131, 200,
+      // 140, 159 cm/s for the same denim drop at 10/20/40/80 substeps. Use
+      // `reboundCm` and `bounces`, which converge.
+      impactSpeedCmPerSec: +((this._motion && this._motion.impactSpeed) || 0).toFixed(1),
+      reboundCm: +((this._motion && this._motion.reboundCm) || 0).toFixed(3),
+      bounces: (this._motion && this._motion.bounces) || 0,
       // the distribution behind those maxima -- see `penetration()`
       insidePct: pen.insidePct,
       medianInsideCm: pen.medianInsideCm,
