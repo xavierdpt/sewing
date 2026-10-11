@@ -13,8 +13,13 @@ of this work has to beat or preserve.
 
 The working queue lives in [19-todo.md](19-todo.md). Finished items are
 removed from there and referenced here, against whatever step, artifact or
-decision they settled — so anything described in this document without a
-"done" reference is still open, and the short ones are the next candidates.
+decision they settled.
+
+**Every section carries a `**State:**` line directly under its heading**, so
+finding the next candidate is `grep -A1 '^###' docs/18-validation.md` and not
+a careful read. That line is the index; prose elsewhere in a section is not.
+It was informal at first and the audit of it gave both false positives and
+false negatives, which defeated the point.
 
 ---
 
@@ -332,6 +337,8 @@ Ordered so each step makes the next one cheaper. Steps 1–3 are the ones that
 convert the session's findings from anecdotes into data.
 
 ### Step 1 — Convergence harness `tools/converge.mjs`
+**State:** open
+
 
 **Why first.** Three of the four defects found on 2026-10-11 were
 mesh-dependence, and each was found by accident. A quantity that changes with
@@ -360,6 +367,8 @@ the finest mesh. Scenarios: cantilever, disc drop, accordion heap.
 ---
 
 ### Step 2 — Cusick drape test `tools/drape_coefficient.mjs`
+**State:** open
+
 
 **Why.** It is the standard drape benchmark (BS 5058), it has published
 values per fabric class, and **it is the test already being run by hand with a
@@ -395,6 +404,8 @@ honestly — and the test must say which.
 ---
 
 ### Step 3 — Fix the cantilever readout
+**State:** done 2026-10-11 — queue item 3
+
 
 **Why.** Every bending verdict in the preset table is currently an artifact.
 The Peirce overhang is found by walking triangle rows, so the readout can only
@@ -466,6 +477,8 @@ two I gave before.
 ---
 
 ### Step 4 — Shear: measure, then fit, then enable
+**State:** open — blocked on a physical measurement (§8.4)
+
 
 **Status: the mechanism is implemented and the parameters are invented.** This
 is the clearest methodological failure of 2026-10-11 and should be corrected
@@ -530,6 +543,8 @@ and no data.
 ---
 
 ### Step 5 — Energy and stability diagnostics `tools/energy.mjs`
+**State:** open
+
 
 **Why.** The denim bounce is unresolved and it is an energy question.
 Reported behaviour: a 14.3 g denim disc visibly bounces on impact. The
@@ -560,6 +575,8 @@ twice the 108 cm/s impact speed") with no instrument that reproduces it.
 ---
 
 ### Step 6 — Plasticity and hysteresis in bending
+**State:** open
+
 
 **Why.** Two separate observations converge on it. Real linen does not spring
 back — it creases and keeps the crease — yet at **exactly zero** crease
@@ -584,6 +601,8 @@ hysteresis loop on load/unload.
 ---
 
 ### Step 7 — Resolution: adaptive remeshing, or admit the ceiling
+**State:** open
+
 
 **Why.** A 1 cm crease needs `edge ≈ 0.25 cm`, which is ~37,500 vertices on
 the yoke disc against 484 today — roughly 77× the elements, and self-collision
@@ -614,6 +633,8 @@ measurements. **Not** a raw speed comparison — see Step 8.
 ---
 
 ### Step 8 — Performance methodology
+**State:** open
+
 
 **Why.** Performance has been quoted as ratios between models of *different*
 correctness, which is not a comparison. "Slab is 1.7× vertex mode" is
@@ -669,9 +690,13 @@ elements still straddle nodes.
 Carried forward, with their evidence, so none of them is rediscovered.
 
 ### 6.1 Cantilever readout quantised to `edge/2`
+**State:** done 2026-10-11 — fixed by Step 3, then superseded by §6.9
+
 See Step 3. **Every bending verdict in the preset table is suspect.**
 
 ### 6.2 Self-collision was blind to crossings; now fixed, but check the ratio
+**State:** done 2026-10-11 — `selfCollisionMode: slab`
+
 `clothThickness` 0.4 cm against a 2.0 cm mesh is a ratio of 0.20, and the
 nearest vertices of two stacked layers sit about `edge/√3` = 1.15 cm apart
 laterally — **2.9× the old detection radius**. Hence `worstOverlapCm` of
@@ -682,6 +707,8 @@ contact and inflate the sheet, which `selfRingExclude` guards. For thickness
 comparable to the edge the honest answer is C-IPC.
 
 ### 6.3 Gate: 2 failures, both attributed
+**State:** open — both failures attributed, neither fixed (see §8.2 and §8.5)
+
 Baseline was 277 pass / 1 fail. Now **276 / 2**.
 
 - `test/run.mjs:907` *"and the thickness is the self-collision doing it"* —
@@ -758,6 +785,8 @@ Baseline was 277 pass / 1 fail. Now **276 / 2**.
   the most conservative measured value, 6.1 %, the check already passes.
 
 ### 6.4 Four defaults changed in one session
+**State:** closed — a lesson, no action outstanding
+
 `pleatAngleDeg` 0 → 45, `selfCollisionMode` → `slab`, `biasCompliance` → 25,
 `selfCell` formula. Each was individually gated, but stacking them is why
 §6.3's second failure took a clean-tree run to attribute rather than a glance
@@ -766,6 +795,8 @@ cheap (`git worktree add --detach`, one gate) and should be the first move
 whenever provenance is unclear.
 
 ### 6.5 The viewer cannot run dense self-collision interactively
+**State:** open — accepted limitation, mitigations measured
+
 Measured: 876,556 ms of wall time for 12.82 simulated seconds — **68× real
 time** — on a 2,400-triangle accordion at edge 1.0. At that density 1 s of
 simulation costs ~60 s after optimisation. Levers, measured: edge 2.0 instead
@@ -776,6 +807,8 @@ removes the free fall. **The 45° default multiplied settle time ~6× and that
 was not flagged when it shipped.**
 
 ### 6.6 Drop-test observations, and which were already answered
+**State:** done 2026-10-11 — the level-set explanation is **refuted**; see below
+
 From the disc drops at edge 2.2, hole r 7.5:
 
 | | silk habotai | interfaced twill |
@@ -809,88 +842,50 @@ Two secondary suspects remain for the *concentration* of strain, and Step 1
 discriminates them: mesh coarseness at the neck, and the missing shear and
 crease outlets leaving tension as the only place for excess length to go.
 
-**`deepestEdgeCm 0.3` with `deepestVertexCm 0` is also documented**, and is
-probably not a defect: `docs/11-cloth.md:379` records that *"the level set is
-as sharp as its grid. **0.3 cm at the neck/shoulder crease**; halve `cell` and
-pay for it as the cube in build time."* The measured 0.24–0.30 cm edge
-penetration was at the neck, which is exactly where and exactly how much the
-document predicts. Confirm by halving `cell` and checking the figure scales,
-rather than treating it as a new contact bug — though the vertex-clean /
-edge-penetrating *pattern* is still rule 2's failure mode and worth keeping in
-the report.
+**`deepestEdgeCm 0.3` with `deepestVertexCm 0`: the documented explanation is
+wrong.** `docs/11-cloth.md:379` says *"the level set is as sharp as its grid.
+0.3 cm at the neck/shoulder crease; halve `cell` and pay for it as the cube in
+build time"*, and the coincidence of numbers made that look conclusive. It is
+not. Halving the collider cell changes nothing (`colliderCell` is now
+reachable from a drop for exactly this check):
 
-### 6.9 The cantilever is not the Peirce test
-**Found 2026-10-11, chasing §6.8.** `tools/fabric.mjs` clamps a **fixed**
-overhang and finds the arclength at which the chord from the clamp crosses
-41.5°. The Peirce test does the opposite: it slides the specimen out until
-**the tip** droops to 41.5°, and reports `c = L/2` for that overhang. The
-second quantity is a material property; the first is not, because the strip's
-whole shape depends on how much of it is hanging.
-
-Measured, silk habotai at edge 0.4, varying only the specimen length:
-
-| overhang | measured c | rows to crossing |
+| cloth edge | collider cell | `deepestEdgeCm` |
 |---|---|---|
-| 4 cm | no crossing | — |
-| 6 cm | **2.423** | 12.1 |
-| 10 cm | **1.204** | 6.0 |
-| 30 cm | **0.588** | 2.9 |
+| 2.2 | 0.6 | 0.29 |
+| 2.2 | 0.3 (build 7.1 s → 14 s) | **0.29** |
 
-A 4× spread from a parameter that should not appear in the answer, and the
-default is the worst of them: a 30 cm overhang on a ~1 cm bending length
-hangs nearly vertical, which is the least sensitive regime for a chord-angle
-threshold. Lab practice sizes the overhang to a couple of bending lengths —
-for these presets that is 2–10 cm, not 30.
+**It is chord error in the cloth mesh.** A straight edge of length `L` chording
+across a body of local radius `R` sits `≈ L²/8R` inside it. Fitting `R` on the
+coarsest point alone gives 2.1 cm — about right for the neck/shoulder crease —
+and the next point then predicts itself to 4 %:
 
-**Consequence: every bending verdict this project has recorded is conditioned
-on an arbitrary 30 cm overhang**, including the two that survived the
-quantisation fix. Denim's "in range" and interfaced twill's "1.6× too stiff"
-are withdrawn along with the rest — not because the readings were noisy, but
-because the quantity being read is not the one the published ranges describe.
-**And the sheet-metal conclusion goes with them, for the third time**: the
-twill's 9.587 cm at a 30 cm overhang cannot be compared with a 4–6 cm
-published range or with a steel shim's 8.4–13.4 cm until the instrument
-measures the same thing the literature does. What stands is the direct
-observation, which never used the cantilever: the twill drapes plate-like on
-the disc (2.9 % contact, 2.60 cm median gap, 17.5° chord against the silk's
-28.3°).
+| cloth edge | `deepestEdgeCm` | `L²/8R`, R = 2.1 |
+|---|---|---|
+| 2.2 | 0.29 | 0.288 |
+| 1.5 | **0.14** | **0.134** |
+| 1.1 | 0.17 | 0.072 |
 
-**Fix:** bisect the overhang until the tip chord is 41.5°, then report
-`c = L/2`. Each trial is a short strip and therefore cheap. Keep the
-interpolation from Step 3 for locating the tip angle between rows, and keep
-`rowsToCrossing` as the resolution guard.
+So the mechanism is established for coarse meshes and **a floor takes over
+near edge 1.1** that is neither the chord error nor the level set: halving the
+cell there gives 0.17 → 0.20, i.e. no improvement and slightly worse.
 
-**DONE 2026-10-11** (was [19-todo.md](19-todo.md) item 4). `peirce()` in
-`tools/fabric.mjs` solves for the free
-length by regula falsi on the tip angle — monotone in `L`, so it brackets from
-either end and converges in a handful of settles — and reports `c = L/2`, the
-overhang it converged on, the row size, how many rows span the free length,
-the settle count, and whether the bracket actually closed. With the initial
-bracket centred on the `L = 2c` that Peirce's own definition predicts, denim
-converges in **5 settles**. The old fixed-overhang reading is kept behind
-`--fixed`, labelled in its own header as not a material property.
+**Leading suspect for the floor, untested:** `deepest*` is a MAX over sampled
+edge midpoints, and refining the mesh increases the sample count, so the
+maximum can rise even as the typical penetration falls. That is rule 2's
+complaint about this very family of statistics, one level in: the fix is to
+read `insideAreaPct` and a percentile from `clearance.js` alongside it rather
+than a max. Until then, `deepestEdgeCm` should not be compared across mesh
+sizes.
 
-| acceptance check | result |
-|---|---|
-| the bisection converges, and says so | ✅ `converged`, `bracketCm`, `settles` |
-| independent of specimen **width** | ✅ 0.501 / 0.500 / 0.498 cm at widths 5 / 2 / 1.5 |
-| independent of specimen **length** | ✅ by construction — the length is solved for |
-| **mesh-independent** to 5 % over 3× | ❌ see §6.8 — this is the solver |
+### 6.7 A run with `substeps: 4` slid off the body
+**State:** open — needs a substep floor or a warning
 
-**Two bugs of my own inside this one fix**, both the same shape as the three
-faults above and worth recording as such:
-1. **The mesh was sized from the trial length** (`edge = L / rows`), which
-   makes the measurement self-referential: a shorter trial gives a finer mesh,
-   a finer mesh gives a limper cloth (§6.8), a limper cloth droops at a
-   shorter length still. Silk habotai ran away to a 0.45 cm specimen on
-   0.037 cm triangles — shorter than the cloth is modelled to be thick — and
-   reported `c = 0.225`, "4.0× too limp". The element size now comes off the
-   **asked** bending length and is held fixed across the bisection.
-2. **The settle budget was silently exhausted.** 12 evaluations was not
-   enough; silk spent all of them and a truncated bracket was reported as an
-   answer. Hence `--settles` and the `converged` column.
-
+Wool crepe, `slipCm 96.97`, `hemYcm −59.29`, `contactPct 63.9`,
+`maxStretchPct 6.0`. Other runs used 10–17. Worth a stability floor, or a
+warning, once Step 5 exists.
 ### 6.8 Bending is miscalibrated, and mesh-dependent
+**State:** open — queue item 1 of [19-todo.md](19-todo.md)
+
 **CONFIRMED 2026-10-11 on a valid measurement.** Once §6.9's Peirce bisection
 existed, with width-independence established and convergence checked, the
 mesh-dependence survived — on the best-conditioned cell available:
@@ -995,10 +990,79 @@ measured at. Both are prerequisites for Step 4 and Step 6: fitting shear or
 plasticity on top of a bending model that is 2× out and mesh-dependent would
 fit the error.
 
-### 6.7 A run with `substeps: 4` slid off the body
-Wool crepe, `slipCm 96.97`, `hemYcm −59.29`, `contactPct 63.9`,
-`maxStretchPct 6.0`. Other runs used 10–17. Worth a stability floor, or a
-warning, once Step 5 exists.
+### 6.9 The cantilever is not the Peirce test
+**State:** done 2026-10-11 — queue item 4, `peirce()`
+
+**Found 2026-10-11, chasing §6.8.** `tools/fabric.mjs` clamps a **fixed**
+overhang and finds the arclength at which the chord from the clamp crosses
+41.5°. The Peirce test does the opposite: it slides the specimen out until
+**the tip** droops to 41.5°, and reports `c = L/2` for that overhang. The
+second quantity is a material property; the first is not, because the strip's
+whole shape depends on how much of it is hanging.
+
+Measured, silk habotai at edge 0.4, varying only the specimen length:
+
+| overhang | measured c | rows to crossing |
+|---|---|---|
+| 4 cm | no crossing | — |
+| 6 cm | **2.423** | 12.1 |
+| 10 cm | **1.204** | 6.0 |
+| 30 cm | **0.588** | 2.9 |
+
+A 4× spread from a parameter that should not appear in the answer, and the
+default is the worst of them: a 30 cm overhang on a ~1 cm bending length
+hangs nearly vertical, which is the least sensitive regime for a chord-angle
+threshold. Lab practice sizes the overhang to a couple of bending lengths —
+for these presets that is 2–10 cm, not 30.
+
+**Consequence: every bending verdict this project has recorded is conditioned
+on an arbitrary 30 cm overhang**, including the two that survived the
+quantisation fix. Denim's "in range" and interfaced twill's "1.6× too stiff"
+are withdrawn along with the rest — not because the readings were noisy, but
+because the quantity being read is not the one the published ranges describe.
+**And the sheet-metal conclusion goes with them, for the third time**: the
+twill's 9.587 cm at a 30 cm overhang cannot be compared with a 4–6 cm
+published range or with a steel shim's 8.4–13.4 cm until the instrument
+measures the same thing the literature does. What stands is the direct
+observation, which never used the cantilever: the twill drapes plate-like on
+the disc (2.9 % contact, 2.60 cm median gap, 17.5° chord against the silk's
+28.3°).
+
+**Fix:** bisect the overhang until the tip chord is 41.5°, then report
+`c = L/2`. Each trial is a short strip and therefore cheap. Keep the
+interpolation from Step 3 for locating the tip angle between rows, and keep
+`rowsToCrossing` as the resolution guard.
+
+**DONE 2026-10-11** (was [19-todo.md](19-todo.md) item 4). `peirce()` in
+`tools/fabric.mjs` solves for the free
+length by regula falsi on the tip angle — monotone in `L`, so it brackets from
+either end and converges in a handful of settles — and reports `c = L/2`, the
+overhang it converged on, the row size, how many rows span the free length,
+the settle count, and whether the bracket actually closed. With the initial
+bracket centred on the `L = 2c` that Peirce's own definition predicts, denim
+converges in **5 settles**. The old fixed-overhang reading is kept behind
+`--fixed`, labelled in its own header as not a material property.
+
+| acceptance check | result |
+|---|---|
+| the bisection converges, and says so | ✅ `converged`, `bracketCm`, `settles` |
+| independent of specimen **width** | ✅ 0.501 / 0.500 / 0.498 cm at widths 5 / 2 / 1.5 |
+| independent of specimen **length** | ✅ by construction — the length is solved for |
+| **mesh-independent** to 5 % over 3× | ❌ see §6.8 — this is the solver |
+
+**Two bugs of my own inside this one fix**, both the same shape as the three
+faults above and worth recording as such:
+1. **The mesh was sized from the trial length** (`edge = L / rows`), which
+   makes the measurement self-referential: a shorter trial gives a finer mesh,
+   a finer mesh gives a limper cloth (§6.8), a limper cloth droops at a
+   shorter length still. Silk habotai ran away to a 0.45 cm specimen on
+   0.037 cm triangles — shorter than the cloth is modelled to be thick — and
+   reported `c = 0.225`, "4.0× too limp". The element size now comes off the
+   **asked** bending length and is held fixed across the bisection.
+2. **The settle budget was silently exhausted.** 12 evaluations was not
+   enough; silk spent all of them and a truncated bracket was reported as an
+   answer. Hence `--settles` and the `converged` column.
+
 
 ---
 

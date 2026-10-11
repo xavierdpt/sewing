@@ -298,6 +298,14 @@ export const DEFAULTS = {
   // other and inflate the sheet, which is what `selfRingExclude` guards. For
   // thickness comparable to the edge, the honest answer is a solver built for
   // it -- C-IPC, carried in `sim/` -- not a bigger margin here.
+  // Cell size of the body's level set, cm, or null for BodyCollider's own
+  // default. docs/11-cloth.md:379 records that the level set "is as sharp as
+  // its grid. 0.3 cm at the neck/shoulder crease; halve `cell` and pay for it
+  // as the cube in build time" -- and a disc drop reports exactly 0.24-0.30 cm
+  // of edge penetration at the neck, with every vertex clean. Confirming that
+  // those are the same 0.3 cm means varying this, which was not reachable
+  // from a drop.
+  colliderCell: null,
   selfCollisionMode: 'slab',
   // Broad-phase cell, cm, or null for `max(2 * thickness, mean edge * 1.1)`.
   //
@@ -762,7 +770,9 @@ export class Cloth {
     this.maxStrain = o.maxStrain ?? preset.maxStrain ?? 0.08;
     this.asm = asm;
     this.surface = surface;
-    this.collider = surface ? new BodyCollider(surface) : null;
+    this.collider = surface
+      ? new BodyCollider(surface, o.colliderCell ? { cell: o.colliderCell } : {})
+      : null;
     this.time = 0;
     this.steps = 0;
 
