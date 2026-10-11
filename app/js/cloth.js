@@ -2513,6 +2513,11 @@ export class Cloth {
       deepestPenetrationCm: pen.worstCm,
       deepestVertexCm: pen.vertexCm,
       deepestEdgeCm: pen.edgeCm,
+      // the distribution behind those maxima -- see `penetration()`
+      insidePct: pen.insidePct,
+      medianInsideCm: pen.medianInsideCm,
+      p95InsideCm: pen.p95InsideCm,
+      meanInsideCm: pen.meanInsideCm,
     };
   }
 
@@ -2614,11 +2619,23 @@ export class Cloth {
     };
     if (!this.collider) return out;
     const V = this.asm.verts;
+    // THE DISTRIBUTION, not only the worst of it.
+    //
+    // `worstCm` is a maximum over sampled points, and the sample count grows
+    // as the mesh refines -- so the maximum can RISE while the cloth gets
+    // better, purely because more places were looked at. Measured on a disc
+    // over a neck: 0.29 cm at edge 2.2, 0.14 at 1.5 (both matching the
+    // chord-error prediction L^2/8R to 4 %), then 0.17 at edge 1.1, which
+    // breaks the trend. That is the suspect §6.6 recorded, and a max cannot
+    // settle it. CLAUDE.md rule 2 is about exactly this: a scalar with a
+    // threshold is verification, observation needs a distribution.
+    const depths = [];
     const worst = (p) => {
       out.samples++;
       const d = this.collider.signedAt(p);
       if (!Number.isFinite(d) || d >= 0) return 0;
       out.insideSamples++;
+      depths.push(-d);
       return -d;
     };
     for (const p of V) out.vertexCm = Math.max(out.vertexCm, worst(p));
@@ -2636,6 +2653,14 @@ export class Cloth {
     out.edgeCm = +out.edgeCm.toFixed(2);
     out.faceCm = +out.faceCm.toFixed(2);
     out.worstCm = +Math.max(out.vertexCm, out.edgeCm, out.faceCm).toFixed(2);
+    depths.sort((a, b) => a - b);
+    const at = (q) => (depths.length
+      ? depths[Math.min(depths.length - 1, Math.floor(q * depths.length))] : 0);
+    out.insidePct = +(100 * out.insideSamples / Math.max(1, out.samples)).toFixed(2);
+    out.medianInsideCm = +at(0.5).toFixed(3);
+    out.p95InsideCm = +at(0.95).toFixed(3);
+    out.meanInsideCm = +(depths.reduce((a, b) => a + b, 0)
+      / Math.max(1, depths.length)).toFixed(3);
     return out;
   }
 

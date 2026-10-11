@@ -813,7 +813,7 @@ removes the free fall. **The 45° default multiplied settle time ~6× and that
 was not flagged when it shipped.**
 
 ### 6.6 Drop-test observations, and which were already answered
-**State:** done 2026-10-11 — the level-set explanation is **refuted**; see below
+**State:** done 2026-10-11 — level set refuted, chord error confirmed, and `insidePct` is the metric to compare
 
 From the disc drops at edge 2.2, hole r 7.5:
 
@@ -875,13 +875,33 @@ So the mechanism is established for coarse meshes and **a floor takes over
 near edge 1.1** that is neither the chord error nor the level set: halving the
 cell there gives 0.17 → 0.20, i.e. no improvement and slightly worse.
 
-**Leading suspect for the floor, untested:** `deepest*` is a MAX over sampled
-edge midpoints, and refining the mesh increases the sample count, so the
-maximum can rise even as the typical penetration falls. That is rule 2's
-complaint about this very family of statistics, one level in: the fix is to
-read `insideAreaPct` and a percentile from `clearance.js` alongside it rather
-than a max. Until then, `deepestEdgeCm` should not be compared across mesh
-sizes.
+**The floor was a statistic, not a defect — tested 2026-10-11.**
+`penetration()` now returns the distribution behind its maxima (`insidePct`,
+`medianInsideCm`, `p95InsideCm`, `meanInsideCm`), and with it the answer is
+plain:
+
+| cloth edge | samples | worst | p95 | median | mean | **insidePct** |
+|---|---|---|---|---|---|---|
+| 2.2 | 2,684 | 0.29 | 0.224 | 0.079 | 0.090 | **4.55** |
+| 1.5 | 6,016 | 0.14 | 0.070 | 0.032 | 0.034 | **1.16** |
+| 1.1 | 10,912 | 0.22 | 0.168 | 0.047 | 0.060 | **0.31** |
+
+**The EXTENT of penetration converges monotonically and strongly — 4.55 % →
+1.16 % → 0.31 % of sampled points inside, a 15× reduction.** Contact is doing
+its job and getting better with refinement, exactly as it should.
+
+The *depths* do not converge, and my sampling-count hypothesis was only half
+right: it is not merely that more points are looked at, but that **fewer and
+fewer are inside at all** — 0.31 % of 10,912 is about 34 points — so a p95
+over that set is essentially its second-worst member. Depth maxima *and*
+percentiles over a shrinking inside-set are tail statistics of a handful of
+points at the highest-curvature feature, and they are not comparable across
+mesh sizes.
+
+**So: compare `insidePct`; do not compare `deepestEdgeCm`, `p95InsideCm` or
+`worstCm` across meshes.** The chord-error mechanism above stands for the
+coarse end, where penetration is widespread rather than confined to a few
+points.
 
 ### 6.7 A run with `substeps: 4` slid off the body
 **State:** done 2026-10-11 — `grainOverLimit` warns; floor measured at 6, trustworthy from 10

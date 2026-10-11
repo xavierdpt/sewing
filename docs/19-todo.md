@@ -71,6 +71,16 @@ record.
 
 Removed from the queue and recorded in [18-validation.md](18-validation.md):
 
+- **Settle whether the fine-mesh penetration floor is real or a statistic** —
+  done 2026-10-11. `penetration()` now reports the distribution behind its
+  maxima. The extent converges monotonically — 4.55 % → 1.16 % → 0.31 % of
+  sampled points inside the body at edges 2.2 / 1.5 / 1.1, a 15× reduction —
+  so contact is converging and the "floor" was not a defect. The depths do
+  not converge, because at the fine end only ~34 points are inside at all and
+  a p95 over those is its second-worst member. Rule: compare `insidePct`,
+  never `deepestEdgeCm` or a percentile, across mesh sizes. Recorded at
+  [18-validation.md](18-validation.md) §6.6.
+
 - **Swap the accordion gate check from a stack-height ratio to
   `deepOverlaps`** — done 2026-10-11. The old control wanted contact-on to
   stack 5× taller than contact-off, which only worked while a crease had no
