@@ -860,7 +860,8 @@ the disc (2.9 % contact, 2.60 cm median gap, 17.5° chord against the silk's
 interpolation from Step 3 for locating the tip angle between rows, and keep
 `rowsToCrossing` as the resolution guard.
 
-**DONE 2026-10-11.** `peirce()` in `tools/fabric.mjs` solves for the free
+**DONE 2026-10-11** (was [19-todo.md](19-todo.md) item 4). `peirce()` in
+`tools/fabric.mjs` solves for the free
 length by regula falsi on the tip angle — monotone in `L`, so it brackets from
 either end and converges in a handful of settles — and reports `c = L/2`, the
 overhang it converged on, the row size, how many rows span the free length,
@@ -909,6 +910,8 @@ specimen geometry (the clean cell behaves the same), **not** solver
 convergence (3× bend sweeps: 0.403 → 0.403; 3× substeps: 0.403 → 0.412), and
 **not obviously the compliance formula**, which is the standard
 `k = D·|e|²/A_e` and should be mesh-independent on a regular mesh.
+
+**OPEN — this is item 1 of [19-todo.md](19-todo.md).**
 
 **Measured against an analytic ground truth, 2026-10-11** —
 `node tools/fabric.mjs --beam`. For small deflections a cantilever droops

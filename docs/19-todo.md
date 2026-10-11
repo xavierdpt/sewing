@@ -98,17 +98,6 @@ Removed from the queue and recorded in [18-validation.md](18-validation.md):
   [18-validation.md](18-validation.md) Step 3, §6.8 and §6.9.
 
 
-- **Fix the cantilever readout so it stops quantising to `edge/2`** — done
-  2026-10-11. The 41.5° crossing is interpolated within the row. The scan is
-  monotone and repeat-free (0.412 … 9.607 against the old 0.75 / 0.75 / 0.75
-  / 1.50 …), all seven verdicts re-run and rewritten, and silk habotai's old
-  readings withdrawn as artifacts. **Mesh-independence still fails** (1.95×
-  over a 3× refinement, was 3.0×) and that residue is the solver's, now
-  carried as item 1 and §6.8. Also un-withdrew interfaced twill's "1.6× too
-  stiff": 9.76 interpolates to 9.587, so quantisation was never its problem.
-  Recorded at [18-validation.md](18-validation.md) Step 3.
-
-
 - **Find which pre-session `cloth.js` change regressed the dart seam
   closure** — done 2026-10-11. It was the replacement of cross-spring bending
   with dihedral hinges on Peirce bending lengths, and **it is not a defect**:
