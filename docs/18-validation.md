@@ -908,9 +908,47 @@ What this eliminates: **not** the instrument (§6.9 is now valid), **not** the
 specimen geometry (the clean cell behaves the same), **not** solver
 convergence (3× bend sweeps: 0.403 → 0.403; 3× substeps: 0.403 → 0.412), and
 **not obviously the compliance formula**, which is the standard
-`k = D·|e|²/A_e` and should be mesh-independent on a regular mesh. So it is
-the discrete bending model's normalisation against element size, and that is
-the next thing to establish rather than guess at.
+`k = D·|e|²/A_e` and should be mesh-independent on a regular mesh.
+
+**Measured against an analytic ground truth, 2026-10-11** —
+`node tools/fabric.mjs --beam`. For small deflections a cantilever droops
+`δ = wL⁴/8D`, and since `D = w·c³` here the weight cancels: **`δ = L⁴/8c³`**,
+a purely geometric prediction that inverts to `c_eff = (L⁴/8δ)^⅓`. No
+threshold, no bisection, nothing the solver can argue with. Denim, asked
+`c` = 3.3 cm:
+
+| span | row | drop | predicted | ratio | δ/L | c_eff | c_eff / asked |
+|---|---|---|---|---|---|---|---|
+| 3.063 | 0.255 | 1.0699 | 0.3062 | 3.5× | 0.35 | 2.175 | 0.659 |
+| 3.063 | 0.170 | 2.4402 | 0.3062 | 8.0× | 0.80 | 1.652 | 0.501 |
+| 3.063 | 0.128 | 2.7626 | 0.3062 | 9.0× | 0.90 | 1.585 | 0.480 |
+| 1.200 | 0.100 | 0.7596 | **0.0072** | **105×** | 0.63 | 0.699 | 0.212 |
+| 1.200 | 0.050 | 1.1357 | **0.0072** | **157×** | 0.95 | 0.611 | 0.185 |
+
+**A 1.2 cm tongue of denim droops 7.6 mm where theory says 0.07 mm** — it
+hangs nearly straight down, which is qualitatively wrong for a 3.3 cm bending
+length. Large-deflection nonlinearity cannot account for it: that *reduces*
+droop relative to linear theory, and the rows with `δ/L` above ~0.2 are
+outside the closed form's validity in the direction that makes the solver look
+*better*, not worse. `c_eff` moves with **both** the row size and the span, so
+this is not a constant calibration error and `BEND_SCALE` is not the whole of
+it.
+
+**Candidate mechanisms, in the order worth checking** (none yet established —
+this is where the work stops):
+1. the quantities `bendingStencils` puts in `g.area` and `g.len` may not be
+   what `k = D·|e|²/A_e` assumes (combined area of both incident triangles,
+   and the shared edge);
+2. the XPBD compliance `α̃ = α/h²` competes against `Σ w|∇C|²`, and for a
+   dihedral-angle constraint `|∇C| ~ 1/height`, so the balance between the
+   two terms is itself mesh-dependent even when `α` is not;
+3. `BEND_SCALE` may be dimensionally inconsistent, which a pure constant
+   re-fit would hide rather than fix.
+
+The 2D scaling argument says a constant per-hinge stiffness `k = D` **is**
+correct — `N ∝ A/ℓ²` hinges each storing `½k(κℓ)²` gives `½Akκ²`, independent
+of `ℓ` — so the formula as written should be right, and the defect is more
+likely in (1) or (2) than in the algebra.
 
 **The practical consequence is blunt: no bending verdict in this project means
 anything without naming the mesh.** A preset is 1.3× too limp at one row size

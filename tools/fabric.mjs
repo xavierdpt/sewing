@@ -40,6 +40,13 @@ const specimenRows = +flag('--rows', 12);
 // Settle runs the bisection may spend. 12 was not enough -- silk habotai
 // spent all of them and reported a truncated bracket as an answer.
 const maxSettles = +flag('--settles', 24);
+// Specimen length for the analytic beam check. The default sizes it from the
+// ASKED bending length for a tenth-of-span droop -- but the solver droops
+// several times more than theory, so that default lands outside the
+// small-deflection regime the closed form needs. Set it explicitly from a
+// measured cEff instead: delta/L near 0.1 is the target, and `deltaOverL`
+// reports where the run actually landed.
+const spanCm = args.includes('--span') ? +flag('--span', 0) : null;
 // The pre-2026-10-11 reading: a fixed overhang, with the crossing found along
 // it. Kept only so the two can be compared; see `peirce` for why it is not a
 // material property.
@@ -83,6 +90,70 @@ const PEIRCE_DEG = 41.5;
  * row at z <= 0 is pinned: that is the lab's clamp, and it is the only thing
  * holding the cloth up.
  */
+/**
+ * THE ANALYTIC CHECK: small-deflection beam theory, which the solver cannot
+ * argue with.
+ *
+ * A cantilever of flexural rigidity D under its own areal weight w droops at
+ * the tip by `delta = w L^4 / (8 D)` per unit width, for small deflections.
+ * In this project's units D = w c^3, so the weight cancels and the prediction
+ * is purely geometric:
+ *
+ *     delta = L^4 / (8 c^3)        and therefore    c = (L^4 / (8 delta))^(1/3)
+ *
+ * That is worth more than the Peirce reading for the question of §6.8,
+ * because it has no threshold, no bisection and no 41.5 degree crossing in
+ * it: just a specimen of known length, one settle, and one measured drop
+ * against a closed form. If `c` comes back mesh-dependent HERE, the discrete
+ * bending energy is wrong, and nothing about the instrument can be blamed.
+ *
+ * The specimen is sized for a tip drop of about a tenth of its length, which
+ * is small enough for the linear theory to hold to a few per cent and large
+ * enough to measure against the solver's own settling noise. `deltaOverL` is
+ * reported so that judgement is the reader's and not buried.
+ */
+function beam(fabric, { bend = null, rows = 12, Lcm = null } = {}) {
+  const ask = bend ?? FABRICS[fabric].bendLengthCm;
+  const L = Lcm ?? +(ask * Math.cbrt(0.8)).toFixed(3);
+  const eff = edgeGiven ? edgeCm : Math.max(0.02, L / rows);
+  const clampCm = Math.max(2, L);
+  const pattern = rectanglePattern({ width: widthCm, height: L + clampCm, edge: eff });
+  const asm = sewFlat(pattern, { y: 0 });
+  const z0 = -(L + clampCm) / 2;
+  const clampTo = z0 + clampCm;
+  asm.verts.forEach((p, i) => { asm.pinned[i] = p[2] <= clampTo + 1e-6; });
+  const xs = [...new Set(asm.verts.map((p) => +p[0].toFixed(5)))];
+  const xMid = xs.reduce((a, x) => (Math.abs(x) < Math.abs(a) ? x : a), xs[0]);
+  const line = asm.verts
+    .map((p, i) => ({ i, x: p[0], z: p[2] }))
+    .filter((q) => Math.abs(q.x - xMid) < 1e-6 && q.z >= clampTo - 1e-6)
+    .sort((a, b) => a.z - b.z)
+    .map((q) => q.i);
+  const sim = new Cloth(asm, null, {
+    fabric, bend, substeps, bendSweeps, selfCollision: false, floorY: null,
+    terminalCmPerSec: 0, linearDragPerSec: 1.0,
+  });
+  const settle = sim.settle({ maxSeconds: 12 });
+  const o = asm.verts[line[0]], t = asm.verts[line[line.length - 1]];
+  const delta = o[1] - t[1];
+  const predicted = (L ** 4) / (8 * ask ** 3);
+  const cEff = delta > 1e-9 ? ((L ** 4) / (8 * delta)) ** (1 / 3) : null;
+  return {
+    specimenCm: L,
+    rowCm: +eff.toFixed(3),
+    rowsInL: +(L / eff).toFixed(1),
+    dropCm: +delta.toFixed(4),
+    predictedDropCm: +predicted.toFixed(4),
+    dropRatio: +(delta / Math.max(1e-12, predicted)).toFixed(3),
+    deltaOverL: +(delta / L).toFixed(3),
+    cEffCm: cEff === null ? null : +cEff.toFixed(3),
+    askedCm: ask,
+    cRatio: cEff === null ? null : +(cEff / ask).toFixed(3),
+    rmsCmPerSec: +sim.rmsSpeed().toFixed(3),
+    settled: !!settle.settled,
+  };
+}
+
 /**
  * The Peirce test as the lab runs it: slide the specimen out until the TIP
  * droops to 41.5 degrees, and report c = L/2 for that overhang.
@@ -280,6 +351,20 @@ function cantilever(fabric, { bend = null } = {}) {
     seconds: +sim.time.toFixed(1),
     settled: !!settle.settled,
   };
+}
+
+if (args.includes('--beam')) {
+  const names = only ? [only] : Object.keys(FABRICS);
+  const rowSweep = (flag('--rowsweep', '12,18,24')).split(',').map(Number);
+  const out = [];
+  for (const name of names) {
+    for (const r of rowSweep) out.push({ fabric: name, ...beam(name, { rows: r, Lcm: spanCm }) });
+  }
+  console.log('analytic cantilever: delta = L^4 / (8 c^3), so c = (L^4 / 8 delta)^(1/3).'
+    + ' No threshold, no bisection -- if cRatio moves with the row size, the discrete'
+    + ' bending energy is mesh-dependent.');
+  console.table(out);
+  process.exit(0);
 }
 
 if (scan) {

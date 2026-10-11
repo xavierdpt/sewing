@@ -27,12 +27,16 @@ record.
       sweeps and 3× substeps move it by 0 and 2 %), and the obvious reading of
       the compliance formula, which is the standard `k = D·|e|²/A_e`.
 
-      *Do:* start with a ground truth the solver cannot influence — the
-      **small-deflection cantilever**, where a strip of flexural rigidity `D`
-      under its own weight `w` has a closed-form tip deflection
-      (`δ = wL⁴/8D` per unit width). Measure that at three row sizes: it has
-      no threshold, no bisection and no 41.5° crossing in it, so it isolates
-      the discrete bending energy from everything else. Then establish the
+      *Done so far:* the analytic ground truth exists —
+      `node tools/fabric.mjs --beam`, using `δ = L⁴/8c³` (the weight cancels
+      because `D = w·c³`), reporting the measured drop against the closed
+      form, `δ/L` so the validity of the linear regime is visible, and
+      `c_eff = (L⁴/8δ)^⅓`. It says denim droops **3.5× to 157×** more than
+      theory, worsening with refinement, and that `c_eff` moves with the span
+      as well as the row size — so this is **not** a constant calibration
+      error. See §6.8 for the table and the three candidate mechanisms.
+
+      *Still to do:* establish the
       scaling exponent from three or more refinement points before touching
       `g.alpha = g.area / (BEND_SCALE · rigidity · g.len²)`, and check the
       hinge stencil's `area` and `len` are the quantities that formula assumes
@@ -52,8 +56,14 @@ record.
 
       *Note on cost:* `--rows 24` timed out three times at 550 s on both
       fabrics, and the obvious vertex count (~700 for the denim cell) does not
-      explain it. Find out why before scaling the refinement sweep up; the
-      analytic cantilever above should be far cheaper per data point.
+      explain it. Find out why before scaling the refinement sweep up. The
+      `--beam` check is far cheaper per data point and needs no bisection, so
+      prefer it for the convergence study.
+
+      *Note on scope:* this is a correctness defect in the constitutive model,
+      not a tuning job, and it should start from reading `bendingStencils` and
+      `_solveHinges` rather than from a sweep. Deliberately left for a fresh
+      session rather than hacked at the end of a long one.
 
 ---
 
