@@ -71,6 +71,17 @@ record.
 
 Removed from the queue and recorded in [18-validation.md](18-validation.md):
 
+- **Swap the accordion gate check from a stack-height ratio to
+  `deepOverlaps`** — done 2026-10-11. The old control wanted contact-on to
+  stack 5× taller than contact-off, which only worked while a crease had no
+  radius; a real fillet gives the limp control loft of its own and the ratio
+  fell to 2.5× *while the thickness model got better*. The check now asserts
+  the proposition — pairs more than half a thickness through each other — and
+  reads 5 against 35,206, a 7,000× discrimination. Threshold not loosened:
+  20× margin with a floor of 20. **Gate 277 pass / 1 fail**, back to its
+  pre-session count, the remaining failure being the dart's guessed strain
+  limits (§8.5). Recorded at [18-validation.md](18-validation.md) §6.3.
+
 - **A substep floor, or a warning, for the run that slid off the body** —
   done 2026-10-11. Swept a wool crepe disc: 2 substeps slides off entirely
   (97 cm, never settles), 4 is confidently wrong (names the shoulder instead

@@ -899,14 +899,36 @@ line('the accordion drop: does the cloth have thickness');
   };
   const on = dropAccordion(b2, { ...common, cloth: { selfCollision: true, bend: 0.3 } });
   const off = dropAccordion(b2, { ...common, cloth: { selfCollision: false, bend: 0.3 } });
+  // WHETHER THE LAYERS PASS THROUGH EACH OTHER, measured, instead of inferred
+  // from how tall the heap is.
+  //
+  // The old control compared stack height with contact on against off and
+  // wanted a 5x ratio. That worked only while a crease had no radius: the
+  // limp cloth was chosen precisely because it has no bending loft of its
+  // own, so any height had to be the contact doing it. Give the crease a real
+  // fillet and the fold loops have height whether or not the layers may
+  // interpenetrate, and the control collapses -- 3.11 cm against 1.22 with it
+  // off, which is 2.5x and fails, while the thickness model it is supposed to
+  // be guarding got strictly BETTER (7.8 of 8 layers resolved, up from 5.3).
+  // docs/11-cloth.md:170 had already admitted the old heap only resolved
+  // "about four layers' worth of the eight".
+  //
+  // So assert the proposition itself. `deepOverlaps` counts primitive pairs
+  // more than half a thickness through each other, which no amount of contact
+  // convergence produces and no amount of fold loft hides. It discriminates
+  // 6,529 against 5 where the height ratio could not tell 3.11 from 1.22.
+  const onOv = on.cloth.selfOverlaps(), offOv = off.cloth.selfOverlaps();
   console.log(`  ${on.layers} limp layers: ${on.stackCm} cm of stack with`
     + ` self-collision, ${off.stackCm} cm without`
-    + ` (one layer is ${on.perLayerCm} cm of contact distance)`);
+    + ` (one layer is ${on.perLayerCm} cm of contact distance);`
+    + ` ${onOv.deepOverlaps} deep overlaps against ${offOv.deepOverlaps}`);
   check('the heap has thickness', on.stackCm > 4 * on.perLayerCm,
     `${on.stackCm} cm, which is ${(on.stackCm / on.perLayerCm).toFixed(1)} layers' worth`);
-  check('and the thickness is the self-collision doing it',
-    on.stackCm > 5 * off.stackCm,
-    `${on.stackCm} cm against ${off.stackCm} cm with it off`);
+  check('and the layers do not pass through each other',
+    onOv.deepOverlaps * 20 < Math.max(20, offOv.deepOverlaps),
+    `${onOv.deepOverlaps} pairs deeper than half a thickness, against`
+    + ` ${offOv.deepOverlaps} with self-collision off`
+    + ` (worst ${onOv.worstOverlapCm} cm vs ${offOv.worstOverlapCm} cm)`);
   check('the strip lands on the floor rather than falling through it',
     Math.abs(on.restingOnFloorCm) < 0.5, `${on.restingOnFloorCm} cm`);
   check('and it settles', on.settled, `${on.seconds} s`);

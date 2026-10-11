@@ -707,7 +707,7 @@ contact and inflate the sheet, which `selfRingExclude` guards. For thickness
 comparable to the edge the honest answer is C-IPC.
 
 ### 6.3 Gate: 2 failures, both attributed
-**State:** open — both failures attributed, neither fixed (see §8.2 and §8.5)
+**State:** open — the accordion control is fixed (277/1); the dart awaits §8.5
 
 Baseline was 277 pass / 1 fail. Now **276 / 2**.
 
@@ -718,9 +718,15 @@ Baseline was 277 pass / 1 fail. Now **276 / 2**.
   radius gives the control geometric loft too, so the premise broke, not the
   subject. `docs/11-cloth.md:170` already admitted the old heap "resolves
   about four layers' worth of the eight".
-  **Fix: assert on `deepOverlaps` instead of a stack-height ratio.** It
-  discriminates 6,529 against 5. Do *not* loosen the 5× threshold — that
-  converts a control into a rubber stamp.
+  **FIXED 2026-10-11** (queue item 6): the check now asserts the proposition
+  itself — `deepOverlaps`, pairs more than half a thickness through each other
+  — instead of inferring it from heap height. In the gate it reads **5 against
+  35,206** with contact off (worst 0.329 cm against 0.400, i.e. two surfaces
+  exactly coincident), a 7,000× discrimination where the height ratio could
+  not separate 3.11 from 1.22. The 5× height threshold was **not** loosened;
+  the margin is 20× with a floor of 20, so the test cannot pass vacuously and
+  does not assert a convergence tolerance by demanding exactly zero. **Gate:
+  277 pass / 1 fail**, back to its pre-session pass count.
 - `test/run.mjs:1885` *"and it closes along with everything else"* — 0.252 cm
   against a `< 0.2` threshold. **Attributed 2026-10-11** (was
   [19-todo.md](19-todo.md) item 1): the gate was run in a clean detached
@@ -1120,9 +1126,8 @@ These are not mine to make.
 1. **Disable the shear defaults pending identification?** Recommended:
    `biasCompliance: 1`. It is an unvalidated change to physics that currently
    makes yarn strain worse at fine meshes. The mechanism and reporting stay.
-2. **Swap the accordion gate check to `deepOverlaps`?** Recommended yes. The
-   alternative is loosening a threshold to fit new behaviour, which this repo's
-   rule 6 exists to prevent.
+2. ~~**Swap the accordion gate check to `deepOverlaps`?**~~ **Done
+   2026-10-11** — see §6.3. 277 pass / 1 fail.
 3. **Step 7: remesh, side-car, or documented ceiling?** The side-car is the
    cheapest and the repo already points at it; adaptive remeshing is the
    literature's answer and a large piece of work.
