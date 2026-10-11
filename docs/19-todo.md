@@ -17,35 +17,45 @@ record.
 
 ## Open
 
-- [ ] **Find which pre-session `cloth.js` change regressed the dart seam
-      closure.** Committed code closes the dart to **0.029 cm**; the working
-      tree closes it to **0.252 cm**, against a `< 0.2` threshold — an 8.7×
-      regression, stable across every working-tree gate run of 2026-10-11 and
-      therefore present before any of that day's `cloth.js` edits. The test
-      code is identical in both versions and `drapejob.js` is ruled out, so it
-      is in the uncommitted `cloth.js` diff from an earlier session.
+- [ ] **Fix the cantilever readout so it stops quantising to `edge/2`.**
+      [18-validation.md](18-validation.md) Step 3. The Peirce overhang is
+      found by walking triangle rows, so the measured bending length can only
+      land on `n × edge/2`: at edge 1.5, asked-for lengths of 0.8, 1.1 and
+      1.4 cm all read back 0.75, and silk habotai reads 0.50 / 0.75 / 1.13 /
+      1.50 at edges 1.0 / 1.5 / 2.2 / 3.0 — `edge/2` every time. Every bending
+      verdict in the preset table is therefore an artifact, including a
+      spurious "in range".
 
-      *Do:* read `git diff app/js/cloth.js` for anything touching seam closure
-      — `sewSpeedCmPerSec`, `stitchSoftness`, `maxTensionGf`, `stitchCompliance`,
-      the `_feedStitches` and `_solveStitches` logic — and confirm by reverting
-      the suspect hunk in the pristine worktree's copy and re-running just that
-      region of the gate. Note the clean-tree result is the *good* one, so the
-      fix is to correct or revert the change, not to move the threshold.
+      *Do:* interpolate the 41.5° chord crossing within a triangle row instead
+      of snapping to the row boundary, then re-run all seven presets and
+      rewrite the verdicts. Withdraw the claims listed in Step 3.
 
-      *Acceptance:* the specific change named, with the dart figure measured
-      with and without it, and a decision recorded: keep and fix, or revert.
-      Then re-run the full gate and update
-      [18-validation.md](18-validation.md) §6.3.
+      *Acceptance:* the `--scan` measured column tracks the asked column
+      continuously with no repeated values, and silk habotai's bending length
+      is mesh-independent to within 5 % over a 3× refinement.
 
-      *Why it is first:* it is the one remaining gate failure that is a real
-      regression rather than a test whose premise changed, and nothing else on
-      the list can be gated cleanly while a known regression sits in the tree.
+      *Why it is first:* it needs no decision and no physical measurement, it
+      is confined to one tool, and bending is the only axis of the model that
+      is nominally calibrated — so every other calibration claim rests on a
+      readout that currently cannot resolve the fabrics it is judging.
 
 ---
 
 ## Done
 
 Removed from the queue and recorded in [18-validation.md](18-validation.md):
+
+- **Find which pre-session `cloth.js` change regressed the dart seam
+  closure** — done 2026-10-11. It was the replacement of cross-spring bending
+  with dihedral hinges on Peirce bending lengths, and **it is not a defect**:
+  linen's 2.3 cm is inside its published 2.0–2.6 range, and the dart gap
+  tracks bending stiffness monotonically (0.252 cm at 2.3, 0.097 at 1.0,
+  0.026 at 0.3 — the old model behaved like 0.3). What actually stops the
+  seam is the cloth's **guessed** 3 % strain ceiling: `seamsAtTheLimit: 0`,
+  `peakTensionGf: 28`, `maxStretchPct: 3`. Raising it to any measured value
+  from `sim/cipc/fabrics.md` closes the dart (0.185 cm at 6.1 %, 0.030 at
+  13.4 %). Same root cause as §6.6. Recorded at
+  [18-validation.md](18-validation.md) §6.3; the fix is §8 decision 5.
 
 - **Attribute the dart-closing gate failure against a pristine checkout** —
   done 2026-10-11. Clean worktree at `d9d6f01`: **268 pass, 0 fail**, dart

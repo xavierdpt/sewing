@@ -674,11 +674,49 @@ Baseline was 277 pass / 1 fail. Now **276 / 2**.
     before the shear and `slab` work existed. A number that does not move
     under those changes is not caused by them.
 
-  Conclusion: the regression is in the **pre-session uncommitted `cloth.js`
-  work** — an earlier session's changes, never gated. The remaining question
-  is which one, and the candidates are whatever in that diff affects seam
-  closure rate: `sewSpeedCmPerSec`, `stitchSoftness`, `maxTensionGf`, or the
-  `_feedStitches` logic. Carried as item 1 of [19-todo.md](19-todo.md).
+  **Root cause found 2026-10-11** (was [19-todo.md](19-todo.md) item 2), and it
+  is **not a defect in the change that exposed it**. The pre-session work
+  replaced cross-spring bending with dihedral hinges anchored on Peirce
+  bending lengths — `FABRICS` lost `bend: 3e-3` style compliances and gained
+  `bendLengthCm` via `rigidityOf`. Nothing in the stitch or feed code changed
+  behaviourally (the only edit there sets a `waiting` flag for reporting).
+
+  The dart gap is driven by bending stiffness, monotonically:
+
+  | bend length | `seamGapEndCm` |
+  |---|---|
+  | preset (linen, 2.3 cm) | **0.252** |
+  | 1.0 cm | 0.097 |
+  | 0.3 cm | 0.026 |
+
+  — so the old cross-spring model was behaving like a cloth of ~0.3 cm
+  bending length, and the committed tree's 0.029 cm is that. Linen's 2.3 cm
+  is *inside* its published 2.0–2.6 range (`tools/fabric.mjs:55`), so the new
+  value is the better-founded one.
+
+  **But the thread is not what stops it.** The solver's own log says
+  `seamsAtTheLimit: 0` with `peakTensionGf: 28`, and `maxStretchPct: 3`
+  against linen's `maxStrain` of **0.03**. The cloth is pinned at its strain
+  ceiling. Raising that ceiling to any of the **measured** values in
+  `sim/cipc/fabrics.md` closes the dart:
+
+  | `maxStrain` | `seamGapEndCm` | `maxStretchPct` | passes `< 0.2` |
+  |---|---|---|---|
+  | 0.03 (the preset's guess) | 0.252 | 3.0 | no |
+  | 0.061 (C-IPC cloth 0) | 0.185 | 6.1 | **yes** |
+  | 0.085 (cloth 1) | 0.134 | 8.5 | yes |
+  | 0.134 (cloth 2) | 0.030 | 13.4 | yes |
+
+  `maxStretchPct` equals `maxStrain` in every row: the cloth is at its ceiling
+  throughout, and the gap is whatever that ceiling leaves unclosed.
+
+  **So the chain is:** correct (stiffer) bending → closing a 20° dart needs
+  the cloth to stretch → it hits a **guessed** 3 % limit that is 2–3× tighter
+  than every measured woven → the seam stalls 0.05 cm over the threshold. This
+  is the **same root cause as §6.6**, reached from the opposite direction, and
+  it means the fix is §8 decision 5 — adopt the measured strain limits — not
+  reverting the bending model and **not** loosening the `< 0.2` threshold. At
+  the most conservative measured value, 6.1 %, the check already passes.
 
 ### 6.4 Four defaults changed in one session
 `pleatAngleDeg` 0 → 45, `selfCollisionMode` → `slab`, `biasCompliance` → 25,
@@ -783,10 +821,13 @@ These are not mine to make.
    and most of Step 2's calibration depends on it. The two that unblock the
    most: the hemisphere cap diameter before wrinkling (shear), and the crease
    pitch plus fold count on a draped disc (drape and resolution).
-5. **Adopt the measured strain limits from `sim/cipc/fabrics.md`?** The
-   presets assume 2–4 % where the measured wovens are 6–13.4 %, and
-   `docs/11-cloth.md:400–405` already says the yoke/slip boundary should be
-   re-run if so. This changes the headline result of the disc test, so it is a
+5. **Adopt the measured strain limits from `sim/cipc/fabrics.md`?**
+   **Now the strongest-evidenced item on this list:** it is the root cause of
+   the dart-closing gate failure (§6.3) *and* of the disc's strain pinning
+   (§6.6), and at the most conservative measured value (6.1 %) the failing
+   check passes. The presets assume 2–4 % where the measured wovens are
+   6–13.4 %, and `docs/11-cloth.md:400–405` already says the yoke/slip
+   boundary should be re-run if so. This changes the headline result of the disc test, so it is a
    decision and not a cleanup. It also requires the modulus-to-compliance
    mapping, which is the largest single piece of modelling work on this list.
 
