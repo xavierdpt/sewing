@@ -32,6 +32,18 @@ const args = process.argv.slice(2);
 const flag = (name, dflt) => (args.includes(name) ? args[args.indexOf(name) + 1] : dflt);
 const useBlender = args.includes('--blender');
 const edgeCm = +flag('--edge', 1.5);
+// Whether an edge length was ASKED for. The Peirce run sizes the mesh to the
+// specimen unless told otherwise, because the specimen length is what it is
+// solving for and a fixed edge cannot resolve both ends of the sweep.
+const edgeGiven = args.includes('--edge');
+const specimenRows = +flag('--rows', 12);
+// Settle runs the bisection may spend. 12 was not enough -- silk habotai
+// spent all of them and reported a truncated bracket as an answer.
+const maxSettles = +flag('--settles', 24);
+// The pre-2026-10-11 reading: a fixed overhang, with the crossing found along
+// it. Kept only so the two can be compared; see `peirce` for why it is not a
+// material property.
+const useFixed = args.includes('--fixed');
 const only = flag('--fabric', null);
 const overhangCm = +flag('--overhang', 30);
 const widthCm = +flag('--width', 5);
@@ -71,6 +83,103 @@ const PEIRCE_DEG = 41.5;
  * row at z <= 0 is pinned: that is the lab's clamp, and it is the only thing
  * holding the cloth up.
  */
+/**
+ * The Peirce test as the lab runs it: slide the specimen out until the TIP
+ * droops to 41.5 degrees, and report c = L/2 for that overhang.
+ *
+ * The version below (`cantilever`) clamps a FIXED overhang and finds where
+ * along it the chord crosses 41.5. That is a different quantity and not a
+ * material property: the strip's whole shape depends on how much of it is
+ * hanging, so the answer moved 4x with the specimen length alone -- silk
+ * habotai measured 2.423 cm at a 6 cm overhang, 1.204 at 10 and 0.588 at 30,
+ * and the 30 cm default was the worst of them. Every bending verdict this
+ * project recorded before 2026-10-11 came off that reading.
+ *
+ * The free length is found by regula falsi on the tip angle, which is
+ * monotone in L, so four or five settles get there. The mesh is sized to the
+ * SPECIMEN rather than fixed, because a 2 cm overhang on 1.5 cm triangles
+ * cannot droop: `rows` is how many rows of cloth span the free length, and it
+ * is the knob a convergence check turns.
+ */
+function peirce(fabric, { bend = null, rows = 12, maxEvals = maxSettles } = {}) {
+  let evals = 0;
+  const ask = bend ?? FABRICS[fabric].bendLengthCm;
+  // THE MESH MUST NOT DEPEND ON THE UNKNOWN. Sizing it as `L / rows` -- the
+  // obvious thing, and what this did first -- makes the measurement chase its
+  // own tail: a shorter trial length gives a finer mesh, a finer mesh gives a
+  // limper cloth (section 6.8), a limper cloth droops at a shorter length
+  // still. Silk habotai ran away to an 0.45 cm overhang on 0.037 cm triangles,
+  // which is a specimen barely longer than the cloth is thick. So the element
+  // size comes off the ASKED bending length and is held fixed across the
+  // bisection; only the specimen length varies.
+  const eff = edgeGiven ? edgeCm : Math.max(0.02, ask / rows);
+  const tipAngle = (L) => {
+    evals++;
+    const clampCm = Math.max(3, L);
+    const pattern = rectanglePattern({
+      width: widthCm, height: L + clampCm, edge: eff,
+    });
+    const asm = sewFlat(pattern, { y: 0 });
+    const z0 = -(L + clampCm) / 2;
+    const clampTo = z0 + clampCm;
+    asm.verts.forEach((p, i) => { asm.pinned[i] = p[2] <= clampTo + 1e-6; });
+    const xs = [...new Set(asm.verts.map((p) => +p[0].toFixed(5)))];
+    const xMid = xs.reduce((a, x) => (Math.abs(x) < Math.abs(a) ? x : a), xs[0]);
+    const line = asm.verts
+      .map((p, i) => ({ i, x: p[0], z: p[2] }))
+      .filter((q) => Math.abs(q.x - xMid) < 1e-6 && q.z >= clampTo - 1e-6)
+      .sort((a, b) => a.z - b.z)
+      .map((q) => q.i);
+    if (line.length < 3) return null;
+    const sim = new Cloth(asm, null, {
+      fabric, bend, substeps, bendSweeps, selfCollision: false, floorY: null,
+      terminalCmPerSec: 0, linearDragPerSec: 1.0,
+    });
+    sim.settle({ maxSeconds: 10 });
+    const o = asm.verts[line[0]], t = asm.verts[line[line.length - 1]];
+    const dh = Math.hypot(t[0] - o[0], t[2] - o[2]);
+    return Math.atan2(o[1] - t[1], Math.max(1e-9, dh)) / DEG;
+  };
+
+  // Centred on the answer Peirce's own definition predicts, L = 2c, rather
+  // than reaching five times past it: the trials at large L carry the whole
+  // cost of this measurement, because the mesh is fixed and the specimen is
+  // what grows. The halving and doubling below still rescue a bracket that
+  // turns out to be on the wrong side.
+  let lo = Math.max(0.3, 1.2 * ask), hi = Math.max(lo * 1.5, 3.2 * ask);
+  let aLo = tipAngle(lo), aHi = tipAngle(hi);
+  // A limp cloth droops past 41.5 even at the short end, a stiff one not even
+  // at the long end: widen until the crossing is bracketed.
+  while (aLo !== null && aLo > PEIRCE_DEG && lo > 0.15 && evals < maxEvals) {
+    hi = lo; aHi = aLo; lo = lo / 2; aLo = tipAngle(lo);
+  }
+  while (aHi !== null && aHi < PEIRCE_DEG && hi < 80 && evals < maxEvals) {
+    lo = hi; aLo = aHi; hi = hi * 2; aHi = tipAngle(hi);
+  }
+  if (aLo === null || aHi === null || aLo > PEIRCE_DEG || aHi < PEIRCE_DEG) {
+    return { bendLengthCm: null, overhangCm: null, evals, bracketed: false };
+  }
+  while (evals < maxEvals && (hi - lo) > 0.01 * Math.max(0.3, lo)) {
+    const span = aHi - aLo;
+    let mid = span > 1e-9 ? lo + (PEIRCE_DEG - aLo) * (hi - lo) / span : (lo + hi) / 2;
+    mid = Math.min(hi - 1e-4, Math.max(lo + 1e-4, mid));
+    const a = tipAngle(mid);
+    if (a === null) break;
+    if (a < PEIRCE_DEG) { lo = mid; aLo = a; } else { hi = mid; aHi = a; }
+  }
+  const L = (lo + hi) / 2;
+  return {
+    converged: (hi - lo) <= 0.01 * Math.max(0.3, lo),
+    bracketCm: +(hi - lo).toFixed(3),
+    bendLengthCm: +(L / 2).toFixed(3),
+    overhangCm: +L.toFixed(2),
+    rowCm: +eff.toFixed(3),
+    rowsSpanningL: +(L / eff).toFixed(1),
+    evals,
+    bracketed: true,
+  };
+}
+
 function cantilever(fabric, { bend = null } = {}) {
   const clampCm = 6;
   const pattern = rectanglePattern({
@@ -195,10 +304,17 @@ if (scan) {
 const names = only ? [only] : Object.keys(FABRICS);
 const rows = [];
 for (const name of names) {
-  const r = cantilever(name);
+  const r = useFixed ? cantilever(name) : (() => {
+    const q = peirce(name, { rows: specimenRows });
+    // the same shape of record the table expects, plus what the bisection
+    // converged on: the overhang IS the measurement here
+    return { ...q, resolved: q.bracketed, rowsToCrossing: null, rigidityMgCm: null,
+      tipDropCm: null, settled: q.bracketed, reachCm: null };
+  })();
   const want = PUBLISHED[name];
-  const verdict = r.bendLengthCm === null ? 'did not reach 41.5 deg -- stiffer than paper'
-    : !r.resolved ? `UNRESOLVED: crossing inside ${r.rowsToCrossing} rows`
+  const verdict = r.bendLengthCm === null
+    ? 'no 41.5 deg crossing inside the bracket'
+    : r.resolved === false ? `UNRESOLVED: crossing inside ${r.rowsToCrossing} rows`
       + ` -- use edge <= ${(r.bendLengthCm).toFixed(2)} cm`
       : r.bendLengthCm < want[0] ? `${(want[0] / r.bendLengthCm).toFixed(1)}x too limp`
         : r.bendLengthCm > want[1] ? `${(r.bendLengthCm / want[1]).toFixed(1)}x too stiff`
@@ -207,16 +323,22 @@ for (const name of names) {
     fabric: name,
     gsm: FABRICS[name].gsm,
     'bend cm (asked)': FABRICS[name].bendLengthCm,
-    'bending length cm': r.bendLengthCm ?? `> ${(overhangCm / 2).toFixed(0)}`,
-    rows: r.rowsToCrossing,
+    'bending length cm': r.bendLengthCm ?? '--',
+    'overhang cm': r.overhangCm ?? (useFixed ? overhangCm : '--'),
+    'row cm': r.rowCm ?? (useFixed ? edgeCm : '--'),
+    'rows in L': r.rowsSpanningL ?? '--',
     'published cm': `${want[0]} - ${want[1]}`,
-    'G mg cm': r.rigidityMgCm,
-    'tip drop cm': r.tipDropCm,
-    settled: r.settled,
+    settles: r.evals ?? null,
+    converged: r.converged === undefined ? '--' : r.converged,
     verdict,
   });
 }
-console.log(`cantilever: ${widthCm} x ${overhangCm} cm overhang, ${edgeCm} cm triangles`);
+console.log(useFixed
+  ? `cantilever (FIXED overhang -- not a material property, see peirce()):`
+    + ` ${widthCm} x ${overhangCm} cm, ${edgeCm} cm triangles`
+  : `Peirce cantilever: the overhang is bisected until the tip droops 41.5 deg,`
+    + ` ${widthCm} cm wide, ${specimenRows} rows across the free length`
+    + `${edgeGiven ? ` (overridden to ${edgeCm} cm triangles)` : ''}`);
 console.table(rows);
 
 if (useBlender) {

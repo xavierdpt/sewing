@@ -17,38 +17,63 @@ record.
 
 ## Open
 
-- [ ] **Make the cantilever an actual Peirce test: bisect the overhang.**
-      [18-validation.md](18-validation.md) §6.9. The tool clamps a fixed
-      overhang and finds where along it the chord crosses 41.5°; the Peirce
-      test slides the specimen out until *the tip* reaches 41.5° and reports
-      `c = L/2`. Only the second is a material property. Measured on silk
-      habotai at edge 0.4, varying only the specimen length: no crossing at
-      4 cm, 2.423 at 6, 1.204 at 10, 0.588 at 30 — a 4× spread from a
-      parameter that must not appear in the answer, with the default at the
-      worst end.
+- [ ] **Fix the discrete bending model's normalisation against element size,
+      against an analytic ground truth.**
+      [18-validation.md](18-validation.md) §6.8. On a valid Peirce measurement
+      — width-independent, converged, specimen length solved for — denim
+      measures `c` = 2.105 cm at a 0.275 cm row and 1.208 cm at a 0.183 cm
+      row: **1.74× for a 1.5× refinement**, finer being limper. Eliminated
+      already: the instrument, the specimen geometry, solver convergence (3×
+      sweeps and 3× substeps move it by 0 and 2 %), and the obvious reading of
+      the compliance formula, which is the standard `k = D·|e|²/A_e`.
 
-      *Do:* bisect the free length until the tip chord angle is 41.5°, then
-      report `c = L/2`. Each trial is a short strip and cheap. Keep the
-      within-row interpolation for locating the tip angle, and keep
-      `rowsToCrossing` as the resolution guard. A sensible bracket is
-      0.5–8× the asked bending length.
+      *Do:* start with a ground truth the solver cannot influence — the
+      **small-deflection cantilever**, where a strip of flexural rigidity `D`
+      under its own weight `w` has a closed-form tip deflection
+      (`δ = wL⁴/8D` per unit width). Measure that at three row sizes: it has
+      no threshold, no bisection and no 41.5° crossing in it, so it isolates
+      the discrete bending energy from everything else. Then establish the
+      scaling exponent from three or more refinement points before touching
+      `g.alpha = g.area / (BEND_SCALE · rigidity · g.len²)`, and check the
+      hinge stencil's `area` and `len` are the quantities that formula assumes
+      (combined area of both triangles, and the shared edge).
 
-      *Acceptance:* the reported `c` is independent of the initial bracket and
-      of the specimen width, and mesh-independent to within 5 % over a 3×
-      refinement. Then re-run all seven presets and rewrite Step 3's table a
-      third time — and only then is §6.8's calibration question answerable.
+      *Acceptance:* tip deflection within 5 % of the closed form at three row
+      sizes, then Peirce `c` within 5 % over a 3× refinement. Only then re-fit
+      `BEND_SCALE` against the published ranges and rewrite Step 3's table.
+      Gate it: this is a tuned constant in a tuned system, baseline 276 pass /
+      2 fail.
 
-      *Why it is first:* every bending verdict this project holds is
-      conditioned on an arbitrary 30 cm overhang, so the one axis of the model
-      that is nominally calibrated against published values currently has no
-      valid measurement at all. `BEND_SCALE` cannot be fitted against a
-      quantity the literature does not report.
+      *Why it is first:* bending is the only axis of the model nominally
+      calibrated against published values, and it currently has no
+      mesh-independent value at all — so every preset, every drape result and
+      the whole shear and plasticity programme downstream of it are resting on
+      a number that changes when the mesh does.
+
+      *Note on cost:* `--rows 24` timed out three times at 550 s on both
+      fabrics, and the obvious vertex count (~700 for the denim cell) does not
+      explain it. Find out why before scaling the refinement sweep up; the
+      analytic cantilever above should be far cheaper per data point.
 
 ---
 
 ## Done
 
 Removed from the queue and recorded in [18-validation.md](18-validation.md):
+
+- **Make the cantilever an actual Peirce test: bisect the overhang** — done
+  2026-10-11. `peirce()` solves for the free length by regula falsi on the tip
+  angle and reports `c = L/2` with its convergence state. Width-independent
+  (0.501 / 0.500 / 0.498 at widths 5 / 2 / 1.5), converges in 5 settles on
+  denim with the bracket centred on `L = 2c`, and the specimen-length
+  dependence that invalidated every earlier verdict is gone by construction.
+  **Mesh-independence fails** — 1.74× over a 1.5× refinement — and that
+  failure is now attributable to the solver, which is the handoff this item
+  existed to produce. Two bugs of mine fixed inside it: the mesh sized from
+  the trial length (self-referential runaway to a 0.45 cm specimen), and a
+  silently exhausted settle budget. Recorded at
+  [18-validation.md](18-validation.md) §6.9, §6.8 and Step 3.
+
 
 - **Fix the cantilever readout so it stops quantising to `edge/2`** — done
   2026-10-11, and it uncovered two deeper faults. The interpolation works: the

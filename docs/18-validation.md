@@ -434,6 +434,18 @@ interpolated linearly in chord angle between the two rows that straddle it.
 | denim | 3.3 | 3.692 | 2.8–3.8 | **in range** |
 | interfaced twill | 5.0 | 9.587 | 4.0–6.0 | 1.6× too stiff |
 
+**All of the above is superseded by §6.9 and §6.8.** The table was measured at
+a fixed 30 cm overhang, which is not a Peirce measurement; and on the valid
+instrument the readings are mesh-dependent, so no row of it is a verdict. The
+two cells measured properly so far, both at `rows 12`: silk habotai
+**c = 0.500** (asked 1.1, published 0.9–1.4) and denim **c = 2.105** (asked
+3.3, published 2.8–3.8) — both well under their asked values, i.e. the solver
+is limper than it is told, which is the same direction the broken instrument
+suggested. A full seven-preset table is deliberately **not** recorded here
+until the normalisation of §6.8 is fixed, because every row would be
+conditioned on one row size and would be the fourth provisional table in a
+day.
+
 **Withdrawn, correctly:** silk habotai's "1.2× too limp" / "in range" /
 "1.8× too limp" readings of 0.75 / 1.13 — those were `edge/2` at different
 edges, and the honest figure at edge 1.5 is 0.496, i.e. **1.8× too limp**.
@@ -848,12 +860,65 @@ the disc (2.9 % contact, 2.60 cm median gap, 17.5° chord against the silk's
 interpolation from Step 3 for locating the tip angle between rows, and keep
 `rowsToCrossing` as the resolution guard.
 
+**DONE 2026-10-11.** `peirce()` in `tools/fabric.mjs` solves for the free
+length by regula falsi on the tip angle — monotone in `L`, so it brackets from
+either end and converges in a handful of settles — and reports `c = L/2`, the
+overhang it converged on, the row size, how many rows span the free length,
+the settle count, and whether the bracket actually closed. With the initial
+bracket centred on the `L = 2c` that Peirce's own definition predicts, denim
+converges in **5 settles**. The old fixed-overhang reading is kept behind
+`--fixed`, labelled in its own header as not a material property.
+
+| acceptance check | result |
+|---|---|
+| the bisection converges, and says so | ✅ `converged`, `bracketCm`, `settles` |
+| independent of specimen **width** | ✅ 0.501 / 0.500 / 0.498 cm at widths 5 / 2 / 1.5 |
+| independent of specimen **length** | ✅ by construction — the length is solved for |
+| **mesh-independent** to 5 % over 3× | ❌ see §6.8 — this is the solver |
+
+**Two bugs of my own inside this one fix**, both the same shape as the three
+faults above and worth recording as such:
+1. **The mesh was sized from the trial length** (`edge = L / rows`), which
+   makes the measurement self-referential: a shorter trial gives a finer mesh,
+   a finer mesh gives a limper cloth (§6.8), a limper cloth droops at a
+   shorter length still. Silk habotai ran away to a 0.45 cm specimen on
+   0.037 cm triangles — shorter than the cloth is modelled to be thick — and
+   reported `c = 0.225`, "4.0× too limp". The element size now comes off the
+   **asked** bending length and is held fixed across the bisection.
+2. **The settle budget was silently exhausted.** 12 evaluations was not
+   enough; silk spent all of them and a truncated bracket was reported as an
+   answer. Hence `--settles` and the `converged` column.
+
 ### 6.8 Bending is miscalibrated, and mesh-dependent
-**Superseded in large part by §6.9 — read that first.** The numbers below were
-taken at the default 30 cm overhang, which §6.9 shows is not a valid Peirce
-measurement, so the *absolute* calibration claims here are withdrawn. What
-survives is the shape of the problem: the achieved bending length varies with
-mesh and with specimen length in ways a material property must not.
+**CONFIRMED 2026-10-11 on a valid measurement.** Once §6.9's Peirce bisection
+existed, with width-independence established and convergence checked, the
+mesh-dependence survived — on the best-conditioned cell available:
+
+| denim | row size | measured c | overhang L |
+|---|---|---|---|
+| `--rows 12` | 0.275 cm | **2.105 cm** | 4.21 cm |
+| `--rows 18` | 0.183 cm | **1.208 cm** | 2.42 cm |
+
+**1.74× for a 1.5× refinement**, finer being limper. Denim was chosen because
+nothing about its geometry is marginal — `L` is 4.2 cm against a 0.4 cm cloth
+thickness, where a limp silk converges to `L` = 1.0 cm and every ratio in the
+test is strained. Two points do not pin an exponent, so none is quoted.
+
+What this eliminates: **not** the instrument (§6.9 is now valid), **not** the
+specimen geometry (the clean cell behaves the same), **not** solver
+convergence (3× bend sweeps: 0.403 → 0.403; 3× substeps: 0.403 → 0.412), and
+**not obviously the compliance formula**, which is the standard
+`k = D·|e|²/A_e` and should be mesh-independent on a regular mesh. So it is
+the discrete bending model's normalisation against element size, and that is
+the next thing to establish rather than guess at.
+
+**The practical consequence is blunt: no bending verdict in this project means
+anything without naming the mesh.** A preset is 1.3× too limp at one row size
+and 2.3× at another. `BEND_SCALE` cannot be fitted until this is fixed —
+fitting at one mesh would bake that mesh into the presets.
+
+The numbers below were taken at the old 30 cm fixed overhang and are retained
+only as the trail that led here; their *absolute* claims are withdrawn.
 
 **Found 2026-10-11, once the cantilever stopped quantising** (Step 3). Two
 apparent defects, both now known to be confounded by the instrument:
