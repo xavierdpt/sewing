@@ -17,59 +17,53 @@ record.
 
 ## Open
 
-- [ ] **Fix the discrete bending model's normalisation against element size,
-      against an analytic ground truth.**
-      [18-validation.md](18-validation.md) §6.8. On a valid Peirce measurement
-      — width-independent, converged, specimen length solved for — denim
-      measures `c` = 2.105 cm at a 0.275 cm row and 1.208 cm at a 0.183 cm
-      row: **1.74× for a 1.5× refinement**, finer being limper. Eliminated
-      already: the instrument, the specimen geometry, solver convergence (3×
-      sweeps and 3× substeps move it by 0 and 2 %), and the obvious reading of
-      the compliance formula, which is the standard `k = D·|e|²/A_e`.
+- [ ] **Converge the bending solve, or make it converge cheaply.**
+      [18-validation.md](18-validation.md) §6.8. The model is correct: at 80
+      substeps and 32 bend sweeps the solver reproduces closed-form beam
+      theory to 13 % and the asked bending length to 4 %, with `BEND_SCALE`
+      unchanged. At the defaults (20 substeps, 8 sweeps) the same denim
+      behaves as `c` = 0.90 cm instead of 3.3 — **3.7× too limp** — and the
+      viewer runs 10 substeps.
 
-      *Done so far:* the analytic ground truth exists —
-      `node tools/fabric.mjs --beam`, using `δ = L⁴/8c³` (the weight cancels
-      because `D = w·c³`), reporting the measured drop against the closed
-      form, `δ/L` so the validity of the linear regime is visible, and
-      `c_eff = (L⁴/8δ)^⅓`. It says denim droops **3.5× to 157×** more than
-      theory, worsening with refinement, and that `c_eff` moves with the span
-      as well as the row size — so this is **not** a constant calibration
-      error. See §6.8 for the table and the three candidate mechanisms.
+      *So this is a cost problem, not a calibration one.* 80/32 is ~16× the
+      work, and §6.5 already records that the viewer cannot afford what it has.
 
-      *Still to do:* establish the
-      scaling exponent from three or more refinement points before touching
-      `g.alpha = g.area / (BEND_SCALE · rigidity · g.len²)`, and check the
-      hinge stencil's `area` and `len` are the quantities that formula assumes
-      (combined area of both triangles, and the shared edge).
+      *Options, to be decided by measurement:* raise `bendSweeps` alone (it
+      was the cheaper of the two axes — 20/32 beat 80/8 on cost for similar
+      gain); solve bending implicitly or hierarchically instead of adding
+      Gauss-Seidel sweeps; or accept a documented stiffness deficit at
+      interactive settings and run calibrated numbers only headless.
 
-      *Acceptance:* tip deflection within 5 % of the closed form at three row
-      sizes, then Peirce `c` within 5 % over a 3× refinement. Only then re-fit
-      `BEND_SCALE` against the published ranges and rewrite Step 3's table.
-      Gate it: this is a tuned constant in a tuned system, baseline 276 pass /
-      2 fail.
+      *Acceptance:* `node tools/fabric.mjs --beam` within 10 % of the closed
+      form at the DEFAULT settings, for at least denim and silk habotai, at
+      two row sizes. Then re-run the Peirce table, which is currently measuring
+      an under-converged cloth, and re-check every bending verdict. Gate it
+      (277 pass / 1 fail) and profile it — this trades directly against §6.5.
 
-      *Why it is first:* bending is the only axis of the model nominally
-      calibrated against published values, and it currently has no
-      mesh-independent value at all — so every preset, every drape result and
-      the whole shear and plasticity programme downstream of it are resting on
-      a number that changes when the mesh does.
-
-      *Note on cost:* `--rows 24` timed out three times at 550 s on both
-      fabrics, and the obvious vertex count (~700 for the denim cell) does not
-      explain it. Find out why before scaling the refinement sweep up. The
-      `--beam` check is far cheaper per data point and needs no bisection, so
-      prefer it for the convergence study.
-
-      *Note on scope:* this is a correctness defect in the constitutive model,
-      not a tuning job, and it should start from reading `bendingStencils` and
-      `_solveHinges` rather than from a sweep. Deliberately left for a fresh
-      session rather than hacked at the end of a long one.
+      *Why it is first:* every bending number this project holds was measured
+      under-converged, which includes the drape results that the shear and
+      plasticity programmes are supposed to build on.
 
 ---
 
 ## Done
 
 Removed from the queue and recorded in [18-validation.md](18-validation.md):
+
+- **Fix the discrete bending model's normalisation against element size** —
+  done 2026-10-11, and **there was nothing wrong with the normalisation.**
+  Driven to 80 substeps and 32 sweeps the solver matches closed-form beam
+  theory to 13 % and the asked bending length to 4 %, `BEND_SCALE = 30`
+  unchanged — so `k = BEND_SCALE·D·|e|²/A_e` is right and the stencil's `len`
+  and `area` are the right quantities. The deficit is **under-convergence**:
+  `c_eff` goes 0.90 → 1.26 → 1.96 → 3.17 as substeps and sweeps rise, against
+  an asked 3.3. The apparent mesh-dependence follows, since convergence
+  quality falls as the element count rises. `cloth.js`'s own comment on
+  `BEND_SCALE` had named the mechanism; what it could not know was that the
+  instrument it was fitted against returned `edge/2`. Recorded at
+  [18-validation.md](18-validation.md) §6.8; the remaining cost decision is
+  item 1.
+
 
 - **Settle whether the fine-mesh penetration floor is real or a statistic** —
   done 2026-10-11. `penetration()` now reports the distribution behind its

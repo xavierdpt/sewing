@@ -940,7 +940,7 @@ while the limiter reported itself converged; with the defaults inert it reads
 the wrong verdict appears at 4 substeps regardless — but the *measurement* of
 it only works on the grain split. One more reason for §8 decision 1.
 ### 6.8 Bending is miscalibrated, and mesh-dependent
-**State:** open — queue item 1 of [19-todo.md](19-todo.md)
+**State:** cause found 2026-10-11 — under-convergence, not normalisation; the fix is queue item 1
 
 **CONFIRMED 2026-10-11 on a valid measurement.** Once §6.9's Peirce bisection
 existed, with width-independence established and convergence checked, the
@@ -962,7 +962,48 @@ convergence (3× bend sweeps: 0.403 → 0.403; 3× substeps: 0.403 → 0.412), a
 **not obviously the compliance formula**, which is the standard
 `k = D·|e|²/A_e` and should be mesh-independent on a regular mesh.
 
-**OPEN — this is item 1 of [19-todo.md](19-todo.md).**
+**CAUSE FOUND 2026-10-11: the discrete bending model is correct and so is
+`BEND_SCALE`. The defaults do not converge it.**
+
+Driven to convergence, the solver reproduces closed-form beam theory. Denim,
+asked `c` = 3.3 cm, specimen 1.5 cm, row 0.125 cm, `c_eff = c / dropRatio^⅓`:
+
+| substeps | bend sweeps | dropRatio | δ/L | **c_eff** | vs asked |
+|---|---|---|---|---|---|
+| 20 | 8 — `tools/fabric.mjs` default | 49.2 | 0.58 | **0.90** | 3.7× too limp |
+| 20 | 32 | 18.1 | 0.21 | 1.26 | 2.6× too limp |
+| 80 | 8 | 4.81 | 0.056 | 1.96 | 1.7× too limp |
+| 80 | 32 | 1.13 | 0.013 | **3.17** | **0.96× — right** |
+
+At the converged cell the drop is within **13 %** of the closed form and the
+bending length within **4 %** of the value asked for, with `BEND_SCALE = 30`
+unchanged. So `k = BEND_SCALE·D·|e|²/A_e` is correct, the stencil's `len` and
+`area` are the right quantities, and nothing needs re-fitting.
+
+**`cloth.js`'s own comment on `BEND_SCALE` was right about the mechanism** —
+*"the solver reaches a fraction of the stiffness it is asked for, because the
+bending pass gets a fixed number of sweeps and shares its vertices with
+constraints four orders stiffer"* — and wrong only in implying the fit made
+asked and achieved equal. It cannot have, because the instrument it was fitted
+against (`--scan`) returned `edge/2`.
+
+**This reframes most of today's bending numbers.** Everything measured at the
+default 20 substeps / 8 sweeps was reading a cloth roughly 3.7× limper than
+the preset asked for — including the Peirce values (silk 0.500, denim 2.105)
+and the whole "the solver is limper than it is told" direction. And the
+apparent mesh-dependence follows: convergence quality falls as the element
+count rises, so a finer mesh at a fixed sweep budget is limper. It was never a
+normalisation error.
+
+**What remains is a cost decision, not a bug.** 80 substeps and 32 sweeps is
+roughly 16× the work of the defaults, and §6.5 already records that the viewer
+cannot afford what it has. Either bending gets many more sweeps by default,
+or it needs a solve that converges without them — an implicit or hierarchical
+treatment rather than more Gauss-Seidel. That is queue item 1.
+
+---
+
+*The investigation below is what led here, retained for its eliminations.*
 
 **Measured against an analytic ground truth, 2026-10-11** —
 `node tools/fabric.mjs --beam`. For small deflections a cantilever droops
