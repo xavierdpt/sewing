@@ -25,6 +25,27 @@ export async function health(url = DEFAULT_URL, timeoutMs = 2000) {
 }
 
 /**
+ * The frames of a drape that is still being solved.
+ *
+ * Blender steps every frame whether or not anyone reads them, so the fall
+ * costs nothing extra to watch -- `captureEvery` makes it write each Nth one
+ * out as it goes and this reads whatever has landed since `from`. Without it
+ * the viewer had to run its OWN fall to have something to animate, using the
+ * contact model whose whole defect is that the body comes through the cloth:
+ * two simulations of one event, with the wrong one on screen.
+ */
+export async function drapeFrames(url, session, from = 0, timeoutMs = 4000) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${url}/frames?session=${encodeURIComponent(session || '')}`
+      + `&from=${from}`, { signal: ac.signal });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; } finally { clearTimeout(t); }
+}
+
+/**
  * Drape `asm` on `surface` remotely. Returns the settled vertices in the SAME
  * order, so they drop straight back into the Assembly.
  */

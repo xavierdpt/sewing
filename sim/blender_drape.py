@@ -26,6 +26,7 @@ in the job (thickness, margins) goes through the same conversion.
 """
 
 import json
+import os
 import sys
 
 import bpy
@@ -115,20 +116,64 @@ def add_cloth(verts, tris, pinned, opts, sew_edges=()):
     return ob
 
 
-def bake(ob, frames):
-    """Step the scene and read the evaluated cloth back, in centimetres."""
+def read_mesh(ob):
+    """The evaluated cloth, in centimetres."""
+    evaluated = ob.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    me = evaluated.to_mesh()
+    out = [[round(v.co.x / CM, 3), round(v.co.y / CM, 3), round(v.co.z / CM, 3)]
+           for v in me.vertices]
+    evaluated.to_mesh_clear()
+    return out
+
+
+def bake(ob, frames, every=0, progress_path=None):
+    """Step the scene, reading the cloth back as it goes.
+
+    THE TRAJECTORY WAS ALWAYS BEING COMPUTED AND THROWN AWAY. This stepped all
+    180 frames and read the mesh once, at the end, so the viewer had a settled
+    pose and nothing else -- and therefore ran its OWN fall to have something
+    to animate, which is a second simulation of the same event by the solver
+    whose contact is known to let the body through. Two sets of computations,
+    one of them wrong, and the wrong one is what you watched.
+
+    `every` > 0 captures every Nth frame as well as the last, so the viewer can
+    play back the fall that actually happened. Cost is bandwidth, not solve
+    time: the frames are free, they were already being stepped.
+
+    With `progress_path` each captured frame is ALSO appended as one JSON line
+    and flushed, so it can be read while the solve is still running. That is
+    the difference between watching the fall and waiting half a minute for a
+    replay of it, and it is the same append-a-line-and-GET-the-tail pattern
+    the side-car already uses for its log.
+    """
+    prog = open(progress_path, "w", buffering=1) if progress_path else None
     scene = bpy.context.scene
     scene.frame_start = 1
     scene.frame_end = frames
     dg = bpy.context.evaluated_depsgraph_get()
+    trail = []
     for f in range(1, frames + 1):
         scene.frame_set(f)
         dg.update()
-    evaluated = ob.evaluated_get(bpy.context.evaluated_depsgraph_get())
-    me = evaluated.to_mesh()
-    out = [[v.co.x / CM, v.co.y / CM, v.co.z / CM] for v in me.vertices]
-    evaluated.to_mesh_clear()
-    return out
+        if every > 0 and (f % every == 0):
+            m = read_mesh(ob)
+            trail.append(m)
+            if prog:
+                prog.write(json.dumps({"f": f, "verts": m}) + "\n")
+                prog.flush()
+                os.fsync(prog.fileno())
+    last = read_mesh(ob)
+    if every > 0 and (not trail or trail[-1] != last):
+        trail.append(last)
+        if prog:
+            prog.write(json.dumps({"f": frames, "verts": last}) + "\n")
+            prog.flush()
+            os.fsync(prog.fileno())
+    if prog:
+        prog.write(json.dumps({"done": True, "f": frames}) + "\n")
+        prog.flush()
+        prog.close()
+    return last, trail
 
 
 def main():
@@ -148,10 +193,13 @@ def main():
                       job.get("sewEdges", []))
 
     frames = int(job.get("frames", 60))
-    verts = bake(cloth, frames)
+    every = int(job.get("captureEvery", 0))
+    verts, trail = bake(cloth, frames, every, job.get("progressPath"))
 
-    json.dump({"verts": verts, "frames": frames}, open(out_path, "w"))
+    json.dump({"verts": verts, "frames": frames,
+               "trail": trail, "captureEvery": every}, open(out_path, "w"))
     print(f"DRAPE OK {len(verts)} vertices, {frames} frames, "
+          f"{len(trail)} captured, "
           f"{len(job.get('sewEdges', []))} seams")
 
 

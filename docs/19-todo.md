@@ -68,6 +68,18 @@ file is the only place that has to be read to know what is next.
 
 Removed from the queue and recorded in [18-validation.md](18-validation.md):
 
+- **Stop running two simulations of one fall; stream the side-car's frames** —
+  done 2026-10-12, from the report that the garment "teleported back up" after
+  X. The local solver was animating a fall whose contact lets the body
+  through, while Blender draped the pre-fall pose and then overwrote it.
+  Blender now flushes each solved frame as a JSON line, `GET /frames` reads
+  them mid-solve, and the viewer plays those instead of simulating: one
+  computation, by the solver that gets contact right. Frames verified arriving
+  during the solve (first at 8.0 s, then every ~1.4 s). Collider cut from
+  12,288 to 6,144 triangles on measurement — p95 difference 0.38 cm, inside
+  the cloth's thickness, for a third off the wall time. Recorded at
+  [18-validation.md](18-validation.md) §6.10.
+
 - **Decide §8.1, §8.5, §8.6** — done 2026-10-12, all three. Shear defaults
   inert (mechanism kept, two values restore it); bending deficit accepted and
   named, with `--calibrated` for figures quoted against published ranges;

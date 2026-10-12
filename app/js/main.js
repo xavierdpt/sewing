@@ -23,7 +23,8 @@ import { flaredSkirtPattern, placeSkirt, hemProfile, assemblyReport,
   waistRing } from './skirt.js';
 import { layOut, weldStitched } from './assemble.js';
 import * as arrange from './arrange.js';
-import { drapeRemote, health as sidecarHealth, DEFAULT_URL } from './remote.js';
+import { drapeRemote, drapeFrames, health as sidecarHealth,
+  DEFAULT_URL } from './remote.js';
 import { startTelemetry, tlog, flushTelemetry } from './telemetry.js';
 import { clearance } from './clearance.js';
 import { PatternTable } from './table.js';
@@ -171,6 +172,15 @@ const params = {
   // 0 cm at none for the side-car. So the local fall is a preview and the
   // side-car is the answer. See sim/server.py and docs/16-solvers.md.
   sidecarUrl: DEFAULT_URL, useSidecar: true, sidecarSeconds: 6,
+  // Capture EVERY solved frame, so the fall can be watched rather than
+  // replayed. Measured: Blender solves about 6 frames of simulated time per
+  // second of wall clock, so capturing every 5th gives a new pose only every
+  // 0.8 s -- a slideshow. Every frame arrives at ~6/s and is interpolated up
+  // to the render rate below, which is slow motion but continuous, and it is
+  // the real trajectory rather than a second guess at it. Costs bandwidth
+  // only: the frames were already being stepped. 0 returns the settled pose
+  // alone, which is what the viewer used to get.
+  sidecarCaptureEvery: 1,
   // Draw the body inset by half the cloth's thickness, which is the half of
   // the cloth the renderer otherwise leaves out. Capped at that; it is not a
   // knob for hiding penetration.
@@ -214,6 +224,10 @@ let sim = null;              // the running cloth simulation, if any
 let assembling = null;
 // what the drape side-car is doing, for the HUD
 let sidecar = null;
+// Frames arriving from the side-car, waiting to be shown. The render loop
+// drains this instead of stepping the local solver: ONE set of computations,
+// by the solver that gets contact right, and you watch that one fall.
+let playback = null;
 let clothMesh = null;
 let playing = false;
 let bodyMesh = null;
@@ -1054,7 +1068,14 @@ function finishAssembly() {
   // while a sewing pass was running, so `playing` was already true. Since W
   // became a toggle the pass ends paused, and X was welding a garment with
   // gravity enabled and then leaving it hanging in mid-air, untouched.
-  playing = true;
+  //
+  // And when the side-car is going to drape it, the local solver must not
+  // step it at all. Running both was two simulations of one event -- the
+  // local one being the one whose contact lets the body through -- and the
+  // view snapped backwards when the side-car's answer landed on top of a fall
+  // it had never seen. `sendToSidecar` turns this back on if the side-car
+  // turns out to be unreachable.
+  playing = !params.useSidecar;
   assembling.seamReport = report;
   panelOfVert = [];
   if (!welded.openStitches.length) {
@@ -1111,10 +1132,22 @@ async function sendToSidecar() {
     console.warn(`no drape side-car at ${params.sidecarUrl} -- showing the local`
       + ' preview only, which lets the body through between the vertices.'
       + ' Start it with:  python3 sim/server.py');
+    // nothing better is coming, so let the local solver have it after all
+    if (sim && asm === target) playing = true;
     updateHUD();
     return;
   }
-  sidecar = { state: 'running', since: Date.now() };
+  sidecar = { state: 'running', since: Date.now(), shown: 0 };
+  // ONE simulation, and it is this one. The local fall used to run underneath
+  // so there was something to animate -- a second simulation of the same
+  // event by the contact model whose defect is that the body comes through
+  // the cloth (docs/16-solvers.md section 3), and it was the one on screen.
+  // Worse, the side-car was handed the pose from before that fall, so its
+  // answer arrived describing a garment that had already moved and the view
+  // snapped back to it.
+  playing = false;
+  playback = { queue: [], from: 0, done: false, target };
+  pollFrames();
   tlog('sidecar-start', phaseMetrics({ backends: Object.keys(h.backends || {}) }));
   updateHUD();
   console.log(`side-car (${Object.entries(h.backends).map(([k, v]) => `${k}: ${v}`).join(', ')})`
@@ -1127,13 +1160,21 @@ async function sendToSidecar() {
       seconds: params.sidecarSeconds,
       pinned,
       selfCollision: params.selfCollision,
+      captureEvery: params.sidecarCaptureEvery,
     });
     // the garment may have been cleared or rebuilt while we waited
-    if (asm !== target) { sidecar = null; return; }
+    if (asm !== target) { sidecar = null; playback = null; return; }
     playing = false;
-    out.verts.forEach((p, i) => {
-      target.verts[i][0] = p[0]; target.verts[i][1] = p[1]; target.verts[i][2] = p[2];
-    });
+    if (playback) {
+      // let the frames already in hand finish playing; the settled pose is
+      // the last of them and jumping to it now would cut the fall short
+      playback.final = out.verts;
+      playback.done = true;
+    } else {
+      out.verts.forEach((p, i) => {
+        target.verts[i][0] = p[0]; target.verts[i][1] = p[1]; target.verts[i][2] = p[2];
+      });
+    }
     for (const v of sim.vel) { v[0] = 0; v[1] = 0; v[2] = 0; }
     const pen = sim.penetration();
     sidecar = { state: 'done', backend: out.backend, seconds: out.wallSeconds, pen };
@@ -1807,6 +1848,73 @@ function logDropSettled(outcome) {
   } catch (e) {
     tlog(`${sim.drop.kind}-${outcome}`, { outcomeError: String(e && e.message || e) });
   }
+}
+
+/**
+ * Read whatever frames the side-car has solved since last time.
+ *
+ * Blender steps all 180 frames whether or not anyone looks at them, so the
+ * trajectory is free; `captureEvery` makes it flush each Nth one to a file as
+ * it goes and this picks them up. Polling rather than streaming because the
+ * side-car is a 200-line http.server and appending JSON lines that a GET
+ * reads back is the pattern it already uses for its log.
+ */
+async function pollFrames() {
+  if (!playback) return;
+  const r = await drapeFrames(params.sidecarUrl, telemetrySessionId, playback.from);
+  if (!playback) return;
+  if (r && Array.isArray(r.frames)) {
+    for (const fr of r.frames) if (fr.verts) playback.queue.push(fr.verts);
+    playback.from = r.next ?? playback.from + r.frames.length;
+    if (r.done) playback.solved = true;
+  }
+  // keep asking while the solve is running or frames are still queued
+  if (!playback.solved || playback.queue.length) setTimeout(pollFrames, 250);
+}
+
+/**
+ * Show the next solved frame, if one has arrived.
+ *
+ * Returns true when it consumed a frame, so the render loop knows not to step
+ * the local solver -- the two must never both be moving the same vertices.
+ */
+function stepPlayback() {
+  if (!playback) return false;
+  // Interpolate toward the next solved pose rather than snapping to it.
+  // Frames arrive at about 6 a second -- Blender's solve rate -- and the
+  // render loop runs at 60, so snapping would show six discrete jumps a
+  // second. Easing toward the target gives continuous motion at the render
+  // rate; it is slow motion, because the solve is slower than real time, but
+  // it is the trajectory that actually happened.
+  if (!playback.aim) playback.aim = playback.queue.shift() || null;
+  if (playback.aim) {
+    const V = playback.target.verts, a = playback.aim;
+    const k = playback.queue.length > 2 ? 0.5 : 0.25;   // catch up if behind
+    let far = 0;
+    for (let i = 0; i < V.length && i < a.length; i++) {
+      const dx = a[i][0] - V[i][0], dy = a[i][1] - V[i][1], dz = a[i][2] - V[i][2];
+      far = Math.max(far, Math.abs(dx), Math.abs(dy), Math.abs(dz));
+      V[i][0] += dx * k; V[i][1] += dy * k; V[i][2] += dz * k;
+    }
+    if (far < 0.01) {
+      playback.aim = null;
+      if (sidecar) sidecar.shown = (sidecar.shown || 0) + 1;
+    }
+    updateClothMesh();
+    updateStitchLines();
+    return true;
+  }
+  // nothing left to show and nothing more coming: settle on the final pose
+  if (playback.done && playback.solved && playback.final) {
+    const V = playback.target.verts;
+    playback.final.forEach((p, i) => { V[i][0] = p[0]; V[i][1] = p[1]; V[i][2] = p[2]; });
+    for (const v of sim.vel) { v[0] = 0; v[1] = 0; v[2] = 0; }
+    playback = null;
+    updateClothMesh();
+    updateStitchLines();
+    updateHUD();
+  }
+  return false;
 }
 
 /**
@@ -2922,6 +3030,10 @@ updateHUD();
  * only one of them.
  */
 function stepFrame() {
+  // A drape in flight owns the vertices. Stepping the local solver as well
+  // would be two simulations writing the same positions, which is what made
+  // the view snap backwards when the side-car's answer landed.
+  if (playback) { stepPlayback(); return; }
   if (!(playing && sim)) return;
   // A sewing pass: ramp the thread tension, then stop and report.
   //

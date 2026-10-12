@@ -103,15 +103,36 @@ export function buildJob(asm, surface, {
   fabric = 'cotton poplin', seconds = 6, fps = 30, pinned = null,
   bodyThicknessCm = 0.35, clothThicknessCm = 0.35, selfCollision = true,
   gravity = true, quality = 14, collisionQuality = 12,
-  nu = 96, nv = 64, sewEdges = null, sewingForceMax = 0, backend = 'blender',
+  // Collider resolution. 96 x 64 was 12,288 triangles against a garment of
+  // 1,872, and Blender tests the cloth against all of them every frame -- the
+  // largest single term in a 30 second drape. Measured on a four-panel skirt,
+  // difference from the 96 x 64 drape:
+  //
+  //   64 x 48   6,144 tris   20.7 s   median 0.154 cm, p95 0.38, max 0.742
+  //   48 x 32   3,072 tris   14.9 s   median 0.288 cm, p95 0.496, max 0.97
+  //
+  // At 64 x 48 the 95th percentile is inside the cloth's own 0.4 cm thickness
+  // and only 4.4 % of vertices move further than that, for a third off the
+  // wall time; at 48 x 32 it is 14.7 % and too coarse. So 64 x 48, and the
+  // knob stays exposed.
+  //
+  // Caveat worth keeping: that is difference from the PREVIOUS DEFAULT, not
+  // from truth. Whether 96 x 64 was itself converged has never been checked,
+  // and doing so means a 128 x 96 run.
+  nu = 64, nv = 48, sewEdges = null, sewingForceMax = 0, backend = 'blender',
   // so the server's log line for this drape joins up with the viewer's
   session = null,
+  // Capture every Nth frame, so the viewer can SHOW the fall the side-car
+  // computed rather than running its own. 0 keeps the old behaviour of
+  // returning the settled pose only.
+  captureEvery = 0,
 } = {}) {
   return {
     backend,
     session,
     fps,
     frames: Math.max(1, Math.round(seconds * fps)),
+    captureEvery,
     gravity,
     bodyThicknessCm,
     body: bodyMesh(surface, { nu, nv }),

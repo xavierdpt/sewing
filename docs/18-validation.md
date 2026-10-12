@@ -946,6 +946,75 @@ mesh sizes.
 coarse end, where penetration is widespread rather than confined to a few
 points.
 
+### 6.10 The viewer ran two simulations of one fall, and showed the wrong one
+**State:** done 2026-10-12 — the side-car's own frames are streamed and played; one simulation
+
+Pressing **X** welded the garment and then ran the LOCAL solver's fall so
+there was something to animate, while the side-car draped the same garment in
+Blender. Two simulations of one event — and the one on screen was the one
+whose contact is a point query per vertex, which `docs/16-solvers.md` §3
+measures at 1.26 % of the cloth area inside the body against Blender's 0 %.
+When the side-car's answer arrived it was pasted straight over whatever the
+local fall had reached, so the view **snapped backwards**: reported as "I saw
+gravity, but then it teleported back up".
+
+From the telemetry of that session:
+
+```
+10:11:41  welded         playing=True   weldedPct 73.7   seam gap 2.698
+10:11:42  sidecar-start  playing=True
+10:12:10  sidecar-done   playing=False  simSeconds 1.32  seam gap 3.172
+```
+
+The job was despatched 0.6 s after the weld, so Blender draped the garment as
+it was *before* the fall; the result landed 28 s later over a local state that
+had moved on for 1.32 s of simulated time. The seam gap going 2.698 → 3.172
+across the swap is that mismatch, not an improvement. The guard in
+`sendToSidecar` checked whether the garment had been *rebuilt*
+(`if (asm !== target)`) and not whether it had **moved**.
+
+**Fixed by deleting the second simulation rather than reconciling it.**
+`bake()` in `sim/blender_drape.py` was stepping all 180 frames and reading the
+mesh once, at the end; it now flushes each captured frame as a JSON line while
+it solves, `GET /frames?session=…&from=N` reads whatever has landed — the same
+append-and-tail pattern the side-car already used for its log — and the viewer
+plays those frames instead of stepping anything. `playing = !params.useSidecar`
+at the weld, and `stepFrame()` hands the vertices to the playback, so the two
+can never both be writing them. The settled pose is applied as the last frame
+rather than mid-fall, which removes the race by construction.
+
+Verified end to end: frames arrive **during** the solve — first at 8.0 s
+(Blender startup), then one every ~1.4 s, done at 28.7 s.
+
+**The honest limitation.** Blender solves about **6 frames of simulated time
+per second of wall clock**, so a 6-second fall cannot be watched in under
+~30 s. It plays in slow motion, interpolated up to the render rate so it is
+continuous rather than six jumps a second. There is no way round that without
+a faster solver; the alternative was smooth motion that was a different and
+wrong computation.
+
+**The collider was the biggest cost term, and is now measured.** It was
+96 × 64 = 12,288 triangles against a garment of 1,872, tested every frame.
+Difference from that drape on a four-panel skirt:
+
+| collider | wall | median | p95 | max | beyond one cloth thickness |
+|---|---|---|---|---|---|
+| 12,288 (96×64) | 30.8 s | — reference — |
+| **6,144 (64×48)** | **20.7 s** | **0.154 cm** | **0.38** | 0.742 | **4.4 %** |
+| 3,072 (48×32) | 14.9 s | 0.288 | 0.496 | 0.970 | 14.7 % |
+
+64 × 48 is the new default in `drapejob.js`: p95 inside the cloth's own 0.4 cm
+thickness for a third off the wall time. **Caveat kept in the code:** that is
+difference from the previous default, not from truth — whether 96 × 64 was
+itself converged has never been checked, and doing so needs a 128 × 96 run.
+
+**A claim withdrawn.** I reported a "14 s client timeout discarding a
+completed 53 s job". There is no timeout in that path: only `health` (2 s) and
+the new `drapeFrames` (4 s) abort, and the server's subprocess limit is 600 s.
+The event order settles it — `sidecar-failed` at 10:09:17.782 with Firefox's
+`NetworkError when attempting to fetch resource`, then `session-start` 0.6 s
+later. The page was reloaded mid-job. Nothing to fix.
+
 ### 6.7 A run with `substeps: 4` slid off the body
 **State:** done 2026-10-11 — `grainOverLimit` warns; floor measured at 6, trustworthy from 10
 

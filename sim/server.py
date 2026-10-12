@@ -31,6 +31,7 @@ import threading
 import time
 from datetime import date, datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOGDIR = os.path.join(HERE, "logs")
@@ -84,9 +85,25 @@ def backend(name):
     return wrap
 
 
+def frames_path(session):
+    """Where a running drape writes its frames, so they can be read mid-solve.
+
+    Not in the job's temp directory: that is deleted when the subprocess
+    returns, and the whole point is to read these WHILE it runs. Keyed by
+    session so two viewers do not overwrite each other.
+    """
+    safe = "".join(c for c in str(session or "anon") if c.isalnum() or c in "-_")[:64]
+    return os.path.join(LOGDIR, f"frames-{safe}.jsonl")
+
+
 @backend("blender")
 def run_blender(job):
     """Hand the job to Blender's cloth solver, headless."""
+    os.makedirs(LOGDIR, exist_ok=True)
+    if job.get("captureEvery"):
+        job["progressPath"] = frames_path(job.get("session"))
+        # start clean, so a reader cannot pick up the previous drape's tail
+        open(job["progressPath"], "w").close()
     with tempfile.TemporaryDirectory(prefix="drape-") as d:
         jp, op = os.path.join(d, "job.json"), os.path.join(d, "out.json")
         with open(jp, "w") as f:
@@ -146,6 +163,38 @@ class Handler(BaseHTTPRequestHandler):
                                  "events": [json.loads(x) for x in tail]})
             except FileNotFoundError:
                 self._send(200, {"path": log_path(), "events": []})
+        elif p.split("?")[0] == "/frames":
+            # The frames of a drape that is STILL RUNNING. Blender appends one
+            # JSON line per captured frame and flushes it, so the viewer can
+            # show the fall as it is computed instead of waiting half a minute
+            # for a replay -- and instead of running its own fall underneath
+            # with the contact model that lets the body through, which was two
+            # simulations of one event with the wrong one on screen.
+            q = parse_qs(urlparse(self.path).query)
+            session = (q.get("session") or [None])[0]
+            start = int((q.get("from") or ["0"])[0])
+            fp = frames_path(session)
+            try:
+                with open(fp) as f:
+                    lines = f.readlines()
+            except FileNotFoundError:
+                lines = []
+            out, done = [], False
+            for ln in lines[start:]:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    rec = json.loads(ln)
+                except ValueError:
+                    break          # a line still being written; stop here
+                if rec.get("done"):
+                    done = True
+                else:
+                    out.append(rec)
+            self._send(200, {"from": start, "frames": out,
+                             "next": start + len(out) + (1 if done else 0),
+                             "done": done})
         else:
             self._send(404, {"error": "no such endpoint"})
 
