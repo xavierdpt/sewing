@@ -750,7 +750,7 @@ contact and inflate the sheet, which `selfRingExclude` guards. For thickness
 comparable to the edge the honest answer is C-IPC.
 
 ### 6.3 Gate: 2 failures, both attributed
-**State:** open — the accordion control is fixed (277/1); the dart awaits §8.5
+**State:** done 2026-10-12 — both fixed; gate 278 pass, 0 fail
 
 Baseline was 277 pass / 1 fail. Now **276 / 2**.
 
@@ -1302,8 +1302,26 @@ These are not mine to make.
    toward substeps remains available and unlicensed — it needs the disc, the
    skirt and the gate, because the beam cannot see the closed-ring case
    `stretchSweeps: 8` exists for.
-5. **Adopt the measured strain limits from `sim/cipc/fabrics.md`?**
-   **Now the strongest-evidenced item on this list:** it is the root cause of
+5. ~~**Adopt the measured strain limits from `sim/cipc/fabrics.md`?**~~
+   **DECIDED 2026-10-12: adopted, as a flat 6.1 % floor for the wovens.**
+   `sim/cipc/fabrics.md` declined to adopt its own numbers because mapping a
+   Young's modulus and a Poisson's ratio onto XPBD compliances *"is a real
+   piece of work and not a lookup"* — true, but **`maxStrain` is
+   dimensionless**, so a strain limit needs no mapping and transfers directly.
+   The modulus work remains outstanding; this one value did not have to wait
+   for it.
+   Flat floor rather than a scaled spread, because the old ordering (denim
+   2 %, poplin 4 %) was invented too and the data gives a *range*, not
+   per-fabric values. Jersey stays at 25 % as a knit outside that woven set.
+   **Gate: 278 pass, 0 fail — green for the first time.** The dart closed at
+   0.185 cm, exactly as predicted, and seam closure improved across three
+   independent checks (`0.021 → 0.007 cm` left, `52.3 → 56.8 %` welded).
+   **Still owed: the yoke/slip sweep must be re-run**, because
+   `docs/11-cloth.md:400` is right that it "turns entirely on the cloth
+   refusing to stretch past the shoulder girth" and it was found on a cloth
+   2–3× too stiff.
+
+   *The evidence that decided it:* it is the root cause of
    the dart-closing gate failure (§6.3) *and* of the disc's strain pinning
    (§6.6), and at the most conservative measured value (6.1 %) the failing
    check passes. The presets assume 2–4 % where the measured wovens are
@@ -1322,6 +1340,19 @@ These are not mine to make.
   the one axis that is calibrated.
 - **Do not compare performance across models of different accuracy.** See
   Step 8.
+- **A check whose name states a RELATION must not contain a constant.** Two
+  gate assertions had to be repaired on 2026-10-11/12, and both had the same
+  defect: an absolute threshold standing in for a relative property, tuned
+  against a guessed value and therefore encoding the guess. The accordion
+  control compared heap height when it meant *"the layers do not pass through
+  each other"* (now `deepOverlaps`); the assembly check hardcoded
+  `maxStretchPct <= 4.0` when it meant *"past what it can take"* (now
+  `grainOverLimit <= 1.05`, against the fabric's own `maxStrain`). Both were
+  made **stricter**, not looser: the new forms still fail at 35,206 crossings
+  and at 1.88× the tear limit respectively, where a raised constant would have
+  passed. The tell is in the wording — if the name says "past what it can
+  take" or "the self-collision doing it", the threshold belongs in terms of
+  the thing being compared against.
 - **Do not trust a verdict from an instrument whose resolution has not been
   checked.** The cantilever's `edge/2` quantisation produced a spurious
   "in range" for a fabric whose stiffness it could not resolve at all.

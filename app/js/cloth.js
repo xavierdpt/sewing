@@ -68,14 +68,42 @@ export const G = 981;
  * what decide whether a hole can be forced over a shoulder.
  */
 export const FABRICS = {
+  // `maxStrain` DECIDED 2026-10-12 from measurement, not plausibility.
+  //
+  // These were 0.02-0.04 for the wovens, guessed. `sim/cipc/fabrics.md` holds
+  // five MEASURED cloths of 150-240 gsm (Wang et al.'s dataset, via C-IPC)
+  // whose strain limits are 6.1, 6.5, 8.5 and 13.4 % -- plus a 0.5 % near-
+  // rigid control that is not a fabric. Not one real woven in that set is
+  // under 6.1 %, so every woven here was 2-3x too tight.
+  //
+  // That file declined to adopt its own numbers because mapping a Young's
+  // modulus and a Poisson's ratio onto XPBD compliances "is a real piece of
+  // work and not a lookup", which is true -- but `maxStrain` is DIMENSIONLESS.
+  // A strain limit needs no mapping; only E and nu do. So this one value
+  // transfers directly and the rest of that work is still outstanding.
+  //
+  // Adopted as a flat 6.1 % floor for the wovens rather than by scaling the
+  // old spread, because the old ordering (denim 2 %, poplin 4 %) was invented
+  // too, and what the data gives is a RANGE and not per-fabric values. A flat
+  // floor is the least this can be changed to and still be measured. Per-
+  // fabric limits await a tensile test; docs/18-validation.md Step 4.
+  //
+  // Cotton jersey stays at 25 %: it is a knit, outside that woven set, and
+  // nothing here measures it.
+  //
+  // What this changes: docs/11-cloth.md:400 predicted it -- the yoke/slip
+  // boundary "turns entirely on the cloth refusing to stretch past the
+  // shoulder girth" and "was found with too stiff a cloth and should be
+  // re-run". It also closes the dart the gate could not: 0.252 cm at 3 %,
+  // 0.185 at 6.1 %, against a 0.2 cm threshold.
   //                        gsm  stretch   bendCm  mu   damp  maxStrain
-  'cotton poplin':   { gsm: 120, stretch: 2e-7, bendLengthCm: 1.7, friction: 0.40, damp: 0.75, maxStrain: 0.04 },
-  'linen':           { gsm: 190, stretch: 3e-7, bendLengthCm: 2.3, friction: 0.45, damp: 0.80, maxStrain: 0.03 },
-  'wool crepe':      { gsm: 220, stretch: 8e-7, bendLengthCm: 1.9, friction: 0.35, damp: 0.85, maxStrain: 0.06 },
-  'silk habotai':    { gsm:  60, stretch: 5e-7, bendLengthCm: 1.1, friction: 0.22, damp: 0.55, maxStrain: 0.04 },
+  'cotton poplin':   { gsm: 120, stretch: 2e-7, bendLengthCm: 1.7, friction: 0.40, damp: 0.75, maxStrain: 0.061 },
+  'linen':           { gsm: 190, stretch: 3e-7, bendLengthCm: 2.3, friction: 0.45, damp: 0.80, maxStrain: 0.061 },
+  'wool crepe':      { gsm: 220, stretch: 8e-7, bendLengthCm: 1.9, friction: 0.35, damp: 0.85, maxStrain: 0.061 },
+  'silk habotai':    { gsm:  60, stretch: 5e-7, bendLengthCm: 1.1, friction: 0.22, damp: 0.55, maxStrain: 0.061 },
   'cotton jersey':   { gsm: 180, stretch: 2e-5, bendLengthCm: 1.4, friction: 0.50, damp: 0.75, maxStrain: 0.25 },
-  'denim':           { gsm: 340, stretch: 1e-7, bendLengthCm: 3.3, friction: 0.55, damp: 0.90, maxStrain: 0.02 },
-  'interfaced twill':{ gsm: 260, stretch: 1e-7, bendLengthCm: 5.0, friction: 0.50, damp: 0.90, maxStrain: 0.02 },
+  'denim':           { gsm: 340, stretch: 1e-7, bendLengthCm: 3.3, friction: 0.55, damp: 0.90, maxStrain: 0.061 },
+  'interfaced twill':{ gsm: 260, stretch: 1e-7, bendLengthCm: 5.0, friction: 0.50, damp: 0.90, maxStrain: 0.061 },
 };
 
 /**

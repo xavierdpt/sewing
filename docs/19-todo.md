@@ -17,34 +17,46 @@ record.
 
 ## Open
 
-- [ ] **Decide §8.6: accept, pay, or rewrite the bending solve.** Nothing
-      smaller is now blocking, and the three options are measured
-      ([18-validation.md](18-validation.md) §6.8). This one is a decision
-      rather than a task, so it sits here until it is made.
+- [ ] **Re-run the yoke/slip sweep on the measured strain limits.**
+      [18-validation.md](18-validation.md) §8.5 and `docs/11-cloth.md:400`.
+      The critical hole size — the whole point of the disc test — "turns
+      entirely on the cloth refusing to stretch past the shoulder girth", and
+      it was found with wovens limited to 2–4 % strain where the measured
+      value is 6.1 %. `slipSweep()` in `app/js/droptest.js` already does the
+      sweep.
 
-      *If "accept":* the work is documentation plus a `--calibrated` preset
-      (160 substeps) for headless runs, and re-running the Peirce table there.
-      Half a day.
+      *Do:* run it per fabric, record the critical inner radius against the
+      old figures, and update `docs/11-cloth.md` §7 where it states the
+      boundary. Quote nothing from an interactive-resolution run — §8.6 means
+      bending is ~4× limp there — so use `--calibrated` settings or state the
+      resolution beside every number.
 
-      *If "pay":* raise the default budget, then gate and profile — it trades
-      directly against §6.5, where the viewer already cannot afford what it
-      spends.
+      *Acceptance:* critical hole size per fabric at a stated substep count,
+      with the old and new figures side by side, and the prediction in
+      `docs/11-cloth.md:400` either confirmed or refuted in as many words.
 
-      *If "rewrite":* implicit or hierarchical bending. Substantial, and the
-      only option that makes calibrated bending affordable interactively.
-
-      *Free either way, but not yet licensed:* reallocating the existing
-      budget toward substeps is 2.3× more accurate at identical cost
-      (80/1/1 against the defaults' 10/8/8), which is what `cloth.js:142`
-      says XPBD wants. It needs the disc, the skirt and the gate first,
-      because the beam cannot see the closed-ring case that `stretchSweeps: 8`
-      exists for.
+      *Why it is first:* it is the one headline result in the project that is
+      known to have been measured on the wrong cloth, and the fix is to run an
+      instrument that already exists.
 
 ---
 
 ## Done
 
 Removed from the queue and recorded in [18-validation.md](18-validation.md):
+
+- **Decide §8.1, §8.5, §8.6** — done 2026-10-12, all three. Shear defaults
+  inert (mechanism kept, two values restore it); bending deficit accepted and
+  named, with `--calibrated` for figures quoted against published ranges;
+  measured strain limits adopted as a flat 6.1 % woven floor. **Gate 278 pass,
+  0 fail — green for the first time**, with the dart closing at 0.185 cm as
+  predicted and seam closure improving on three independent checks. One repair
+  needed on the way: an assembly check hardcoded `maxStretchPct <= 4.0` where
+  its own name said "past what it can take", now `grainOverLimit <= 1.05`
+  against the fabric's own limit — the second absolute-threshold-for-relative-
+  property defect of the session, now recorded as a rule in §9. Recorded at
+  [18-validation.md](18-validation.md) §8.1, §8.5, §8.6 and §6.3.
+
 
 - **Per-frame impact tracking, and the reported denim bounce** (the small half
   of Step 5) — done 2026-10-11. `_trackMotion()` reports `reboundCm`,

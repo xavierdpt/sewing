@@ -1808,8 +1808,20 @@ line('an impossible seam shows tension instead of being forced shut');
       > Math.max(...sound.map((x) => x.meanTensionGf)) + 5,
     `${touching.map((x) => x.meanTensionGf).join('/')} gf against `
       + `${sound.map((x) => x.meanTensionGf).join('/')} gf`);
+  // Against the fabric's OWN limit, not a constant. The check's name says
+  // "past what it can take", and what linen can take is `maxStrain` -- but
+  // the threshold was hardcoded at 4.0, a number chosen when that limit was a
+  // guessed 3 %. Adopting the measured 6.1 % (see `FABRICS`) made the cloth
+  // stretch to 6.2 %, which is AT its limit within the limiter's tolerance
+  // and exactly what the check means to allow, while tripping a constant that
+  // was really testing "linen, at the 2026-10-11 preset". `grainOverLimit` is
+  // the ratio against the fabric's own ceiling, so this now reads the same
+  // for a denim and a jersey, and still fails loudly when the yarns are
+  // genuinely torn -- it reaches 1.88 on an under-resolved substep count.
   check('and the cloth is NOT stretched past what it can take',
-    r.sim.report().maxStretchPct <= 4.0, `${r.sim.report().maxStretchPct} %`);
+    r.sim.report().grainOverLimit <= 1.05,
+    `${r.sim.report().maxStretchPct} % against this fabric's `
+      + `${(100 * r.sim.maxStrain).toFixed(1)} % limit`);
   check('the garment is welded only where it closed',
     r.welded.openStitches.length > 0 && r.welded.weldedPct < 100,
     `${r.welded.weldedPct} % welded`);
