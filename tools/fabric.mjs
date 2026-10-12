@@ -54,7 +54,13 @@ const useFixed = args.includes('--fixed');
 const only = flag('--fabric', null);
 const overhangCm = +flag('--overhang', 30);
 const widthCm = +flag('--width', 5);
-const substeps = +flag('--substeps', 20);
+// DECIDED 2026-10-12 (section 8.6): bending is not converged at interactive
+// settings and cannot be, at 16x the budget. So calibration runs say so
+// explicitly. `--calibrated` is the setting at which the solver reproduces
+// closed-form beam theory to 13 % and the asked bending length to 4 %; any
+// number quoted against a published range should come from a run with it.
+const calibrated = args.includes('--calibrated');
+const substeps = +flag('--substeps', calibrated ? 160 : 20);
 const bendSweeps = +flag('--sweeps', 8);
 // Exposed because cloth.js:142 says "XPBD wants many substeps, one sweep
 // each", while DEFAULTS ships 10 substeps with 8 stretch and 8 bend sweeps --

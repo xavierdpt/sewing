@@ -206,8 +206,29 @@ export const DEFAULTS = {
   // docs/06-open-questions.md section 1 once the scraps-and-a-bowl experiment
   // has been run -- and note that shear alone cannot produce a 1 cm crease on
   // a mesh whose finest representable wrinkle is 8.8 cm (edge 2.2).
-  biasCompliance: 25,
-  biasStrainFactor: 6,
+  // DECIDED 2026-10-12: inert by default. The mechanism stays, the numbers do
+  // not. They were never measured -- 25 and 6 were plausibility arguments --
+  // and three measurements say shipping them on was wrong:
+  //
+  //   * at edge 1.0 the trellis engages (bias strain 4.4 -> 16.6 %) but drags
+  //     YARN strain from 4.5 to 11.4 % and neither run settles, which is the
+  //     opposite of the intent;
+  //   * at edge 2.2 it changes nothing measurable, because the freed length
+  //     has nowhere to go on a mesh whose finest wrinkle is 8.8 cm against
+  //     the ~1 cm creases real cloth makes;
+  //   * it loosened the per-edge strain ceiling 6x on bias edges, which hid
+  //     an under-resolved substep count behind a limiter that reported itself
+  //     converged (section 6.7).
+  //
+  // Shear is real and this project needs it -- docs/01-geometry.md:142 and
+  // the observation that cloth "pulls and pushes the fabric around" into
+  // ~1 cm creases are the same fact. But an unfitted constant is not that
+  // mechanism working, and the experiment that would calibrate it is one
+  // afternoon with four scraps and a bowl
+  // (docs/06-open-questions.md section 1). Set `biasCompliance: 25,
+  // biasStrainFactor: 6` to get the behaviour back for experiments.
+  biasCompliance: 1,
+  biasStrainFactor: 1,
   collisionMargin: 0.10,  // cm; half the cloth's thickness, held off the body
   // Collide the MIDPOINT of each edge as well as the vertices.
   //

@@ -1266,9 +1266,18 @@ interfaced twill is the dynamic range any of these tests has to cover.
 
 These are not mine to make.
 
-1. **Disable the shear defaults pending identification?** Recommended:
-   `biasCompliance: 1`. It is an unvalidated change to physics that currently
-   makes yarn strain worse at fine meshes. The mechanism and reporting stay.
+1. ~~**Disable the shear defaults pending identification?**~~ **DECIDED
+   2026-10-12: inert.** `biasCompliance: 1`, `biasStrainFactor: 1`; the
+   mechanism and the reporting stay and two values bring the behaviour back.
+   Three measured reasons, not one: it makes *yarn* strain worse at fine
+   meshes (4.5 → 11.4 %) and stops the drop settling; it changes nothing
+   measurable at coarse meshes, because the length it frees has nowhere to go
+   until the mesh can carry a ~1 cm crease; and it loosened the per-edge
+   strain ceiling 6× on bias edges, which hid an under-resolved substep count
+   behind a limiter reporting itself converged (§6.7). Shear is real and
+   wanted — `docs/01-geometry.md:142` and the observed "pulls and pushes the
+   fabric around" into ~1 cm creases are the same fact — but an unfitted
+   constant is not that mechanism working. Gate unchanged at 277/1.
 2. ~~**Swap the accordion gate check to `deepOverlaps`?**~~ **Done
    2026-10-11** — see §6.3. 277 pass / 1 fail.
 3. **Step 7: remesh, side-car, or documented ceiling?** The side-car is the
@@ -1278,15 +1287,21 @@ These are not mine to make.
    and most of Step 2's calibration depends on it. The two that unblock the
    most: the hemisphere cap diameter before wrinkling (shear), and the crease
    pitch plus fold count on a draped disc (drape and resolution).
-6. **Bending at interactive settings is ~4× too limp. Accept, or pay, or
-   rewrite the solve?** (§6.8.) Three options, all measured: *accept* — keep
-   the defaults, document that interactive bending is not quantitative, and
-   trust only headless runs at 160 substeps; *pay* — raise the default budget
-   16×, which §6.5 says the viewer cannot afford; *rewrite* — implicit or
-   hierarchical bending, which converges without the budget but is a
-   substantial piece of work. There is also a free 2.3× in reallocating the
-   existing budget toward substeps, which needs the disc, the skirt and the
-   gate before it can be a default.
+6. ~~**Bending at interactive settings is ~4× too limp. Accept, pay, or
+   rewrite?**~~ **DECIDED 2026-10-12: accept, and make the deficit
+   explicit.** Paying is unavailable — §6.5 already records that the viewer
+   cannot afford what it currently spends, and calibration costs 16× that.
+   Rewriting (implicit or hierarchical bending) is the right long-term answer
+   and a substantial piece of work, not something to begin at the end of a
+   session. So: `tools/fabric.mjs --calibrated` sets 160 substeps, the point
+   at which the solver reproduces closed-form beam theory to 13 % and the
+   asked bending length to 4 %, and **any figure quoted against a published
+   range must come from a run with it.** Interactive bending stays ~4× limper
+   than its presets and is not quantitative; that is now a documented
+   property rather than a surprise. The free 2.3× from reallocating the budget
+   toward substeps remains available and unlicensed — it needs the disc, the
+   skirt and the gate, because the beam cannot see the closed-ring case
+   `stretchSweeps: 8` exists for.
 5. **Adopt the measured strain limits from `sim/cipc/fabrics.md`?**
    **Now the strongest-evidenced item on this list:** it is the root cause of
    the dart-closing gate failure (§6.3) *and* of the disc's strain pinning
