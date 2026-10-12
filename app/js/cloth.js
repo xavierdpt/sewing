@@ -96,14 +96,28 @@ export const FABRICS = {
   // shoulder girth" and "was found with too stiff a cloth and should be
   // re-run". It also closes the dart the gate could not: 0.252 cm at 3 %,
   // 0.185 at 6.1 %, against a 0.2 cm threshold.
-  //                        gsm  stretch   bendCm  mu   damp  maxStrain
-  'cotton poplin':   { gsm: 120, stretch: 2e-7, bendLengthCm: 1.7, friction: 0.40, damp: 0.75, maxStrain: 0.061 },
-  'linen':           { gsm: 190, stretch: 3e-7, bendLengthCm: 2.3, friction: 0.45, damp: 0.80, maxStrain: 0.061 },
-  'wool crepe':      { gsm: 220, stretch: 8e-7, bendLengthCm: 1.9, friction: 0.35, damp: 0.85, maxStrain: 0.061 },
-  'silk habotai':    { gsm:  60, stretch: 5e-7, bendLengthCm: 1.1, friction: 0.22, damp: 0.55, maxStrain: 0.061 },
-  'cotton jersey':   { gsm: 180, stretch: 2e-5, bendLengthCm: 1.4, friction: 0.50, damp: 0.75, maxStrain: 0.25 },
-  'denim':           { gsm: 340, stretch: 1e-7, bendLengthCm: 3.3, friction: 0.55, damp: 0.90, maxStrain: 0.061 },
-  'interfaced twill':{ gsm: 260, stretch: 1e-7, bendLengthCm: 5.0, friction: 0.50, damp: 0.90, maxStrain: 0.061 },
+  // `shearLockDeg` is the TRELLIS LOCKING ANGLE: how far warp and weft rotate
+  // against each other before the weave jams. From the literature by fabric
+  // class, the same footing as `bendLengthCm`'s published ranges -- a woven
+  // shears 15-25 degrees (docs/01-geometry.md:142, docs/06-open-questions.md
+  // section 1), tighter and heavier weaves less, bonded interfacing almost
+  // none, knits far more. Not measurements of any particular cloth, and
+  // marked as such; one square and a protractor refines any of them
+  // (docs/06-open-questions.md section 1, "Answered, the geometric half").
+  //
+  // It is the ONE number shear needs, because the rest is geometry:
+  // `tools/shearnet.mjs` converts it to the Gaussian curvature the cloth
+  // absorbs for free, and shearing a cell by gamma takes its diagonals to
+  // sqrt(1 +/- sin gamma), which is where `biasStrainFactor` comes from
+  // instead of being guessed. See `_classifyGrain`.
+  //                        gsm  stretch   bendCm  mu   damp  maxStrain  shearLockDeg
+  'cotton poplin':   { gsm: 120, stretch: 2e-7, bendLengthCm: 1.7, friction: 0.40, damp: 0.75, maxStrain: 0.061, shearLockDeg: 15 },
+  'linen':           { gsm: 190, stretch: 3e-7, bendLengthCm: 2.3, friction: 0.45, damp: 0.80, maxStrain: 0.061, shearLockDeg: 12 },
+  'wool crepe':      { gsm: 220, stretch: 8e-7, bendLengthCm: 1.9, friction: 0.35, damp: 0.85, maxStrain: 0.061, shearLockDeg: 22 },
+  'silk habotai':    { gsm:  60, stretch: 5e-7, bendLengthCm: 1.1, friction: 0.22, damp: 0.55, maxStrain: 0.061, shearLockDeg: 20 },
+  'cotton jersey':   { gsm: 180, stretch: 2e-5, bendLengthCm: 1.4, friction: 0.50, damp: 0.75, maxStrain: 0.25,  shearLockDeg: 40 },
+  'denim':           { gsm: 340, stretch: 1e-7, bendLengthCm: 3.3, friction: 0.55, damp: 0.90, maxStrain: 0.061, shearLockDeg: 10 },
+  'interfaced twill':{ gsm: 260, stretch: 1e-7, bendLengthCm: 5.0, friction: 0.50, damp: 0.90, maxStrain: 0.061, shearLockDeg: 5 },
 };
 
 /**
@@ -234,9 +248,31 @@ export const DEFAULTS = {
   // docs/06-open-questions.md section 1 once the scraps-and-a-bowl experiment
   // has been run -- and note that shear alone cannot produce a 1 cm crease on
   // a mesh whose finest representable wrinkle is 8.8 cm (edge 2.2).
-  // DECIDED 2026-10-12: inert by default. The mechanism stays, the numbers do
-  // not. They were never measured -- 25 and 6 were plausibility arguments --
-  // and three measurements say shipping them on was wrong:
+  // REVISED 2026-10-12, second pass: ON, and no longer invented.
+  //
+  // `biasStrainFactor` is gone as a constant: it is derived per fabric from
+  // `shearLockDeg` via sqrt(1 + sin gamma), the extension a cell's diagonal
+  // needs for its trellis, over the fabric's own grain limit. That gives 0.70
+  // for bonded interfacing up to 2.83 for crepe -- where the flat 6 had the
+  // interfacing wrong by a factor of nine and in the wrong direction.
+  //
+  // With that in place the harm measured below is gone. Silk habotai on the
+  // yoke disc, derived factor 2.60: grain strain 3.65 % off, 4.03 % on,
+  // against a 6.1 % limit -- two thirds of the ceiling where the flat 6
+  // reached 1.88x it -- and every run settles. The trellis engages (shear
+  // strain 2.45 -> 2.73 %) and body penetration is unchanged (4.69 -> 4.55 %
+  // of samples inside).
+  //
+  // `biasCompliance` is the one quantity neither geometry nor a locking angle
+  // fixes: how SOFT the bias is, not how far it may go. A woven's shear
+  // modulus runs two to three orders under its tensile, so 25 sits inside the
+  // range; 100 measured barely different (shear strain 2.98 % against 2.73).
+  // It should be settled against the Cusick drape coefficient
+  // (docs/18-validation.md Step 2), not against a lab.
+  //
+  // THE EARLIER DECISION, kept because the reasoning was right at the time:
+  // inert, because 25 and 6 were plausibility arguments and three
+  // measurements said shipping them on was wrong --
   //
   //   * at edge 1.0 the trellis engages (bias strain 4.4 -> 16.6 %) but drags
   //     YARN strain from 4.5 to 11.4 % and neither run settles, which is the
@@ -253,10 +289,18 @@ export const DEFAULTS = {
   // ~1 cm creases are the same fact. But an unfitted constant is not that
   // mechanism working, and the experiment that would calibrate it is one
   // afternoon with four scraps and a bowl
-  // (docs/06-open-questions.md section 1). Set `biasCompliance: 25,
-  // biasStrainFactor: 6` to get the behaviour back for experiments.
-  biasCompliance: 1,
-  biasStrainFactor: 1,
+  // (docs/06-open-questions.md section 1) -- which turned out to be half
+  // answerable from the literature and the geometry, like every other
+  // parameter in this file. Set `biasCompliance: 1` to make shear inert
+  // again.
+  biasCompliance: 25,
+  // null = derive it from the fabric's `shearLockDeg`, which is the only way
+  // it is not a guess. A number here overrides, for experiments. 1 means "the
+  // bias may stretch no further than the grain", which forbids the trellis
+  // entirely -- and the strain clamp then holds everything at `maxStrain`
+  // whatever the compliance says, which is why a run with `biasCompliance:
+  // 25` and this at 1 measured identically to shear being off.
+  biasStrainFactor: null,
   collisionMargin: 0.10,  // cm; half the cloth's thickness, held off the body
   // Collide the MIDPOINT of each edge as well as the vertices.
   //
@@ -958,7 +1002,21 @@ export class Cloth {
    */
   _classifyGrain(o) {
     const M = this.asm.material;
-    const f = o.biasCompliance ?? 1, g = o.biasStrainFactor ?? 1;
+    const f = o.biasCompliance ?? 1;
+    // How far a bias edge must be free to stretch, DERIVED rather than given:
+    // a trellis of `shearLockDeg` takes a cell's diagonals to
+    // sqrt(1 +/- sin gamma), so that extension is what the shear needs, and
+    // the ratio against the fabric's own grain limit is the factor. A 15
+    // degree cotton against a 6.1 % grain limit gives 2.0, where this was
+    // originally handed a flat 6. An explicit `biasStrainFactor` still wins,
+    // for experiments.
+    const lock = o.shearLockDeg ?? (FABRICS[o.fabric] || {}).shearLockDeg ?? null;
+    const derived = lock
+      ? (Math.sqrt(1 + Math.sin(lock * Math.PI / 180)) - 1) / Math.max(1e-6, this.maxStrain)
+      : 1;
+    const g = o.biasStrainFactor ?? Math.max(1, derived);
+    this.biasStrainFactorUsed = g;
+    this.shearLockDeg = lock;
     this.grainAware = !!M && f !== 1;
     for (const c of this.stretch) {
       let bias = 0;

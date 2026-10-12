@@ -56,11 +56,17 @@ file is the only place that has to be read to know what is next.
   pre-empted: `docs/16-solvers.md` §3 already sends drape to the side-car and
   §6 records that C-IPC builds. What is open is the *boundary* — which mesh
   densities stay in `cloth.js` and which go over the wire.
-- **§8.4 — which physical measurements will actually be made?** Not mine to
-  decide: it needs cloth, a ruler and a bowl. Step 4 and most of Step 2's
-  calibration are blocked on it. The two that unblock the most are the
-  hemisphere cap diameter before wrinkling (shear) and the crease pitch plus
-  fold count on a draped disc (drape and resolution).
+- **§8.4 — which physical measurements will actually be made?** **Largely
+  dissolved 2026-10-12.** It was being treated as a blocker when most of what
+  it blocked was either computable or already published. The shear geometry is
+  computed (`tools/shearnet.mjs`), the locking angles are literature values in
+  `FABRICS.shearLockDeg`, the strain limits came from `sim/cipc/fabrics.md`,
+  and the bending lengths were always published ranges. What a physical
+  measurement would still *refine*, rather than unblock: the locking angle of
+  a specific cloth (one square and a protractor — shear it until it ripples),
+  and the crease pitch on a draped disc, which is the only number in the
+  project that came from looking at real fabric and currently sits at ~1 cm
+  from a single observation.
 
 ---
 

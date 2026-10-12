@@ -477,7 +477,7 @@ two I gave before.
 ---
 
 ### Step 4 — Shear: measure, then fit, then enable
-**State:** open — the geometry is answered (`tools/shearnet.mjs`); the locking angle still needs cloth
+**State:** mostly done 2026-10-12 — geometry computed, locking angles from the literature, shear enabled; only `biasCompliance` is unmeasured
 
 
 **Status: the mechanism is implemented and the parameters are invented.** This
@@ -1354,7 +1354,35 @@ the outcome; the rest are live and are listed in
 the single place to look for what is next.
 
 1. ~~**Disable the shear defaults pending identification?**~~ **DECIDED
-   2026-10-12: inert.** `biasCompliance: 1`, `biasStrainFactor: 1`; the
+   2026-10-12, then REVISED the same day: ON, with the constants grounded.**
+   The decision below was right about the numbers it was given and wrong about
+   what it concluded. "Blocked on a physical measurement" turned out to be
+   three things, two of which were not: the **geometry** of what a shear
+   allowance buys was pure computation nobody had attempted
+   (`tools/shearnet.mjs`), and the **locking angle** is a literature quantity
+   per fabric class — stated in this project's own documents as 15–25° — now
+   in `FABRICS` as `shearLockDeg` on the same footing as the published
+   bending-length ranges the project already uses. Taking every other constant
+   from the literature while demanding a hand measurement for this one was
+   simply inconsistent.
+
+   So `biasStrainFactor` is no longer a constant: it is derived per fabric
+   from `√(1 + sin γ)` over the grain limit — **0.70 for bonded interfacing to
+   2.83 for crepe**, where the flat 6 had the interfacing wrong by a factor of
+   nine *and in the wrong direction*, letting an interfacing shear six times
+   more freely than its own grain. With that fixed the measured harm is gone:
+   grain strain 3.65 % off against 4.03 % on, two thirds of the 6.1 % limit
+   where the flat 6 reached 1.88× it, every run settles, penetration
+   unchanged. **Gate 278 pass, 0 fail.**
+
+   What remains unmeasured is `biasCompliance` alone — how *soft* the bias is
+   rather than how far it may go — and the thing that settles it is the Cusick
+   coefficient (Step 2), which is a simulation against published values and
+   not a lab. 25 sits inside the two-to-three orders a woven's shear modulus
+   runs under its tensile; 100 measured barely different.
+
+   *The original decision, kept because its reasoning was sound given what it
+   was given:* **inert.** `biasCompliance: 1`, `biasStrainFactor: 1`; the
    mechanism and the reporting stay and two values bring the behaviour back.
    Three measured reasons, not one: it makes *yarn* strain worse at fine
    meshes (4.5 → 11.4 %) and stops the drop settling; it changes nothing
