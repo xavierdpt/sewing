@@ -18,6 +18,54 @@ and it goes straight into the solver as a per-tile shear allowance.
 Prediction: felt ≈ 5–10°, cotton ≈ 15°, knit ≈ 40°+. If cotton really gives 15° per
 10 cm patch, the required tile count drops by roughly half.
 
+### Answered, the geometric half — 2026-10-12
+
+`node tools/shearnet.mjs`. The experiment above still needs cloth and a bowl, but it
+was not the only thing standing in the way: nobody had worked out **what defect a given
+shear allowance buys**, so a measured locking angle could not be turned into a solver
+parameter and a measured cap could not be checked against one. That part is geometry.
+
+Model a woven as the composites literature does — a **pin-jointed net**: warp and weft
+inextensible, every cell free to shear, locking when the angle between the two families
+reaches `γ`. Lay it on a sphere from a pole along two perpendicular great circles and
+every interior node is then determined, so the shear everywhere follows from nothing but
+`γ`.
+
+| locking γ | cap half-angle θ | defect | per-cell bias strain |
+|---|---|---|---|
+| 5° | 24.7° | 0.573 sr = **33°** | 4.3 % |
+| 10° | 35.2° | 1.147 sr = **66°** | 8.3 % |
+| **15°** | **43.8°** | **1.751 sr = 100°** | **12.2 %** |
+| 20° | 51.1° | 2.335 sr = **134°** | 15.8 % |
+| 25° | 57.9° | 2.947 sr = **169°** | 19.3 % |
+| 40° | 76.5° | 4.811 sr = **276°** | 28.2 % |
+
+**θ depends only on γ, not on the sphere's radius** — the same cloth covers the same
+*angular* cap of a thimble or a beach ball. Verified across R = 5, 10, 20 cm and four
+cell sizes: the answer depends only on `cell/R` and converges from above (2.361 → 1.974
+→ 1.884 → 1.795 → 1.751 sr at γ = 15° as the net is refined), so the figures above are
+slight upper bounds.
+
+**The prediction in this section conflated two different angles.** "Cotton ≈ 15°" is
+the *locking angle*; the *defect it absorbs* is about **6.7× that** — roughly 100° for a
+15° cotton, and the ratio holds from 6.6 to 6.9 across the whole range. So the
+over-segmentation this section suspects is far worse than it guessed: 100° of free
+defect is **five darts of 20°**, not the "roughly half the tile count" estimated here.
+A region of a body whose integrated Gaussian curvature is under 1.75 sr needs no seam
+at all for a plain cotton.
+
+**It also pins down one of the two shear constants.** Shear a unit cell by `γ` and its
+diagonals go to `√(1 ± sin γ)`, so a 45° edge must be free to extend 12.2 % for a 15°
+trellis. Against this project's measured 6.1 % grain limit that makes
+`biasStrainFactor` ≈ **2.0**, not the 6 it was given when the mechanism was written
+(docs/18-validation.md §8.1). `biasCompliance` — how *soft* the bias is, rather than how
+far it may go — still needs force data.
+
+**And it makes the remaining experiment easier.** The protocol above needs a hemisphere
+and a cap measurement. The table inverts: shear a square by hand, pulling opposite
+corners until the surface ripples, and read `γ` off a protractor. Either route gives the
+same number, and the second needs no bowl.
+
 ## 2. Can the shell be reconstructed from its combinatorics alone?
 
 You know every tile type and every adjacency. A triangulated surface with fixed edge

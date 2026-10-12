@@ -477,7 +477,7 @@ two I gave before.
 ---
 
 ### Step 4 — Shear: measure, then fit, then enable
-**State:** open — blocked on a physical measurement (§8.4)
+**State:** open — the geometry is answered (`tools/shearnet.mjs`); the locking angle still needs cloth
 
 
 **Status: the mechanism is implemented and the parameters are invented.** This
@@ -532,6 +532,21 @@ freed length has nowhere to go on a mesh whose finest wrinkle is 8.8 cm.
    curves. Hold out the Cusick drape test (Step 2) as validation — do not fit
    to it.
 6. Only then enable by default, and re-run the gate.
+
+**The geometric half is answered — 2026-10-12.** `node tools/shearnet.mjs`
+computes a pin-jointed net on a sphere and converts a locking angle into the
+curvature it absorbs: γ = 15° covers a cap of half-angle **43.8°** carrying
+**1.751 sr = 100°** of angle defect, scale-free (verified across R = 5/10/20 cm
+and four cell sizes; converges from above). `docs/06-open-questions.md` §1 has
+the table.
+
+Two consequences for this step. **`biasStrainFactor` is no longer a guess:**
+shearing a cell by γ takes its diagonals to `√(1 ± sin γ)`, so a 15° trellis
+needs 12.2 % on a 45° edge, which against the measured 6.1 % grain limit is a
+factor of **2.0** — not the 6 it was given. And **the experiment got cheaper**:
+the locking angle can be read by shearing a square by hand until it ripples,
+instead of moulding over a hemisphere and measuring a cap. `biasCompliance`
+still needs force data and remains unmeasured.
 
 **Also record from the physical side:** the observed crease pitch on a draped
 disc is **~1 cm**. The doc's protocol asks for cap diameter; the crease
