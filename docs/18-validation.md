@@ -1264,7 +1264,10 @@ interfaced twill is the dynamic range any of these tests has to cover.
 
 ## 8. Decisions needed
 
-These are not mine to make.
+The decision register. Decided entries are struck through with the date and
+the outcome; the rest are live and are listed in
+[19-todo.md](19-todo.md) under **Decisions outstanding**, so the queue stays
+the single place to look for what is next.
 
 1. ~~**Disable the shear defaults pending identification?**~~ **DECIDED
    2026-10-12: inert.** `biasCompliance: 1`, `biasStrainFactor: 1`; the
@@ -1287,21 +1290,6 @@ These are not mine to make.
    and most of Step 2's calibration depends on it. The two that unblock the
    most: the hemisphere cap diameter before wrinkling (shear), and the crease
    pitch plus fold count on a draped disc (drape and resolution).
-6. ~~**Bending at interactive settings is ~4× too limp. Accept, pay, or
-   rewrite?**~~ **DECIDED 2026-10-12: accept, and make the deficit
-   explicit.** Paying is unavailable — §6.5 already records that the viewer
-   cannot afford what it currently spends, and calibration costs 16× that.
-   Rewriting (implicit or hierarchical bending) is the right long-term answer
-   and a substantial piece of work, not something to begin at the end of a
-   session. So: `tools/fabric.mjs --calibrated` sets 160 substeps, the point
-   at which the solver reproduces closed-form beam theory to 13 % and the
-   asked bending length to 4 %, and **any figure quoted against a published
-   range must come from a run with it.** Interactive bending stays ~4× limper
-   than its presets and is not quantitative; that is now a documented
-   property rather than a surprise. The free 2.3× from reallocating the budget
-   toward substeps remains available and unlicensed — it needs the disc, the
-   skirt and the gate, because the beam cannot see the closed-ring case
-   `stretchSweeps: 8` exists for.
 5. ~~**Adopt the measured strain limits from `sim/cipc/fabrics.md`?**~~
    **DECIDED 2026-10-12: adopted, as a flat 6.1 % floor for the wovens.**
    `sim/cipc/fabrics.md` declined to adopt its own numbers because mapping a
@@ -1329,6 +1317,21 @@ These are not mine to make.
    boundary should be re-run if so. This changes the headline result of the disc test, so it is a
    decision and not a cleanup. It also requires the modulus-to-compliance
    mapping, which is the largest single piece of modelling work on this list.
+6. ~~**Bending at interactive settings is ~4× too limp. Accept, pay, or
+   rewrite?**~~ **DECIDED 2026-10-12: accept, and make the deficit
+   explicit.** Paying is unavailable — §6.5 already records that the viewer
+   cannot afford what it currently spends, and calibration costs 16× that.
+   Rewriting (implicit or hierarchical bending) is the right long-term answer
+   and a substantial piece of work, not something to begin at the end of a
+   session. So: `tools/fabric.mjs --calibrated` sets 160 substeps, the point
+   at which the solver reproduces closed-form beam theory to 13 % and the
+   asked bending length to 4 %, and **any figure quoted against a published
+   range must come from a run with it.** Interactive bending stays ~4× limper
+   than its presets and is not quantitative; that is now a documented
+   property rather than a surprise. The free 2.3× from reallocating the budget
+   toward substeps remains available and unlicensed — it needs the disc, the
+   skirt and the gate, because the beam cannot see the closed-ring case
+   `stretchSweeps: 8` exists for.
 
 ---
 

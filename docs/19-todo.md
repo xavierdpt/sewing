@@ -17,27 +17,50 @@ record.
 
 ## Open
 
-- [ ] **Re-run the yoke/slip sweep on the measured strain limits.**
-      [18-validation.md](18-validation.md) §8.5 and `docs/11-cloth.md:400`.
-      The critical hole size — the whole point of the disc test — "turns
-      entirely on the cloth refusing to stretch past the shoulder girth", and
-      it was found with wovens limited to 2–4 % strain where the measured
-      value is 6.1 %. `slipSweep()` in `app/js/droptest.js` already does the
-      sweep.
+- [ ] **Validate the time integration against two closed forms.** The
+      remaining analytic half of [18-validation.md](18-validation.md) Step 5.
+      Nothing in this project checks the integrator itself: every finding so
+      far has been about a constitutive model or an instrument, and the
+      stepping has never been compared with an answer known in advance.
 
-      *Do:* run it per fabric, record the critical inner radius against the
-      old figures, and update `docs/11-cloth.md` §7 where it states the
-      boundary. Quote nothing from an interactive-resolution run — §8.6 means
-      bending is ~4× limp there — so use `--calibrated` settings or state the
-      resolution beside every number.
+      *Do:* two cases, both cheap and both exact.
+      **Free fall** — a disc with no body, no pins and `linearDragPerSec: 0`:
+      the centre of mass must fall `½gt²` and every vertex must stay at the
+      same relative position. This checks gravity, the integration, and
+      whether the velocity clamp (`maxVelocity: 400`) silently truncates a
+      real fall. **Rest** — the same disc fully pinned, and separately laid on
+      the floor: nothing may move, and `kinetic()` must stay at zero rather
+      than drifting.
 
-      *Acceptance:* critical hole size per fabric at a stated substep count,
-      with the old and new figures side by side, and the prediction in
-      `docs/11-cloth.md:400` either confirmed or refuted in as many words.
+      *Acceptance:* free-fall displacement within 1 % of `½gt²` over 1 s at
+      the default substep count, with the deviation reported rather than
+      asserted away; `kinetic()` bounded below a stated floor over 5 s at
+      rest for all seven presets.
 
-      *Why it is first:* it is the one headline result in the project that is
-      known to have been measured on the wrong cloth, and the fix is to run an
-      instrument that already exists.
+      *Why it is first:* it is the cheapest unexamined layer left, and it
+      bears directly on a known open question — the denim bounce is **half
+      numerical** (8× the substeps halves the rebound without removing it,
+      §6.7/Step 5), and separating the solver's contribution from the cloth's
+      needs an energy measure that does not yet exist. A drift number also
+      tells us whether the 4-substep catastrophe was energy injection or
+      merely under-resolution.
+
+---
+
+## Decisions outstanding
+
+Live entries from [18-validation.md](18-validation.md) §8. Listed here so this
+file is the only place that has to be read to know what is next.
+
+- **§8.3 — Step 7: remesh, side-car, or a documented ceiling?** Partly
+  pre-empted: `docs/16-solvers.md` §3 already sends drape to the side-car and
+  §6 records that C-IPC builds. What is open is the *boundary* — which mesh
+  densities stay in `cloth.js` and which go over the wire.
+- **§8.4 — which physical measurements will actually be made?** Not mine to
+  decide: it needs cloth, a ruler and a bowl. Step 4 and most of Step 2's
+  calibration are blocked on it. The two that unblock the most are the
+  hemisphere cap diameter before wrinkling (shear) and the crease pitch plus
+  fold count on a draped disc (drape and resolution).
 
 ---
 
