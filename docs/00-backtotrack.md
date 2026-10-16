@@ -23,19 +23,59 @@ hypothesis:
 - Then progress stopped — not slowed, stopped.
 - The current state is unusable.
 
-*Open:* which state. The viewer, the headless path, the side-car, the gate, or
-the repository as a whole — these fail in different ways and the word
-"unusable" fits all of them. To be filled in from the user's own description
-before anything is measured.
+*Answered:* none of them. The expectation was **real-time rendering**, and
+the simulation was running at 2.1 fps because it was configured for accuracy
+rather than for interaction. §2 has the measurements.
+
+> **Cost:** this question was asked at the top of this document and then left
+> open for an entire session, while the work went to a Blender fork, five
+> assembly kernels and a wasm solver. All of that is real and measured, and
+> none of it was what had been reported. **Ask what the symptom is, and wait
+> for the answer, before choosing what to build.**
 
 ## 2. What "unusable" means, concretely
 
-To be filled in. One line per symptom, each with where it is seen and what is
-seen instead of the expected thing. No causes in this section.
+**Answered 2026-10-16, and it was one thing: the expectation was real-time
+rendering.**
 
 | # | Symptom | Where seen | Expected | Observed |
 |---|---------|------------|----------|----------|
-|   |         |            |          |          |
+| 1 | The drape is not real-time | watching a skirt fall | interactive, 30–60 fps | **2.1 fps** (469 ms/frame) |
+
+Nothing was broken. `node test/run.mjs` passes **279 checks, 0 failures** on
+this checkout, and the solver computes what it is asked to compute. The
+settings it was asked to compute at are film settings, not interactive ones:
+3,887 vertices, solver quality 14, collision quality 12, self-collision on.
+
+**Measured, on the same scene, by relaxing them one at a time:**
+
+| configuration | verts | ms/frame | fps |
+|---|---|---|---|
+| film — what was being watched | 3,887 | 469.5 | **2.1** |
+| quality 5 / collision 2 | 3,887 | 118.4 | 8.4 |
+| + no self-collision | 3,887 | 88.7 | 11.3 |
+| **+ 5 cm mesh** | **1,020** | **27.0** | **37** |
+| + 8 cm mesh | 424 | 10.4 | 96 |
+
+**Real-time is reachable at 1,020 vertices**, and comfortably so at 424. The
+question was never "why is it broken" but "what does interactive cost", and
+the answer is: a quarter of the vertices, Blender's default solver quality
+instead of fourteen, and no self-collision.
+
+**What that costs, stated rather than glossed.** A 5 cm mesh has a quarter
+the vertices, so it carries fewer and coarser folds. Without self-collision
+the cloth can pass through itself — visible the moment a skirt folds onto
+itself. And lower solver quality means more stretch:
+[20-fork.md](20-fork.md) §9 measured strain against quality on this same
+scene, and the drape moved 4.6 cm between quality 14 and 30. Interactive
+cloth is a different garment from accurate cloth, and the project needs to
+decide which it is showing at any moment — not discover the difference by
+watching it.
+
+*Caveat on these numbers:* they are the solver headless, not the viewer. The
+viewer adds rendering and, if it uses the side-car, a round trip. They
+establish that the simulation fits an interactive budget, not that the
+current viewer does.
 
 ## 3. First ground regained: the solver underneath is sound
 
