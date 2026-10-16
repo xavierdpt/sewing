@@ -801,7 +801,8 @@ Each is a single command or edit, and stops for approval.
       browser. The page exposes no hook to build one from a script, so that
       path has only ever run under node.
 
-- [x] **20. Self-collision.** *Done.* The largest remaining difference from
+- [x] **20. Self-collision.** *Done, commits `37a5829` (sewcloth) and
+      `9968875` (the viewer).* The largest remaining difference from
       the reference, closed — though by a different mechanism, which matters.
 
       Vertex against vertex through a **spatial hash**, not triangle against
@@ -1187,13 +1188,29 @@ against is exactly the position this project was in when
 - **Bottom** — `src/kernels.h`, leaf operations in structure-of-arrays
   layout, each small enough to check exactly. SoA because nothing here is
   shared with another program's struct.
-- **Middle** — **springs are in** (step 17a) and exact against two closed
-  forms. The implicit solve and collision are **missing**, and
-  `sc_capabilities()` reports that rather than letting a caller find out by
-  watching cloth fall through a body.
+- **Middle** — **complete** (steps 17a–c, 20): springs, backward Euler with
+  filtered conjugate gradient, collision against a signed distance field, and
+  vertex self-collision through a spatial hash. `sc_capabilities()` reports
+  all five rather than letting a caller find out by watching cloth fall
+  through a body.
 
 `./build.sh` runs the native kernel tests, emits both wasm flavours and runs
 the smoke test. **13,702 bytes** of wasm.
+
+### On the real garment, through the viewer's own path
+
+Not a test sheet: the four-panel skirt, sewn by this project's own feed,
+welded, then draped on the body's field — the same pipeline
+`tools/check_sidecar.mjs` sends to Blender.
+
+| mesh | verts | drape | with self-collision | body |
+|---|---|---|---|---|
+| 5 cm | 384 | 2.82 ms/frame | 3.93 ms (254 fps) | none inside, +0.081 cm clear |
+| 3 cm | 988 | 7.17 ms/frame | 10.04 ms (100 fps) | none inside, +0.125 cm clear |
+
+Against a 16.7 ms real-time frame, and against Blender's 27 ms for ~1,020
+vertices. The viewer selects it with `params.drapeBackend = 'wasm'`, or
+`__drapeBackend('wasm')` from a script (step 19).
 
 ### Everything it claims is checked against a closed form
 
@@ -1206,6 +1223,10 @@ reference falls into:
 | hanging extension `mg/k` | 0.49050 cm | 0.49050 |
 | period `2π√(m/k)` | 0.14050 s | 0.14050 |
 | the extension again, via wasm | 0.491 cm | 0.490 |
+| explicit at k=1e6, 1 substep | **diverged** | as it must |
+| implicit at the same stiffness | 0.000980 cm | 0.000981 |
+| sphere contact, from a sampled field | 8.469 cm | 8.500 |
+| folds held apart (asked 1.70) | 1.6903 cm | vs 0.6807 with it off |
 
 The last row is the one that matters for the port: it proves the parameters
 and the force path survive the module boundary, not merely that the C
@@ -1248,6 +1269,22 @@ about Blender's integrator; that half of the queue item stands.
 > 62 cm. Free fall has no drag, so the test now asks for none and the
 > tolerance covers the integrator's bias and nothing else. A tolerance wide
 > enough to hide an effect is not a test of the thing its name claims.
+
+### What it still is not
+
+Three differences from the reference, none of them hidden behind a flag:
+
+| | Blender | sewcloth |
+|---|---|---|
+| body contact | triangle against triangle, BVH | points against a distance field |
+| self-collision | triangle against triangle | vertices held apart by a distance |
+| between vertices | caught | a facet can pass through a facet |
+
+The bound on the first is measured, not hoped: a facet spanning a bulge dips
+about `L²/8R` below the surface — 0.18 cm for 5 cm edges over a 17 cm radius
+— so the cloth thickness has to exceed it, and `sc_set_sample_edges()` tests
+midpoints to remove the assumption. The self-collision distance wants to be
+about 0.6 of the edge length for the same reason.
 
 ### What does not come across from the first fork
 
