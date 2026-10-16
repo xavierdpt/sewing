@@ -62,6 +62,19 @@ diverged, the viewer sewed with self-collision on — which `assemble.js`
 documents as wrong — and its seams stalled at 0.4 cm while the headless path
 reached 0.032 cm.
 
+## 8. A dependency's source is readable. Pull it instead of guessing at it.
+
+`deb-src` is enabled on this machine, so the source of anything installed from
+apt can be fetched and read: `apt-get source <pkg>` from `src/`, which is the
+folder that holds unpacked upstream source and is not part of this project's
+code. Blender, the Python side-car's dependencies and the toolchain are all
+readable this way. Rule 1 applies to other people's code too — what a library
+actually does is a thing that can be looked up, not inferred from its
+documentation or its name.
+
+> **Cost:** none recorded yet; this one is written down before it is broken
+> rather than after.
+
 ## Commands
 
 ```bash
@@ -73,4 +86,5 @@ python3 sim/server.py             # the drape side-car the viewer talks to
 node test/run.mjs                 # the gate
 python3 tools/viewshot.py out.png --eval 'JS'   # the viewer, headless, as a PNG
 cd app && python3 -m http.server 8777
+mkdir -p src && cd src && apt-get source blender   # read a dependency's source
 ```

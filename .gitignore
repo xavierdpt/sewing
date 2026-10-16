@@ -3,3 +3,9 @@ node_modules/
 # viewer telemetry
 sim/logs/
 __pycache__/
+
+# unpacked source of apt dependencies (rule 8)
+src/
+
+# build outputs: blend files, profiles, draped meshes
+out/
