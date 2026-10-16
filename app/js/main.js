@@ -25,6 +25,7 @@ import { layOut, weldStitched } from './assemble.js';
 import * as arrange from './arrange.js';
 import { drapeRemote, drapeFrames, health as sidecarHealth,
   DEFAULT_URL } from './remote.js';
+import { drapeWasm } from './drapewasm.js';
 import { startTelemetry, tlog, flushTelemetry } from './telemetry.js';
 import { clearance } from './clearance.js';
 import { PatternTable } from './table.js';
@@ -172,6 +173,17 @@ const params = {
   // 0 cm at none for the side-car. So the local fall is a preview and the
   // side-car is the answer. See sim/server.py and docs/16-solvers.md.
   sidecarUrl: DEFAULT_URL, useSidecar: true, sidecarSeconds: 6,
+  // WHICH SOLVER DRAPES. 'sidecar' sends the garment to Blender over HTTP:
+  // triangle-against-triangle contact and self-collision, about 30 s for a
+  // six-second fall. 'wasm' runs src/sewcloth in this page: no round trip and
+  // no process, measured at 2.79 ms/frame for 384 vertices and 7.15 for 988,
+  // against a 16.7 ms real-time budget.
+  //
+  // The difference is not speed alone, and choosing by speed alone would be
+  // a mistake. The wasm solver tests POINTS against a distance field and has
+  // NO self-collision: a skirt folding onto itself will pass through itself.
+  // Blender is the reference; this is the interactive one.
+  drapeBackend: 'sidecar',
   // Capture EVERY solved frame, so the fall can be watched rather than
   // replayed. Measured: Blender solves about 6 frames of simulated time per
   // second of wall clock, so capturing every 5th gives a new pose only every
@@ -1095,7 +1107,9 @@ function finishAssembly() {
   console.log(`welded ${welded.weldedPct} % of the stitches `
     + `(within ${params.weldTolCm} cm); ${welded.asm.verts.length} vertices. `
     + `Widest seam still open: ${gap.toFixed(2)} cm. Gravity on.`);
-  if (params.useSidecar) sendToSidecar();
+  if (params.useSidecar) {
+    if (params.drapeBackend === 'wasm') sendToWasm(); else sendToSidecar();
+  }
   if (welded.openStitches.length) {
     console.warn(`${welded.openStitches.length} stitches were NOT welded because `
       + 'their seams would not close. They stay basted and visible.');
@@ -1123,6 +1137,81 @@ function finishAssembly() {
  * viewer never blocks: you watch the preview drop, and a minute later it is
  * replaced by the real thing.
  */
+/* Drape in this page, with no side-car.
+ *
+ * Deliberately shaped like sendToSidecar(): same source of pinned vertices,
+ * same write-back, same three refreshes, same abandonment check. Two drape
+ * paths that differ in how they are driven are two paths that cannot be
+ * compared, and comparing them is the only way to know what the faster one
+ * costs in fidelity. */
+async function sendToWasm() {
+  if (!sim || !asm) return;
+  const target = asm;
+  const pinned = asm.pinned.map((p, i) => (p ? i : -1)).filter((i) => i >= 0);
+
+  sidecar = { state: 'running', since: Date.now(), shown: 0, backend: 'sewcloth-wasm' };
+  playing = false; // the wasm solver owns the fall; the local one must not also step it
+  updateHUD();
+  tlog('wasm-start', phaseMetrics({ vertices: target.verts.length }));
+
+  try {
+    const out = await drapeWasm(target, surface, {
+      seconds: params.sidecarSeconds,
+      pinned,
+      fabric: {
+        thickness: params.clothThicknessCm || 0.35,
+        friction: params.friction,
+      },
+      // Show the fall as it is computed rather than after it. The frames are
+      // free -- they are being stepped anyway -- and a drape that appears
+      // only when finished is the complaint this whole path exists to fix.
+      onFrame: (flat, f) => {
+        if (asm !== target || (f & 1)) return;
+        for (let i = 0; i < target.verts.length; i++) {
+          target.verts[i][0] = flat[i * 3];
+          target.verts[i][1] = flat[i * 3 + 1];
+          target.verts[i][2] = flat[i * 3 + 2];
+        }
+        updateClothMesh();
+      },
+    });
+
+    // the garment may have been cleared or rebuilt while we were solving
+    if (asm !== target) { sidecar = null; return; }
+
+    out.verts.forEach((p, i) => {
+      target.verts[i][0] = p[0]; target.verts[i][1] = p[1]; target.verts[i][2] = p[2];
+    });
+    for (const v of sim.vel) { v[0] = 0; v[1] = 0; v[2] = 0; }
+
+    const pen = sim.penetration();
+    sidecar = {
+      state: 'done', backend: 'sewcloth-wasm',
+      seconds: +(out.ms / 1000).toFixed(2), pen,
+    };
+    updateClothMesh();
+    updateStitchLines();
+    updateHUD();
+    tlog('wasm-done', phaseMetrics({
+      msPerFrame: +out.msPerFrame.toFixed(2),
+      contacts: out.report.contacts,
+      deepestCm: +out.report.deepestCm.toFixed(3),
+      cgIterations: out.report.cgIterations,
+    }));
+    flushTelemetry();
+    console.log(`wasm drape: ${out.frames} frames in ${out.ms.toFixed(0)} ms `
+      + `(${out.msPerFrame.toFixed(2)} ms/frame, ${(1000 / out.msPerFrame).toFixed(0)} fps). `
+      + `Deepest correction ${out.report.deepestCm.toFixed(3)} cm. `
+      + `Inside the body: ${pen.worstCm} cm at ${pen.insideSamples} sample points.`);
+  } catch (e) {
+    sidecar = { state: 'failed', backend: 'sewcloth-wasm', error: String(e.message || e) };
+    tlog('wasm-failed', { error: String(e.message || e) });
+    flushTelemetry();
+    console.error(`wasm drape failed: ${e.message || e}`);
+    updateHUD();
+  }
+}
+
 async function sendToSidecar() {
   if (!sim || !asm) return;
   const target = asm;
@@ -3124,4 +3213,12 @@ Object.assign(globalThis, { renderer, camera, controls, frameScene });
 // telemetry flush: without this a scripted drop measured everything and
 // posted none of it.
 globalThis.__flushTelemetry = flushTelemetry;
+/* Which solver drapes, from a script. The viewer has no control for this
+ * yet; tools/viewshot.py and anything else driving the page needs a way to
+ * ask for the wasm path without clicking through a menu that does not exist.
+ * Returns the backend in force, so a caller can check rather than assume. */
+globalThis.__drapeBackend = (name) => {
+  if (name === 'wasm' || name === 'sidecar') params.drapeBackend = name;
+  return params.drapeBackend;
+};
 globalThis.__sel = (ids) => setSelection(ids);
