@@ -66,6 +66,21 @@ export async function drapeWasm(asm, surface, opts = {}) {
     cell = 1.0, onFrame = null, fabric = {},
   } = opts;
 
+  // SELF-COLLISION DISTANCE FROM THE MESH, not from a constant. It wants to
+  // be a fraction of the edge length: larger and neighbouring vertices fight
+  // each other, smaller and two layers slide through between samples. The
+  // garment knows its own edge length, so ask it rather than guess.
+  const self = { ...fabric };
+  if (self.selfCollision && !(self.selfDistance > 0)) {
+    let total = 0, count = 0;
+    for (const e of (asm.edges.values ? asm.edges.values() : asm.edges)) {
+      const a = asm.verts[e.a], b = asm.verts[e.b];
+      total += Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+      count++;
+    }
+    self.selfDistance = count ? (total / count) * 0.6 : 0;
+  }
+
   const mod = await sewclothModule(opts.moduleUrl);
   const sdf = surface ? fieldFor(surface, { cell }) : null;
 
@@ -73,7 +88,7 @@ export async function drapeWasm(asm, surface, opts = {}) {
     verts: asm.verts,
     edges: asm.edges.values ? asm.edges.values() : asm.edges,
     sdf,
-    fabric,
+    fabric: self,
   });
   for (const i of pinned) cloth.pin(i, true);
 

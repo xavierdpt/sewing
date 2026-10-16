@@ -23,6 +23,7 @@ b.includeArms = true; b.includeLegs = true;
 const waistV = b.landmarkV('waist');
 const ring = waistRing(b, { waistV, ease: 1.0 });
 
+const SELF = process.env.SELF === '1';
 for (const edge of [5.0, 3.0]) {
   const pattern = flaredSkirtPattern({
     panels: 4, waistCm: ring.circumferenceCm, hemCm: 160, lengthCm: 55,
@@ -45,7 +46,11 @@ for (const edge of [5.0, 3.0]) {
 
   const out = await drapeWasm(w.asm, b, {
     seconds: 4, fps: 30, pinned: [...waistIds],   // substeps: the default, 8
-    fabric: { mass: 0.5, tension: 20000, damping: 0.995, thickness: 0.35, friction: 0.3 },
+    fabric: {
+      mass: 0.5, tension: 20000, damping: 0.995, thickness: 0.35, friction: 0.3,
+      // about 0.6 of the mesh's edge length
+      selfCollision: SELF, selfDistance: edge * 0.6,
+    },
   });
 
   // Is any of it inside the body? Ask the same field the solver used.
@@ -61,6 +66,8 @@ for (const edge of [5.0, 3.0]) {
   console.log(`edge ${edge} cm: ${out.verts.length} verts, ${w.asm.edges.size} edges`);
   console.log(`  ${out.msPerFrame.toFixed(2)} ms/frame  (${(1000 / out.msPerFrame).toFixed(1)} fps)` +
               `   ${out.frames} frames in ${out.ms.toFixed(0)} ms total`);
+  console.log(`  self-collision ${SELF ? 'on' : 'off'}, ` +
+              `${out.report.selfContacts} self-pairs on the last step`);
   console.log(`  contacts ${out.report.contacts}, deepest correction ` +
               `${out.report.deepestCm.toFixed(3)} cm, CG ${out.report.cgIterations} iterations`);
   console.log(`  closest vertex to the body surface ${worst.toFixed(3)} cm, ` +

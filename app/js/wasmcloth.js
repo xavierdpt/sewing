@@ -32,7 +32,13 @@ export class WasmCloth {
 
     const f = {
       mass: 0.5, tension: 20000, damping: 0.995,
-      thickness: 0.35, friction: 0.3, sampleEdges: true, ...fabric,
+      thickness: 0.35, friction: 0.3, sampleEdges: true,
+      // Off unless asked for, and `selfDistance` defaults to nothing: a
+      // sensible default here would be a guess about the caller's mesh. It
+      // wants to be roughly 0.6 of the edge length -- larger and neighbours
+      // fight, smaller and two layers slide through each other between
+      // samples.
+      selfCollision: false, selfDistance: 0, ...fabric,
     };
 
     // positions in, once
@@ -68,6 +74,10 @@ export class WasmCloth {
     mod.ccall('sc_set_implicit', null, ['number', 'number'], [this.ptr, 1]);
     mod.ccall('sc_set_sample_edges', null, ['number', 'number'],
               [this.ptr, f.sampleEdges ? 1 : 0]);
+    if (f.selfCollision && f.selfDistance > 0) {
+      mod.ccall('sc_set_self_collision', null, ['number', 'number', 'number'],
+                [this.ptr, 1, f.selfDistance]);
+    }
 
     if (sdf) this.setBody(sdf);
   }
@@ -155,6 +165,7 @@ export class WasmCloth {
     const { mod, ptr } = this;
     return {
       contacts: mod.ccall('sc_contacts', 'number', ['number'], [ptr]),
+      selfContacts: mod.ccall('sc_self_contacts', 'number', ['number'], [ptr]),
       deepestCm: mod.ccall('sc_deepest', 'number', ['number'], [ptr]),
       cgIterations: mod.ccall('sc_cg_iterations', 'number', ['number'], [ptr]),
       vertices: this.n,

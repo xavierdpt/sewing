@@ -38,7 +38,7 @@ early attempt that was faster and quietly moved the drape by a centimetre.
 at 20 frames, settling identically. Frame counts are not comparable — later
 frames cost more as the cloth folds onto itself.*
 
-**Steps 0–18 are done, except 17b and 17c.** Steps 0–9 built the fork and proved it ran
+**Steps 0–20 are done.** Steps 0–9 built the fork and proved it ran
 identically to stock; §2b is the profiling manual and the reprofiling loop,
 §6 the first profile. Steps 10–15 then made it faster *without* giving that
 identity up: codec sources as an assembly reference (`src/asm-reference/`),
@@ -59,13 +59,20 @@ caller find out by watching cloth fall through a body.
 
 *On `sewcloth` (§8):*
 
-1. **The implicit solve** (17b), then **collision** (17c). Springs are done
-   and exact; explicit stepping holds at tension 2000 with two substeps a
-   frame, and a real fabric's stiffness will not be so kind — §9 measures
-   what the reference needs: tension 1500 at quality 30, converged.
-2. **Commit `sim/blender_skirt.py`** — the fabric parameters from step 18 are
-   still uncommitted in the sewing repo, as are the strain scripts, which
-   belong in `sim/fork/` as instruments rather than in scratch.
+**The middle is complete and the viewer is wired to it** (steps 17a–c, 19):
+springs, backward Euler, and collision against a signed distance field — the
+body already being one, no BVH was needed. On the real garment: **2.79
+ms/frame at 384 vertices, 7.15 at 988**, nothing inside the body, against a
+16.7 ms budget.
+
+1. **Nobody has watched it in a browser.** The page has no hook to build a
+   garment from a script, so the wasm drape has only ever run under node.
+   The viewer loads and switches backend cleanly; what it *looks* like is
+   still unmeasured.
+2. **Self-collision holds folds apart by a distance** (step 20) rather than
+   testing triangle against triangle. It costs ~40 % and keeps both mesh
+   densities inside a real-time frame, but a facet can still pass through a
+   facet between vertices.
 
 *On `blender-fork`:*
 
@@ -685,14 +692,157 @@ Each is a single command or edit, and stops for approval.
       > else**; figures from this project's own measurements are not
       > evidence here, and I had quoted two of them in the same argument.
 
-- [ ] **17b. The implicit solve.** What makes stiff cloth behave. Here the
-      Blender fork stops being a constraint and becomes the reference: its
-      CG and matrix structure are the thing to port, with the oracle to check
-      against.
+- [x] **17b. The implicit solve.** *Done, commit `086edf1`.* Backward Euler
+      with filtered conjugate gradient: per-spring 3x3 Jacobian blocks,
+      applied without ever assembling a matrix — the spring list already is
+      the sparsity pattern, so unlike the Blender fork (§6) there is nothing
+      to sort or cache.
 
-- [ ] **17c. Collision.** A BVH and the narrow-phase math — the half
-      [11-cloth.md](11-cloth.md) says is the whole reason this project went
-      to Blender in the first place.
+      | | measured | |
+      |---|---|---|
+      | extension `mg/k`, 1 substep | 0.490500 | exact |
+      | **explicit at k=1e6, 1 substep** | **diverged** | as it must |
+      | implicit at k=1e6 | 0.000980 | want 0.000981 |
+      | 1 substep settles where 16 does | 0.009809 | vs 0.009801 |
+
+      The third row is the argument for backward Euler *as a test*: explicit
+      stepping's limit there is 2e-3 s and the step is eight times past it.
+      The fourth says substeps now buy accuracy, not survival.
+
+      One clamp earns its place: under compression `(1 - L/|d|)` goes
+      negative, the block stops being positive definite and CG becomes
+      meaningless. Dropping that term under compression keeps the spring
+      resisting along its axis while it stops trying to buckle sideways. The
+      filter is applied to the residual and every matvec, never to the answer
+      at the end — a pin zeroed afterwards leaves every other vertex having
+      solved against a constraint that moved.
+
+- [x] **17c. Collision.** *Done, commits `fb9fe49` and `ea360a4`.* Analytic
+      planes and spheres first, then **a sampled signed distance field** —
+      which turned out to need no BVH at all, because the body in this
+      project already *is* an SDF.
+
+      Validated against the one shape whose field is known everywhere in
+      closed form: a sphere, draped with the exact collider and then with a
+      grid sampled from it. Nothing penetrated at any spacing, and the
+      contact converges on the surface:
+
+      | spacing | grid | memory | closest (exact 8.500) |
+      |---|---|---|---|
+      | 2.0 cm | 31³ | 0.11 MB | 8.392 |
+      | 1.0 cm | 61³ | 0.87 MB | 8.469 |
+      | 0.5 cm | 121³ | 6.76 MB | 8.488 |
+
+      **Why a field rather than triangles:** a query is O(1) however
+      complicated the body is, where a BVH is O(log n) plus triangle tests
+      and gets worse as the body gets finer. For a 70×45×190 cm body that is
+      0.31 MB at 2 cm spacing or 2.4 MB at 1 cm. The rule that picks it: the
+      surface error must sit under the cloth thickness, which at 0.35–0.5 cm
+      leaves 1 cm spacing an order of magnitude clear.
+
+      The gradient comes from the **interpolated** field, not the nearest
+      sample. A normal that hops between samples makes a time-stepped solver
+      cancel the wrong component of velocity, and the drape buzzes instead of
+      settling.
+
+      *What it still cannot do, with the number that bounds it:* this tests
+      points. A facet spanning a bulge dips below the surface between its
+      vertices by about `L²/8R` — 0.18 cm for 5 cm edges over a 17 cm radius.
+      `sc_set_sample_edges()` tests midpoints too and removes the
+      assumption; otherwise the thickness absorbs it. Measured in the real
+      drape: 0.12 cm of correction against a 0.5 cm thickness.
+
+      > **An experiment that failed, reported as failed.** I tried to find
+      > where the margin stops absorbing sag by thinning it. At the thinner
+      > settings the sheet slid off the sphere and landed on the floor, so
+      > those runs measured a heap, not a drape. The limit is still open.
+
+- [x] **19. Wire it into the viewer.** *Done, commit `1e89356`.* The viewer
+      can now drape without the side-car: `params.drapeBackend` chooses, and
+      `__drapeBackend('wasm')` switches it from a script.
+
+      **The seam was the side-car's, not the solver's.** `main.js` builds five
+      `Cloth` objects and uses eighteen of their members — `stitches`,
+      `stitchReport`, `maxStitchGap`, `penetration`, `healthy` — almost all
+      about *sewing*, which happens before the drape. Replacing that would
+      have been guesswork. `drapeRemote(asm, surface)` already took a welded
+      assembly and returned vertices, so `drapeWasm` matches its signature
+      and the dispatch is one line.
+
+      `sendToWasm()` is deliberately shaped like `sendToSidecar()` — same
+      pinned-vertex source, same write-back, same refreshes, same check for a
+      garment rebuilt while solving. Two paths driven differently cannot be
+      compared.
+
+      **The SDF crosses with no conversion**: `sdf.js` indexes its field
+      `(k·ny + j)·nx + i`, x-fastest, which is exactly sewcloth's layout.
+
+      Measured on the **real garment and real body**:
+
+      | mesh | verts | ms/frame | fps | clearance |
+      |---|---|---|---|---|
+      | 5 cm | 384 | 2.79 | 359 | +0.081 cm, none inside |
+      | 3 cm | 988 | 7.15 | 140 | +0.156 cm, none inside |
+
+      against a 16.7 ms real-time budget, and against Blender's 27 ms for
+      ~1,020 vertices.
+
+      > **The 8-substep default is a measurement, and the most important one
+      > here.** At 4 substeps two vertices finish **0.378 cm inside the
+      > body** — the exact defect [11-cloth.md](11-cloth.md) exists about. At
+      > 8, none are, 0.081 cm clear, and 8/16/32 agree to three decimals.
+      > Shipping the first number that looked fast would have reintroduced
+      > the original bug with a new engine.
+
+      *Verified:* the gate is green (279 checks), the viewer loads with the
+      backend switched (`viewshot.py` exits non-zero on any page error), the
+      drape is checked headlessly on the real garment.
+      *Not verified:* a full garment draped through wasm **inside** the
+      browser. The page exposes no hook to build one from a script, so that
+      path has only ever run under node.
+
+- [x] **20. Self-collision.** *Done.* The largest remaining difference from
+      the reference, closed — though by a different mechanism, which matters.
+
+      Vertex against vertex through a **spatial hash**, not triangle against
+      triangle: a pair closer than a set distance is pushed apart, and
+      vertices joined by a spring are skipped because being close is their
+      job. The hash is a counting sort into a fixed table — the same shape as
+      the row grouping in step 13, and for the same reason: a list grouped by
+      owner beats a list you have to search.
+
+      **Measured with the feature off and on**, on a sheet folded over a
+      small ball so its sides fall against each other. The number is the
+      closest pair of vertices *not* joined by a spring — anything else being
+      close means two layers of cloth are in the same place:
+
+      | | closest unjoined pair |
+      |---|---|
+      | off | **0.6807 cm** — layers interpenetrating |
+      | on | **1.6903 cm** against a requested 1.70 |
+
+      The test refuses to pass if the "off" case was not overlapping to begin
+      with, because then it would be proving nothing.
+
+      **Cost on the real garment**, which is what decides whether it can stay
+      switched on:
+
+      | mesh | verts | off | on | fps | body |
+      |---|---|---|---|---|---|
+      | 5 cm | 384 | 2.82 ms | **3.93 ms** | 254 | none inside |
+      | 3 cm | 988 | 7.17 ms | **10.04 ms** | 100 | none inside |
+
+      About 40 %, and both stay inside a 16.7 ms frame. The viewer honours
+      its existing `selfCollision` switch for this backend rather than
+      inventing a second one, and the distance is **derived from the
+      garment** — 0.6 of its mean edge length — rather than set to a
+      constant that would be a guess about someone else's mesh.
+
+      *What it is not:* Blender tests triangle against triangle, so it stops
+      a facet passing through a facet between their vertices. This holds
+      folds apart by a distance, which behaves like thickness. Set the
+      distance much below the edge length and two layers can still slide past
+      each other between samples.
 
 ## 2b. Profiling: how, and how to do it again
 

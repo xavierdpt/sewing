@@ -1161,6 +1161,11 @@ async function sendToWasm() {
       fabric: {
         thickness: params.clothThicknessCm || 0.35,
         friction: params.friction,
+        // The viewer already has this switch for the other two solvers; the
+        // wasm one honours it rather than inventing its own. Measured cost
+        // on the four-panel skirt: 2.82 -> 3.93 ms/frame at 384 vertices,
+        // 7.17 -> 10.04 at 988. Both inside a 16.7 ms frame.
+        selfCollision: !!params.selfCollision,
       },
       // Show the fall as it is computed rather than after it. The frames are
       // free -- they are being stepped anyway -- and a drape that appears
