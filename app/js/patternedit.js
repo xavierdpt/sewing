@@ -55,6 +55,42 @@ const inSector = (a, from, span) => {
 };
 
 /**
+ * Split the edge (ia, ib) at parameter s, rewiring every triangle that uses
+ * it, and return the new point's index.
+ *
+ * Every triangle on BOTH sides is rewired, which is what makes the mesh stay a
+ * mesh: splitting one side only would leave a T-junction, and a T-junction is
+ * a crack the moment the cloth is pulled.
+ */
+function splitEdgeAt(panel, ia, ib, s) {
+  const A = panel.pts[ia], B = panel.pts[ib];
+  const ni = panel.pts.length;
+  panel.pts.push({
+    x: A.x + (B.x - A.x) * s,
+    y: A.y + (B.y - A.y) * s,
+    v3: null,
+    uv: A.uv && B.uv
+      ? [A.uv[0] + (B.uv[0] - A.uv[0]) * s, A.uv[1] + (B.uv[1] - A.uv[1]) * s]
+      : undefined,
+  });
+  const extra = [];
+  for (let tj = panel.tris.length - 1; tj >= 0; tj--) {
+    const u = panel.tris[tj];
+    const ka = u.indexOf(ia), kb = u.indexOf(ib);
+    if (ka < 0 || kb < 0) continue;
+    const kc = 3 - ka - kb;
+    // Split in the triangle's OWN cyclic direction, or the two halves come out
+    // wound against the rest of the mesh -- which is invisible until something
+    // asks the pattern which way is up.
+    const [first, second] = ((ka + 1) % 3 === kb) ? [u[ka], u[kb]] : [u[kb], u[ka]];
+    extra.push([first, ni, u[kc]], [ni, second, u[kc]]);
+    panel.tris.splice(tj, 1);
+  }
+  panel.tris.push(...extra);
+  return ni;
+}
+
+/**
  * Split every triangle that a ray from the apex passes through, so that the ray
  * lies along mesh edges and nothing has to be cut later.
  *
@@ -86,24 +122,8 @@ function splitAlongRay(panel, apex, theta, { apexIndex = null } = {}) {
         const px = A.x + (B.x - A.x) * s, py = A.y + (B.y - A.y) * s;
         const r = (px - apex[0]) * dir[0] + (py - apex[1]) * dir[1];
         if (r <= EPS) continue;                            // behind the apex
-        // new vertex, splitting every triangle that uses edge (ia, ib)
-        const ni = panel.pts.length;
-        panel.pts.push({ x: px, y: py, v3: null, uv: A.uv && B.uv
-          ? [A.uv[0] + (B.uv[0] - A.uv[0]) * s, A.uv[1] + (B.uv[1] - A.uv[1]) * s] : undefined });
-        const extra = [];
-        for (let tj = panel.tris.length - 1; tj >= 0; tj--) {
-          const u = panel.tris[tj];
-          const ka = u.indexOf(ia), kb = u.indexOf(ib);
-          if (ka < 0 || kb < 0) continue;
-          const kc = 3 - ka - kb;
-          // Split in the triangle's OWN cyclic direction, or the two halves
-          // come out wound against the rest of the mesh -- which is invisible
-          // until something asks the pattern which way is up.
-          const [first, second] = ((ka + 1) % 3 === kb) ? [u[ka], u[kb]] : [u[kb], u[ka]];
-          extra.push([first, ni, u[kc]], [ni, second, u[kc]]);
-          panel.tris.splice(tj, 1);
-        }
-        panel.tris.push(...extra);
+        // a new vertex on the ray, in every triangle that used that edge
+        splitEdgeAt(panel, ia, ib, s);
         did = true;
       }
     }
@@ -167,6 +187,69 @@ export function outlineOf(panel) {
 }
 
 /**
+ * Give the two legs of a wedge the SAME fractions, by splitting whichever one
+ * is missing a vertex where the other has one.
+ *
+ * This is what makes the pairing Thales'. Two legs leave a common apex and are
+ * sewn to each other, so the point at fraction t of one belongs to the point at
+ * fraction t of the other and the stitches are parallel chords across the
+ * wedge. But the vertices on a leg are not chosen: `splitAlongRay` puts them
+ * where the cut crossed the mesh, and the two rays cross different edges, so
+ * one leg can carry 11 vertices where the other carries 7 and none of them at
+ * matching fractions.
+ *
+ * Pairing those by INDEX -- what this file used to do -- joins fraction 0.30
+ * of one leg to 0.42 of the other and leaves the surplus sewn to nothing.
+ * Measured by `node tools/darts.mjs` on the asymmetric fixture, before this:
+ * the tilted dart paired 7 of its 11 points and left 4 joined to nothing, the
+ * worst pair was 0.161 of a leg out, and the two points of one stitch started
+ * 2.49 cm apart along the seam they were supposed to be.
+ *
+ * So instead of choosing a correspondence, the legs are made to agree: take
+ * every fraction either leg has, and ensure both have a vertex there. Then the
+ * pairing is forced, one to one, in order, and the error is zero by
+ * construction rather than small by luck.
+ *
+ * @param chains  [leg1, leg2] as returned by splitAlongRay (apex excluded)
+ * @returns the two chains again, equal in length, each sorted outward
+ */
+function harmoniseLegs(panel, apex, dirs, apexIndex, chains) {
+  const rOf = (i, d) => (panel.pts[i].x - apex[0]) * d[0] + (panel.pts[i].y - apex[1]) * d[1];
+  // the apex is the shared r = 0 end of both legs
+  const legs = chains.map((c) => [{ i: apexIndex, r: 0 }].concat(
+    c.map(({ i }) => ({ i, r: 0 })),
+  ));
+  legs.forEach((leg, k) => { for (const node of leg) node.r = node.i === apexIndex ? 0 : rOf(node.i, dirs[k]); });
+  legs.forEach((leg) => leg.sort((a, b) => a.r - b.r));
+  const L = legs.map((leg) => leg[leg.length - 1].r);
+  if (!(L[0] > 0) || !(L[1] > 0)) return chains;
+
+  // every fraction either leg already has
+  const targets = [...new Set(legs.flatMap((leg, k) => leg.map((n) => n.r / L[k])))]
+    .filter((t) => t > 1e-9 && t < 1 - 1e-9)
+    .sort((a, b) => a - b);
+
+  legs.forEach((leg, k) => {
+    for (const t of targets) {
+      const want = t * L[k];
+      // already there?
+      if (leg.some((n) => Math.abs(n.r - want) < 1e-6 * L[k])) continue;
+      // the segment that contains it, as a mesh edge between two leg vertices
+      let seg = -1;
+      for (let j = 0; j + 1 < leg.length; j++) {
+        if (leg[j].r < want && want < leg[j + 1].r) { seg = j; break; }
+      }
+      if (seg < 0) continue;                       // outside the leg: nothing to split
+      const a = leg[seg], b = leg[seg + 1];
+      const ni = splitEdgeAt(panel, a.i, b.i, (want - a.r) / (b.r - a.r));
+      leg.splice(seg + 1, 0, { i: ni, r: want });
+    }
+  });
+  // hand back the chains without the apex, which is not a stitch
+  return legs.map((leg) => leg.filter((n) => n.i !== apexIndex));
+}
+
+/**
  * Take a wedge of cloth out of a piece, and sew the two cut edges together.
  *
  * The wedge is a sector: an apex somewhere in the piece, a bisector direction,
@@ -192,11 +275,16 @@ export function takeOutWedge(pattern, panelIndex, { apex, bisectDeg, intakeDeg }
   const apexIndex = nearestPoint(panel, apex[0], apex[1]);
   const A = [panel.pts[apexIndex].x, panel.pts[apexIndex].y];
 
-  const leg1 = splitAlongRay(panel, A, a1, { apexIndex });
-  const leg2 = splitAlongRay(panel, A, a2, { apexIndex });
+  let leg1 = splitAlongRay(panel, A, a1, { apexIndex });
+  let leg2 = splitAlongRay(panel, A, a2, { apexIndex });
   if (!leg1.length || !leg2.length) {
     throw new Error('the wedge does not reach the edge of the piece: move the apex or widen it');
   }
+  // Make the two legs carry matching fractions before anything is paired or
+  // removed: the split has to happen while the triangles either side of each
+  // leg still exist.
+  [leg1, leg2] = harmoniseLegs(panel, A,
+    [[Math.cos(a1), Math.sin(a1)], [Math.cos(a2), Math.sin(a2)]], apexIndex, [leg1, leg2]);
 
   // Drop everything inside the sector.
   const keep = panel.tris.filter((t) => {
@@ -209,19 +297,19 @@ export function takeOutWedge(pattern, panelIndex, { apex, bisectDeg, intakeDeg }
   }
   panel.tris = keep;
 
-  // Pair the two legs up the way a sewer trues a dart: by fraction of the leg,
-  // so the same point of one leg meets the same point of the other. The legs
-  // are straight, so their lengths are their outer radii, and the mismatch
-  // between them is reported rather than hidden -- a dart whose legs are
-  // different lengths is one that will not close cleanly.
+  // Pair the two legs up the way a sewer trues a dart: fraction of the leg to
+  // the same fraction of the other leg, which after harmoniseLegs is a one to
+  // one match in order with no fraction left over. The legs are straight, so
+  // their lengths are their outer radii, and the mismatch between THOSE is
+  // still reported rather than hidden -- a dart whose legs are different
+  // lengths is one that will not close cleanly, and that is a property of
+  // where the apex was put, not of the pairing.
   const n = Math.min(leg1.length, leg2.length);
-  const sampleAt = (leg, f) => leg[Math.min(leg.length - 1, Math.round(f * (leg.length - 1)))];
   let nextId = 1 + pattern.panels.reduce((m, p) => Math.max(m,
     ...p.pts.map((q) => (q.v3 === null || q.v3 === undefined ? -1 : q.v3))), -1);
   const pairs = [];
   for (let k = 0; k < n; k++) {
-    const f = n === 1 ? 1 : k / (n - 1);
-    const p1 = sampleAt(leg1, f), p2 = sampleAt(leg2, f);
+    const p1 = leg1[k], p2 = leg2[k];
     const id = nextId++;
     panel.pts[p1.i].v3 = id;
     panel.pts[p2.i].v3 = id;

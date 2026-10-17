@@ -91,6 +91,24 @@ function distance2ToTri(px, py, pz, a, b, c) {
   return dx * dx + dy * dy + dz * dz;
 }
 
+/**
+ * The corners of the box the limb capsules occupy, so a grid built around the
+ * torso can be told to cover them too.
+ */
+export function limbExtent(surface) {
+  const out = [];
+  const add = (p, r) => out.push(
+    [p[0] - r, p[1] - r, p[2] - r], [p[0] + r, p[1] + r, p[2] + r],
+  );
+  if (surface.includeArms && surface.armSegments) {
+    for (const s of surface.armSegments()) { add(s.a, s.r); add(s.b, s.r); }
+  }
+  if (surface.includeLegs && surface.legSegments) {
+    for (const s of surface.legSegments()) { add(s.a, s.rA); add(s.b, s.rB); }
+  }
+  return out;
+}
+
 export class SDF {
   /**
    * @param tris  array of [a, b, c], each a [x,y,z]; must be closed, or the
@@ -98,12 +116,21 @@ export class SDF {
    * @param opts.cell    grid spacing in cm
    * @param opts.band    how far from the surface exact distances are computed
    * @param opts.padCm   margin of grid around the mesh bounding box
+   * @param opts.includePoints  extra points the grid must cover, for parts of
+   *              the body that are NOT in `tris` -- the limb capsules, which
+   *              are added analytically afterwards by `unionLimbs`. Without
+   *              them the grid is the torso's bounding box and a thigh sits
+   *              outside it, where `at()` answers +Infinity.
    */
-  constructor(tris, { cell = 0.6, band = 2.0, padCm = 3.0 } = {}) {
+  constructor(tris, { cell = 0.6, band = 2.0, padCm = 3.0, includePoints = [] } = {}) {
     this.cell = cell;
     this.band = band;
     let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (const t of tris) for (const p of t) for (let d = 0; d < 3; d++) {
+      if (p[d] < lo[d]) lo[d] = p[d];
+      if (p[d] > hi[d]) hi[d] = p[d];
+    }
+    for (const p of includePoints) for (let d = 0; d < 3; d++) {
       if (p[d] < lo[d]) lo[d] = p[d];
       if (p[d] > hi[d]) hi[d] = p[d];
     }
@@ -210,6 +237,92 @@ export class SDF {
   /** Build directly from anything with a mesh({nu, nv}), capping the open ends. */
   static fromSurface(surface, { nu = 128, nv = 96, ...opts } = {}) {
     return new SDF(trianglesOf(surface, nu, nv), opts);
+  }
+
+  /**
+   * The WHOLE body: the torso's level set with the arm and leg capsules
+   * folded into it.
+   *
+   * This exists because the torso is not the body. `trianglesOf` walks the
+   * parametric surface, which is the torso alone; arms and legs are capsules
+   * that body.js answers for analytically, and cloth.js's BodyCollider asks
+   * them separately on every query. A field built from the triangles alone
+   * therefore contains no limbs at all, and a solver that collides against
+   * only that field -- which is every solver that takes a field rather than a
+   * collider, so sewcloth and the whole wasm path -- lets the legs straight
+   * through the cloth.
+   *
+   * Measured on the four-panel skirt (`node tools/wasmclip.mjs`): draped
+   * against the torso-only field, 7.08 % of the cloth's area ended up inside
+   * the body and the deepest sample was 8.97 cm in. The same drape measured
+   * against the torso ALONE reads 0.55 % and 0.64 cm, so 92 % of what was
+   * showing through was limb that the solver had never been told about.
+   */
+  static fromBody(surface, { nu = 128, nv = 96, ...opts } = {}) {
+    const sdf = new SDF(trianglesOf(surface, nu, nv), {
+      ...opts, includePoints: limbExtent(surface),
+    });
+    sdf.unionLimbs(surface);
+    return sdf;
+  }
+
+  /**
+   * Fold the limb capsules into the field, as the union of the two: phi
+   * becomes min(phi, capsule), node by node.
+   *
+   * Min of two signed distances is the union, and it is the right operation
+   * here rather than re-triangulating the capsules into `tris`: the sign in
+   * this class comes from counting ray crossings, which gives the symmetric
+   * difference of overlapping closed shells, not their union -- so a point
+   * inside both a thigh and the pelvis would come out POSITIVE. A capsule's
+   * distance is exact and analytic everywhere, so taking the minimum needs no
+   * band, no crossing count and no second sweep.
+   */
+  unionLimbs(surface) {
+    const segs = [];
+    if (surface.includeArms && surface.armSegments) {
+      for (const s of surface.armSegments()) segs.push({ a: s.a, b: s.b, rA: s.r, rB: s.r });
+    }
+    if (surface.includeLegs && surface.legSegments) {
+      for (const s of surface.legSegments()) segs.push({ a: s.a, b: s.b, rA: s.rA, rB: s.rB });
+    }
+    this.limbs = segs.length;
+    if (!segs.length) return this;
+    const { lo, n, cell, phi, idx } = this;
+    const [nx, ny, nz] = n;
+    for (const s of segs) {
+      const ab = [s.b[0] - s.a[0], s.b[1] - s.a[1], s.b[2] - s.a[2]];
+      const ll = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2] || 1;
+      const rMax = Math.max(s.rA, s.rB);
+      // only the nodes the capsule can possibly reach, plus the band
+      const reach = rMax + this.band + cell;
+      const bb = [0, 1, 2].map((d) => [
+        Math.min(s.a[d], s.b[d]) - reach, Math.max(s.a[d], s.b[d]) + reach,
+      ]);
+      const i0 = Math.max(0, Math.floor((bb[0][0] - lo[0]) / cell));
+      const i1 = Math.min(nx - 1, Math.ceil((bb[0][1] - lo[0]) / cell));
+      const j0 = Math.max(0, Math.floor((bb[1][0] - lo[1]) / cell));
+      const j1 = Math.min(ny - 1, Math.ceil((bb[1][1] - lo[1]) / cell));
+      const k0 = Math.max(0, Math.floor((bb[2][0] - lo[2]) / cell));
+      const k1 = Math.min(nz - 1, Math.ceil((bb[2][1] - lo[2]) / cell));
+      for (let k = k0; k <= k1; k++) {
+        const pz = lo[2] + k * cell;
+        for (let j = j0; j <= j1; j++) {
+          const py = lo[1] + j * cell;
+          for (let i = i0; i <= i1; i++) {
+            const px = lo[0] + i * cell;
+            const wx = px - s.a[0], wy = py - s.a[1], wz = pz - s.a[2];
+            let t = (wx * ab[0] + wy * ab[1] + wz * ab[2]) / ll;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            const qx = wx - ab[0] * t, qy = wy - ab[1] * t, qz = wz - ab[2] * t;
+            const d = Math.sqrt(qx * qx + qy * qy + qz * qz) - (s.rA + (s.rB - s.rA) * t);
+            const o = idx(i, j, k);
+            if (d < phi[o]) phi[o] = d;
+          }
+        }
+      }
+    }
+    return this;
   }
 
   inBounds(p) {

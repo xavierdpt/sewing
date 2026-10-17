@@ -34,6 +34,42 @@ import bmesh  # noqa: F401  (imported for availability inside Blender)
 
 CM = 0.01  # one centimetre, in Blender metres
 
+# WHICH WAY IS DOWN. This project is Y-UP -- the body stands along +y, the hem
+# of a skirt sits at y = -55 -- and Blender is Z-UP, with gravity on -Z. The
+# two were never reconciled: the mesh went in unchanged and the scene kept
+# Blender's gravity, so every drape this side-car has ever computed pulled the
+# cloth along the project's -z, which is the body's BACK.
+#
+# Measured the day it was found (2026-10-17), the same welded skirt dropped in
+# sewcloth with each gravity:
+#
+#   (0, 0, -981)   mean vertex moves -12.29 cm in z and +5.86 cm UP in y,
+#                  hem stretched to 168.7 cm, 2 folds 17.5 cm deep
+#   (0, -981, 0)   mean -2.33 cm in y, -0.11 in z, hem 159.2 cm, 5 folds
+#                  5.9 cm deep
+#
+# The first is what a person looking at the viewer described as "flat at the
+# front and a big bump at the back", which is exactly what gravity pointing
+# backwards does to a skirt. It is also, retrospectively, the "6 % longer hem"
+# and the "2 folds instead of 4" that had been written up as a fabric
+# parameter question.
+#
+# So the mesh is ROTATED into Blender's convention on the way in and back on
+# the way out -- +90 degrees about x, (x, y, z) -> (x, -z, y) -- rather than
+# the gravity being turned sideways to match the mesh. Two reasons: the window
+# then shows a body standing up, which is the whole point of being able to
+# look at it; and Blender's own defaults, its viewport, its floor and every
+# tutorial about its cloth solver assume Z-up, so a scene that disagrees with
+# them is a scene where every future question needs a mental transform.
+def to_blender(v):
+    """cm, project Y-up -> Blender metres, Z-up."""
+    return (v[0] * CM, -v[2] * CM, v[1] * CM)
+
+
+def from_blender(co):
+    """Blender metres, Z-up -> cm, project Y-up."""
+    return [round(co.x / CM, 3), round(co.z / CM, 3), round(-co.y / CM, 3)]
+
 
 def clear():
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -48,7 +84,7 @@ def mesh_object(name, verts, tris, edges=()):
     `use_sewing_springs` the solver pulls each one closed, which is sewing.
     """
     me = bpy.data.meshes.new(name)
-    me.from_pydata([(v[0] * CM, v[1] * CM, v[2] * CM) for v in verts],
+    me.from_pydata([to_blender(v) for v in verts],
                    [tuple(e) for e in edges], tris)
     me.validate(verbose=False)
     me.update()
@@ -120,8 +156,7 @@ def read_mesh(ob):
     """The evaluated cloth, in centimetres."""
     evaluated = ob.evaluated_get(bpy.context.evaluated_depsgraph_get())
     me = evaluated.to_mesh()
-    out = [[round(v.co.x / CM, 3), round(v.co.y / CM, 3), round(v.co.z / CM, 3)]
-           for v in me.vertices]
+    out = [from_blender(v.co) for v in me.vertices]
     evaluated.to_mesh_clear()
     return out
 

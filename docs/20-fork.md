@@ -1188,11 +1188,22 @@ against is exactly the position this project was in when
 - **Bottom** — `src/kernels.h`, leaf operations in structure-of-arrays
   layout, each small enough to check exactly. SoA because nothing here is
   shared with another program's struct.
-- **Middle** — **complete** (steps 17a–c, 20): springs, backward Euler with
-  filtered conjugate gradient, collision against a signed distance field, and
-  vertex self-collision through a spatial hash. `sc_capabilities()` reports
-  all five rather than letting a caller find out by watching cloth fall
-  through a body.
+- **Middle** — **complete for a DRAPE** (steps 17a–c, 20): springs, backward
+  Euler with filtered conjugate gradient, collision against a signed distance
+  field, and vertex self-collision through a spatial hash. `sc_capabilities()`
+  reports all five rather than letting a caller find out by watching cloth
+  fall through a body.
+
+  **It does not sew, and the name says otherwise.** "Complete" above meant
+  complete against the five capabilities, and read quickly — next to a module
+  called *sewcloth* — it says something it does not mean. There is not one
+  line about stitches, darts, seams or bending in the 933 lines of
+  `src/sewcloth/src/sewcloth.c`; what sews is the constant-rate feed in
+  `app/js/cloth.js`. As of 2026-10-17 `sc_capabilities()` carries two more
+  fields, `bending` and `stitches`, both reading **0**, and the smoke test
+  fails if either starts reporting 1 while the JS sewing is still the one
+  doing the work. The port is [19-todo.md](19-todo.md) item 1, with its design
+  recorded there: a constraint projection stage, not springs.
 
 `./build.sh` runs the native kernel tests, emits both wasm flavours and runs
 the smoke test. **13,702 bytes** of wasm.

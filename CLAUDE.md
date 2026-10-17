@@ -16,6 +16,20 @@ arrange→sew→weld→drape sequence as a table.
 > clearance field answers it in one run: every vertex outside the body, 40
 > edge midpoints inside it. The diagnosis *is* the data.
 
+**A default nobody states is an assumption nobody checks.** `sewcloth`'s
+gravity defaulted to −Z, Blender's convention; this project is Y-up; the
+viewer's drape never set it. So every X pulled the cloth along the body's
+*back* — 12.3 cm of z and 5.9 cm *upward* per vertex — and the garment came
+out flat at the front with the cloth piled up behind. Two separate findings
+had already been written up as fabric-parameter problems before a person
+looking at the screen said "real fabric doesn't behave like this".
+
+> **Cost:** every fold count, hem length and backend comparison taken between
+> the wasm drape existing and 2026-10-17. The measurement that would have
+> named it in one run — the mean displacement per axis, three numbers — was in
+> no instrument, because nobody asks which way a thing fell when they are sure
+> they know.
+
 ## 2. A scalar with a threshold is verification. Observation needs a
 distribution and a location.
 
@@ -34,11 +48,31 @@ measurement, not by deference.
 Both halves bite. Contact resolution was hand-rolled as a point query per
 vertex, which is why the body came through; the fix is a real solver
 (`sim/`). But Blender's native sewing springs left seams 9.2 cm open where
-this project's constant-rate feed closes them to 0.024 cm, so sewing stays
-here. Run the comparison (`tools/drape_blender.mjs`) before switching.
+this project's constant-rate feed closes them to 0.024 cm, so the sewing
+*algorithm* stays this project's — which is not the same as staying in
+`cloth.js`: it moves into `src/sewcloth`, it does not go back to Blender's
+springs. Run the comparison (`tools/drape_blender.mjs`) before switching.
 
 > **Cost:** I twice recommended replacing a component that measurably worked,
 > because someone suggested it and I did not check first.
+
+**Which solver is the reference for which question** is settled and written
+down in `docs/16-solvers.md` §3b. In short, so it is not re-derived:
+
+- the **side-car** is stock Blender and is **the oracle** — it arbitrates;
+- **`src/sewcloth`** (wasm, in the page) is **derived from Blender's solver
+  and improved on it**, and is the product. It matches the oracle's clearance
+  sixty times faster;
+- **`cloth.js` is being retired.** It is not the reference for anything, and
+  nothing new is built in it. It still runs the sewing, and only until the
+  constant-rate feed and the hinge solve are ported.
+
+> **Cost:** I wrote an open item as "why does the wasm drape differ from
+> `cloth.js`" — `cloth.js` as the implicit reference — and had to be told
+> twice that it is the Blender-derived solver that is the better one and that
+> `cloth.js` is on its way out. Both facts were already in the repo, and I had
+> read one of them in the same session. Deference to one's own code is the
+> same error as deference to someone else's.
 
 ## 5. Read this project's own documents before proposing a direction.
 
@@ -74,6 +108,26 @@ documentation or its name.
 
 > **Cost:** none recorded yet; this one is written down before it is broken
 > rather than after.
+
+## 9. A capability is not a feature. Follow the path the person presses.
+
+Reading the code tells you what exists. It does not tell you what the program
+*does*, because that is decided by default values and by which call the button
+is wired to. Press the key and read what it calls — `tools/viewshot.py` drives
+the real page headlessly, so this is a thirty-second measurement, not an
+opinion.
+
+> **Cost:** three in one session, all the same shape. I said "X drapes in
+> wasm" having seen `sendToWasm` in `finishAssembly` and not having read
+> `params.drapeBackend`, which still defaulted to `'sidecar'` — so every X in
+> the page was going to Blender over HTTP while I described it as in-page.
+> I shipped a test fixture reachable only by a button in another folder, and
+> J — the key someone actually presses — laid out 0 darts; measured, not
+> argued, once I finally drove it. And I wrote the queue item for the sewing
+> port as four steps that ended at "a `sewWasm` beside `drapeWasm`, so the two
+> can be compared", with no step that makes W call it; the user had to ask
+> twice before it was written down. Specifying capabilities and omitting the
+> wiring is the house error: rule 7's lesson, one level up.
 
 ## Commands
 

@@ -22,10 +22,11 @@ import { neckFrame, floorOf, accordion, besideTheBody, dropOutcome } from './dro
 import { flaredSkirtPattern, placeSkirt, hemProfile, assemblyReport,
   waistRing } from './skirt.js';
 import { layOut, weldStitched } from './assemble.js';
+import { asymmetricDarts, dartedSkirt } from './skirtdarts.js';
 import * as arrange from './arrange.js';
-import { drapeRemote, drapeFrames, health as sidecarHealth,
-  DEFAULT_URL } from './remote.js';
-import { drapeWasm } from './drapewasm.js';
+import { DEFAULT_URL } from './remote.js';
+import { sewclothModule, buildDrapeCloth, readBack } from './drapewasm.js';
+import { WasmSewing } from './sewwasm.js';
 import { startTelemetry, tlog, flushTelemetry } from './telemetry.js';
 import { clearance } from './clearance.js';
 import { PatternTable } from './table.js';
@@ -166,33 +167,50 @@ const params = {
   // Sewing by hand (docs/15-manual-sewing.md). `stepCm` and `stepDeg` are how
   // far one press of a transform button moves the selection.
   stepCm: 1, stepDeg: 5, weldTolCm: 0.25,
-  // The drape side-car. This project's solver resolves contact as a point
-  // query per vertex, so it holds the cloth off the body at its VERTICES and
-  // nowhere else and the figure comes through the triangles in between --
-  // measured, 0.47 cm at 130 sample points on a four-panel skirt, against
-  // 0 cm at none for the side-car. So the local fall is a preview and the
-  // side-car is the answer. See sim/server.py and docs/16-solvers.md.
-  sidecarUrl: DEFAULT_URL, useSidecar: true, sidecarSeconds: 6,
-  // WHICH SOLVER DRAPES. 'sidecar' sends the garment to Blender over HTTP:
-  // triangle-against-triangle contact and self-collision, about 30 s for a
-  // six-second fall. 'wasm' runs src/sewcloth in this page: no round trip and
-  // no process, measured at 2.79 ms/frame for 384 vertices and 7.15 for 988,
-  // against a 16.7 ms real-time budget.
+  // How much bigger than drafted the TEST darts are cut. The fixture's own
+  // intakes are 4.6-13.2 deg, which on this skirt is a notch 3.96 cm across
+  // at its widest -- geometrically there, and nearly invisible on a 106 cm
+  // panel with the next panel standing behind it. Doubling them gives 7.2 cm,
+  // which is what someone pressing J actually sees. It is a fixture: being
+  // visible is the point, and the knob says so rather than the fixture
+  // pretending to be a drafted dart. See app/js/skirtdarts.js.
+  // W SEWS IN WASM. There is no second backend behind a switch any more:
+  // src/sewcloth is the solver, cloth.js's sewing is on its way out
+  // (docs/19-todo.md item 1 step 6), and a switch between two implementations
+  // of the same algorithm is a thing that silently decides which one a bug
+  // report is about.
   //
-  // The difference is not speed alone, and choosing by speed alone would be
-  // a mistake. The wasm solver tests POINTS against a distance field and has
-  // NO self-collision: a skirt folding onto itself will pass through itself.
-  // Blender is the reference; this is the interactive one.
-  drapeBackend: 'sidecar',
-  // Capture EVERY solved frame, so the fall can be watched rather than
-  // replayed. Measured: Blender solves about 6 frames of simulated time per
-  // second of wall clock, so capturing every 5th gives a new pose only every
-  // 0.8 s -- a slideshow. Every frame arrives at ~6/s and is interpolated up
-  // to the render rate below, which is slow motion but continuous, and it is
-  // the real trajectory rather than a second guess at it. Costs bandwidth
-  // only: the frames were already being stepped. 0 returns the settled pose
-  // alone, which is what the viewer used to get.
-  sidecarCaptureEvery: 1,
+  // What that costs today, stated rather than hidden: on the DARTED fixture
+  // the wasm pass leaves a worst gap of about 1.8 cm where cloth.js reached
+  // 0.324 cm -- a dart pulls against its own panel rather than dragging a
+  // neighbour, and sewcloth's stretch is implicit springs where cloth.js
+  // sweeps a distance constraint. The plain skirt closes to 0.172 cm. Step 5b
+  // is that fix, and the HUD reports the gap either way, so a seam that did
+  // not close is visible rather than inferred.
+  dartScale: 2,
+  // On by default: the asymmetric darts exist to be tested with, and a
+  // symmetric garment hides the mistakes they are there to expose
+  // (app/js/skirtdarts.js). Off gives the plain four-panel skirt.
+  skirtDarts: true,
+  // WHERE THE DRAPE RUNS: in this page, in wasm, and nowhere else.
+  //
+  // It used to go to the side-car over HTTP, because this project's own
+  // solver resolves contact as a point query per vertex -- it holds the cloth
+  // off the body at its VERTICES and nowhere else, and the figure comes
+  // through the triangles between them. That is still true of cloth.js and is
+  // why the drape left it (docs/16-solvers.md section 3). It is no longer a
+  // reason to leave the page: sewcloth reaches the same clearance as stock
+  // Blender -- 0 % of the cloth's area inside the body, measured over the
+  // surface rather than at its corners -- in 1.5 s against the side-car's
+  // 90.7 s (section 3b). The round trip bought nothing anyone watching a
+  // garment fall could see.
+  //
+  // Blender remains the ORACLE and is reachable from the instruments
+  // (`node tools/trace.mjs --sidecar`, `node tools/drape_blender.mjs`), which
+  // is where a reference run belongs. It is not in the interactive path.
+  drapeSeconds: 6,
+  // sim/server.py also serves telemetry, which is all this url is still for.
+  serverUrl: DEFAULT_URL,
   // Draw the body inset by half the cloth's thickness, which is the half of
   // the cloth the renderer otherwise leaves out. Capped at that; it is not a
   // knob for hiding penetration.
@@ -235,11 +253,19 @@ let sim = null;              // the running cloth simulation, if any
 // needed to weld it once the seams are closed.
 let assembling = null;
 // what the drape side-car is doing, for the HUD
-let sidecar = null;
+let drapeRun = null;   // the in-page drape: running / done / failed
+// The sewing, when it runs in wasm: a garment being sewn, alive across frames
+// for the length of one pass. Null between passes, and null throughout if the
+// backend is cloth.js.
+let wasmSew = null;
+// The drape, while it is falling: a cloth that lives across frames, stepped
+// from the render loop. It used to run to completion inside one call, which
+// froze the page for thirteen seconds and then showed the settled garment
+// without anyone seeing it fall.
+let wasmDrape = null;
 // Frames arriving from the side-car, waiting to be shown. The render loop
 // drains this instead of stepping the local solver: ONE set of computations,
 // by the solver that gets contact right, and you watch that one fall.
-let playback = null;
 let clothMesh = null;
 let playing = false;
 let bodyMesh = null;
@@ -730,6 +756,7 @@ function startSkirt() {
  * inextensible mesh can never work back out.
  */
 function startAssembly() {
+  endWasmPass();
   withBusy('arranging the pieces…', () => {
     // Whatever pattern is in hand, edits and all -- a skirt off the cutting
     // table, an imported file, or a bodice drafted for this body. This used to
@@ -793,10 +820,14 @@ function startAssembly() {
       arrangementStrainPct:
         +(100 * Math.max(...laid.asm.edgeStrains().map((x) => Math.abs(x.strain)))).toFixed(4),
     }));
+    const nDarts = pattern.panels.reduce((n, p) => n + ((p.darts || []).length), 0);
+    const dartStitches = laid.stitches.filter((st) => st.pa === st.pb).length;
     console.log(
       `${pattern.panels.length} pieces laid out around the body, all selected. `
       + `${laid.stitches.length} stitches waiting on `
-      + `${pattern.seams.length} seams; the widest is ${widest.toFixed(1)} cm open.\n`
+      + `${pattern.seams.length} seams`
+      + (nDarts ? ` and ${nDarts} darts (${dartStitches} of the stitches)` : ' and no darts')
+      + `; the widest is ${widest.toFixed(1)} cm open.\n`
       + `pieces:  ${names}\n`
       + '\nNEXT, to sew it two pieces at a time:\n'
       + '  1. press N  -- deselect everything (W on all four sews the lot at once)\n'
@@ -918,8 +949,22 @@ function toggleSewing() {
   const sel = assembling.selected;
   const n = sim.startSewing((st) => sel.has(st.pa) && sel.has(st.pb));
   armStitches();
+  // a fresh pass, so the stall detector starts over (stepFrame)
+  assembling.stall = null;
   assembling.phase = 'stitching';
   playing = true;
+  // THE PASS RUNS IN WASM unless asked otherwise. The stitch records stay
+  // `sim`'s -- they are what the HUD, the seam report and the weld read --
+  // and `WasmSewing.mirrorOnto` keeps them true while sewcloth does the work.
+  // Built per pass rather than per garment because a pass sews a SELECTION,
+  // and the selection is what decides which stitches exist for sewcloth.
+  // The module takes about a second to arrive the first time (it is asked
+  // for at startup, so usually it is already here). Until it does, NOTHING
+  // steps this garment: letting the old solver sew in the meantime is two
+  // solvers taking turns on one seam, and it showed -- 4.2 cm of the 17.3
+  // were already taken up by the time the wasm pass began.
+  assembling.awaitingWasm = true;
+  startWasmPass(todo);
   const seams = [...new Set(todo.map(seamKeyOf))];
   const togo = sim.remainingFeedCm();
   tlog('sew-start', phaseMetrics({
@@ -935,8 +980,76 @@ function toggleSewing() {
 }
 
 /** Stop feeding, leaving every seam exactly where it has got to. */
+/**
+ * Hand this pass to sewcloth.
+ *
+ * Asynchronous only because the module is loaded once; after the first pass
+ * (or any drape) it resolves immediately. If it cannot be loaded at all the
+ * pass simply stays in cloth.js and says so -- a missing wasm module is a
+ * reason to sew more slowly, not a reason to stop sewing.
+ */
+async function startWasmPass(todo) {
+  const pass = assembling;
+  try {
+    console.log(`asking for the wasm solver for ${todo.length} stitches…`);
+    const mod = await sewclothModule();
+    console.log('wasm solver in hand; building the pass…');
+    // the garment may have been rebuilt while the module was loading
+    if (assembling !== pass || assembling.phase !== 'stitching') return;
+    wasmSew = new WasmSewing(mod, {
+      asm,
+      stitches: todo,
+      surface,
+      fabric: params.fabric,
+      sewSpeedCmPerSec: params.sewSpeedCmPerSec,
+      maxTensionGf: params.maxTensionGf,
+      stitchSoftness: params.stitchSoftness,
+      // NOT params.substeps: that is the drop test's budget, and the sewing
+      // phase is quasi-static. sewwasm.js has the sweep that chose its own.
+      selfCollision: false,
+    });
+    assembling.awaitingWasm = false;
+    wasmSew.start();
+    // Say which solver is sewing, in the console the person is already
+    // reading: a backend you cannot see is a backend nobody can report a bug
+    // against (CLAUDE.md rule 9).
+    console.log(`sewing in wasm (src/sewcloth): ${todo.length} stitches, `
+      + `${sim.remainingFeedCm().toFixed(1)} cm to take up. `
+      + 'It stops when the seams stop getting closer, and leaves them open '
+      + 'where they are.');
+    tlog('sew-backend', phaseMetrics({ backend: 'sewcloth-wasm', stitches: todo.length }));
+  } catch (e) {
+    wasmSew = null;
+    if (assembling === pass) {
+      assembling.awaitingWasm = false;
+      assembling.phase = 'arranging';
+      playing = false;
+    }
+    // No quiet fall back to the other solver: W sews in wasm, and a pass that
+    // cannot start is a thing to say out loud rather than to hide behind a
+    // slower one that nobody asked for.
+    console.error(`the wasm solver would not load (${e.message || e}), so `
+      + 'nothing was sewn. Check that app/wasm/sewcloth.mjs is being served.');
+    updateHUD();
+  }
+}
+
+/** End the wasm pass, leaving the stitch records holding what it achieved. */
+function endWasmPass() {
+  if (!wasmSew) return;
+  wasmSew.mirrorOnto(null);
+  // The velocities live in the module and die with it. A sewing pass is
+  // quasi-static by design -- the cloth creeps along at the feed rate -- so
+  // what it leaves behind is a pose, not a motion, and carrying a velocity
+  // across the weld would be carrying a number nobody measured.
+  for (const v of sim.vel) { v[0] = 0; v[1] = 0; v[2] = 0; }
+  wasmSew.dispose();
+  wasmSew = null;
+}
+
 function pauseSewing(why = 'stopped') {
   if (!assembling || assembling.phase !== 'stitching') return;
+  endWasmPass();
   sim.stopSewing();
   assembling.phase = 'arranging';
   playing = false;
@@ -971,7 +1084,7 @@ function pauseSewing(why = 'stopped') {
   console.log('select other pieces and press W again, or X to weld and drop.');
   updateStitchLines();
   updateClothMesh();
-  updateHUD();
+  updateHUD({ measure: true });
 }
 
 /** Phase 2 -> 3: weld the closed seams and switch gravity on. */
@@ -991,6 +1104,9 @@ function waistPinReach(target, ids) {
 }
 
 function finishAssembly() {
+  // A pass still in flight owns the vertices; weld what it achieved, not what
+  // it is in the middle of achieving.
+  endWasmPass();
   if (!assembling || assembling.phase === 'falling') return;
   const { pattern, laid } = assembling;
   // Only seams that were actually SEWN are candidates for welding. Passing
@@ -1087,7 +1203,7 @@ function finishAssembly() {
   // view snapped backwards when the side-car's answer landed on top of a fall
   // it had never seen. `sendToSidecar` turns this back on if the side-car
   // turns out to be unreachable.
-  playing = !params.useSidecar;
+  playing = false;   // the wasm drape owns the fall from here
   assembling.seamReport = report;
   panelOfVert = [];
   if (!welded.openStitches.length) {
@@ -1107,9 +1223,7 @@ function finishAssembly() {
   console.log(`welded ${welded.weldedPct} % of the stitches `
     + `(within ${params.weldTolCm} cm); ${welded.asm.verts.length} vertices. `
     + `Widest seam still open: ${gap.toFixed(2)} cm. Gravity on.`);
-  if (params.useSidecar) {
-    if (params.drapeBackend === 'wasm') sendToWasm(); else sendToSidecar();
-  }
+  sendToWasm();
   if (welded.openStitches.length) {
     console.warn(`${welded.openStitches.length} stitches were NOT welded because `
       + 'their seams would not close. They stay basted and visible.');
@@ -1137,158 +1251,112 @@ function finishAssembly() {
  * viewer never blocks: you watch the preview drop, and a minute later it is
  * replaced by the real thing.
  */
-/* Drape in this page, with no side-car.
+/* X: drape in this page, in wasm.
  *
- * Deliberately shaped like sendToSidecar(): same source of pinned vertices,
- * same write-back, same three refreshes, same abandonment check. Two drape
- * paths that differ in how they are driven are two paths that cannot be
- * compared, and comparing them is the only way to know what the faster one
- * costs in fidelity. */
+ * LOST AND RESTORED 2026-10-17. Taking the side-car out of the viewer deleted
+ * this function with it -- the cut ran from the comment above sendToSidecar
+ * to the next top-level definition, and this sat between them. The viewer
+ * still CALLED it, so X threw `sendToWasm is not defined` and the garment
+ * simply never fell. Nothing caught it: the gate does not load main.js, and
+ * the headless checks I ran drove J and W. Rule 9, again, and with a sharper
+ * edge than before -- it is not enough to follow the path the person presses
+ * when you have just changed it, you have to press the OTHER paths too.
+ *
+ * It keeps the shape it had when there were two backends: same source of
+ * pinned vertices, same write-back, same three refreshes, same abandonment
+ * check if the garment is rebuilt mid-solve. */
 async function sendToWasm() {
   if (!sim || !asm) return;
   const target = asm;
   const pinned = asm.pinned.map((p, i) => (p ? i : -1)).filter((i) => i >= 0);
 
-  sidecar = { state: 'running', since: Date.now(), shown: 0, backend: 'sewcloth-wasm' };
+  drapeRun = { state: 'running', since: Date.now(), shown: 0, backend: 'sewcloth-wasm' };
   playing = false; // the wasm solver owns the fall; the local one must not also step it
   updateHUD();
   tlog('wasm-start', phaseMetrics({ vertices: target.verts.length }));
 
   try {
-    const out = await drapeWasm(target, surface, {
-      seconds: params.sidecarSeconds,
+    const mod = await sewclothModule();
+    if (asm !== target) { drapeRun = null; return; }
+    // The mesh's own contact margin, the same floor drapeWasm applies: it is
+    // what keeps the body out from between the sampled points.
+    let total = 0, count = 0;
+    for (const e of target.edges.values()) {
+      const a = target.verts[e.a], b = target.verts[e.b];
+      total += Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+      count++;
+    }
+    const meanEdge = count ? total / count : 2;
+    const built = buildDrapeCloth(mod, target, surface, {
+      cell: 1.0,
       pinned,
       fabric: {
-        thickness: params.clothThicknessCm || 0.35,
+        thickness: Math.max(params.clothThicknessCm || 0.4,
+                            meanEdge * 0.25, 0.8),
         friction: params.friction,
-        // The viewer already has this switch for the other two solvers; the
-        // wasm one honours it rather than inventing its own. Measured cost
-        // on the four-panel skirt: 2.82 -> 3.93 ms/frame at 384 vertices,
-        // 7.17 -> 10.04 at 988. Both inside a 16.7 ms frame.
         selfCollision: !!params.selfCollision,
-      },
-      // Show the fall as it is computed rather than after it. The frames are
-      // free -- they are being stepped anyway -- and a drape that appears
-      // only when finished is the complaint this whole path exists to fix.
-      onFrame: (flat, f) => {
-        if (asm !== target || (f & 1)) return;
-        for (let i = 0; i < target.verts.length; i++) {
-          target.verts[i][0] = flat[i * 3];
-          target.verts[i][1] = flat[i * 3 + 1];
-          target.verts[i][2] = flat[i * 3 + 2];
-        }
-        updateClothMesh();
+        selfDistance: params.selfCollision ? meanEdge * 0.6 : 0,
       },
     });
-
-    // the garment may have been cleared or rebuilt while we were solving
-    if (asm !== target) { sidecar = null; return; }
-
-    out.verts.forEach((p, i) => {
-      target.verts[i][0] = p[0]; target.verts[i][1] = p[1]; target.verts[i][2] = p[2];
-    });
-    for (const v of sim.vel) { v[0] = 0; v[1] = 0; v[2] = 0; }
-
-    const pen = sim.penetration();
-    sidecar = {
-      state: 'done', backend: 'sewcloth-wasm',
-      seconds: +(out.ms / 1000).toFixed(2), pen,
+    wasmDrape = {
+      cloth: built.cloth, target, frame: 0,
+      frames: Math.max(1, Math.round(params.drapeSeconds * 30)),
+      t0: performance.now(),
     };
-    updateClothMesh();
-    updateStitchLines();
-    updateHUD();
-    tlog('wasm-done', phaseMetrics({
-      msPerFrame: +out.msPerFrame.toFixed(2),
-      contacts: out.report.contacts,
-      deepestCm: +out.report.deepestCm.toFixed(3),
-      cgIterations: out.report.cgIterations,
-    }));
-    flushTelemetry();
-    console.log(`wasm drape: ${out.frames} frames in ${out.ms.toFixed(0)} ms `
-      + `(${out.msPerFrame.toFixed(2)} ms/frame, ${(1000 / out.msPerFrame).toFixed(0)} fps). `
-      + `Deepest correction ${out.report.deepestCm.toFixed(3)} cm. `
-      + `Inside the body: ${pen.worstCm} cm at ${pen.insideSamples} sample points.`);
+    console.log(`draping in wasm: ${wasmDrape.frames} frames, `
+      + 'stepped from the render loop so it can be watched.');
   } catch (e) {
-    sidecar = { state: 'failed', backend: 'sewcloth-wasm', error: String(e.message || e) };
+    wasmDrape = null;
+    drapeRun = { state: 'failed', backend: 'sewcloth-wasm', error: String(e.message || e) };
     tlog('wasm-failed', { error: String(e.message || e) });
-    flushTelemetry();
     console.error(`wasm drape failed: ${e.message || e}`);
-    updateHUD();
+    updateHUD({ measure: true });
   }
 }
 
-async function sendToSidecar() {
-  if (!sim || !asm) return;
-  const target = asm;
-  const pinned = asm.pinned.map((p, i) => (p ? i : -1)).filter((i) => i >= 0);
-  const h = await sidecarHealth(params.sidecarUrl);
-  if (!h) {
-    console.warn(`no drape side-car at ${params.sidecarUrl} -- showing the local`
-      + ' preview only, which lets the body through between the vertices.'
-      + ' Start it with:  python3 sim/server.py');
-    // nothing better is coming, so let the local solver have it after all
-    if (sim && asm === target) playing = true;
-    updateHUD();
-    return;
+/**
+ * One rendered frame of the fall.
+ *
+ * A frame of simulation per frame of render, which is what makes it a drape
+ * someone can watch rather than a thirteen-second freeze ending in a result.
+ * The HUD is not re-measured here -- only when it lands.
+ */
+function stepWasmDrape() {
+  const d = wasmDrape;
+  if (asm !== d.target) { d.cloth.dispose(); wasmDrape = null; drapeRun = null; return; }
+  d.cloth.step(1 / 30, 8);
+  d.frame++;
+  const p = d.cloth.positions();
+  const V = d.target.verts;
+  for (let i = 0; i < V.length; i++) {
+    V[i][0] = p[i * 3]; V[i][1] = p[i * 3 + 1]; V[i][2] = p[i * 3 + 2];
   }
-  sidecar = { state: 'running', since: Date.now(), shown: 0 };
-  // ONE simulation, and it is this one. The local fall used to run underneath
-  // so there was something to animate -- a second simulation of the same
-  // event by the contact model whose defect is that the body comes through
-  // the cloth (docs/16-solvers.md section 3), and it was the one on screen.
-  // Worse, the side-car was handed the pose from before that fall, so its
-  // answer arrived describing a garment that had already moved and the view
-  // snapped back to it.
-  playing = false;
-  playback = { queue: [], from: 0, done: false, target };
-  pollFrames();
-  tlog('sidecar-start', phaseMetrics({ backends: Object.keys(h.backends || {}) }));
-  updateHUD();
-  console.log(`side-car (${Object.entries(h.backends).map(([k, v]) => `${k}: ${v}`).join(', ')})`
-    + ` draping ${asm.verts.length} vertices…`);
-  try {
-    const out = await drapeRemote(target, surface, {
-      url: params.sidecarUrl,
-      session: telemetrySessionId,
-      fabric: params.fabric,
-      seconds: params.sidecarSeconds,
-      pinned,
-      selfCollision: params.selfCollision,
-      captureEvery: params.sidecarCaptureEvery,
-    });
-    // the garment may have been cleared or rebuilt while we waited
-    if (asm !== target) { sidecar = null; playback = null; return; }
-    playing = false;
-    if (playback) {
-      // let the frames already in hand finish playing; the settled pose is
-      // the last of them and jumping to it now would cut the fall short
-      playback.final = out.verts;
-      playback.done = true;
-    } else {
-      out.verts.forEach((p, i) => {
-        target.verts[i][0] = p[0]; target.verts[i][1] = p[1]; target.verts[i][2] = p[2];
-      });
-    }
-    for (const v of sim.vel) { v[0] = 0; v[1] = 0; v[2] = 0; }
-    const pen = sim.penetration();
-    sidecar = { state: 'done', backend: out.backend, seconds: out.wallSeconds, pen };
-    updateClothMesh();
-    updateStitchLines();
-    updateHUD();
-    tlog('sidecar-done', phaseMetrics({
-      backend: out.backend, solveSeconds: out.wallSeconds,
-    }));
-    flushTelemetry();
-    console.log(`side-car drape done in ${out.wallSeconds}s (${out.backend}).`
-      + ` Inside the body: ${pen.worstCm} cm at ${pen.insideSamples} sample points.`);
-    console.table(sim.report());
-  } catch (e) {
-    sidecar = { state: 'failed', error: String(e.message || e) };
-    tlog('sidecar-failed', { error: String(e.message || e) });
-    flushTelemetry();
-    console.error(`side-car drape failed: ${e.message || e}`);
-    updateHUD();
-  }
+  hudStatsStale = true;
+  updateClothMesh();
+  if (d.frame < d.frames) return;
+
+  const ms = performance.now() - d.t0;
+  const out = readBack(d.cloth, d.target, { frames: d.frame, ms });
+  d.cloth.dispose();
+  wasmDrape = null;
+  for (const v of sim.vel) { v[0] = 0; v[1] = 0; v[2] = 0; }
+  const pen = sim.penetration();
+  drapeRun = {
+    state: 'done', backend: 'sewcloth-wasm',
+    seconds: +(ms / 1000).toFixed(2), pen,
+  };
+  updateStitchLines();
+  updateHUD({ measure: true });
+  tlog('wasm-done', phaseMetrics({
+    msPerFrame: +out.msPerFrame.toFixed(2),
+    contacts: out.report.contacts,
+    deepestCm: +out.report.deepestCm.toFixed(3),
+  }));
+  flushTelemetry();
+  console.log(`wasm drape: ${out.frames} frames in ${ms.toFixed(0)} ms `
+    + `(${out.msPerFrame.toFixed(1)} ms/frame). `
+    + `Deepest correction ${out.report.deepestCm.toFixed(3)} cm. `
+    + `Inside the body: ${pen.worstCm} cm at ${pen.insideSamples} sample points.`);
 }
 
 const STRETCH_RAMP = (t) => (t >= 0
@@ -1516,6 +1584,8 @@ function updateStitchLines() {
 }
 
 function clearDrop() {
+  if (wasmSew) { wasmSew.dispose(); wasmSew = null; }
+  if (wasmDrape) { wasmDrape.cloth.dispose(); wasmDrape = null; }
   for (const o of [stitchLines, seamCorners]) {
     if (o) { scene.remove(o); o.geometry.dispose(); }
   }
@@ -1945,73 +2015,6 @@ function logDropSettled(outcome) {
 }
 
 /**
- * Read whatever frames the side-car has solved since last time.
- *
- * Blender steps all 180 frames whether or not anyone looks at them, so the
- * trajectory is free; `captureEvery` makes it flush each Nth one to a file as
- * it goes and this picks them up. Polling rather than streaming because the
- * side-car is a 200-line http.server and appending JSON lines that a GET
- * reads back is the pattern it already uses for its log.
- */
-async function pollFrames() {
-  if (!playback) return;
-  const r = await drapeFrames(params.sidecarUrl, telemetrySessionId, playback.from);
-  if (!playback) return;
-  if (r && Array.isArray(r.frames)) {
-    for (const fr of r.frames) if (fr.verts) playback.queue.push(fr.verts);
-    playback.from = r.next ?? playback.from + r.frames.length;
-    if (r.done) playback.solved = true;
-  }
-  // keep asking while the solve is running or frames are still queued
-  if (!playback.solved || playback.queue.length) setTimeout(pollFrames, 250);
-}
-
-/**
- * Show the next solved frame, if one has arrived.
- *
- * Returns true when it consumed a frame, so the render loop knows not to step
- * the local solver -- the two must never both be moving the same vertices.
- */
-function stepPlayback() {
-  if (!playback) return false;
-  // Interpolate toward the next solved pose rather than snapping to it.
-  // Frames arrive at about 6 a second -- Blender's solve rate -- and the
-  // render loop runs at 60, so snapping would show six discrete jumps a
-  // second. Easing toward the target gives continuous motion at the render
-  // rate; it is slow motion, because the solve is slower than real time, but
-  // it is the trajectory that actually happened.
-  if (!playback.aim) playback.aim = playback.queue.shift() || null;
-  if (playback.aim) {
-    const V = playback.target.verts, a = playback.aim;
-    const k = playback.queue.length > 2 ? 0.5 : 0.25;   // catch up if behind
-    let far = 0;
-    for (let i = 0; i < V.length && i < a.length; i++) {
-      const dx = a[i][0] - V[i][0], dy = a[i][1] - V[i][1], dz = a[i][2] - V[i][2];
-      far = Math.max(far, Math.abs(dx), Math.abs(dy), Math.abs(dz));
-      V[i][0] += dx * k; V[i][1] += dy * k; V[i][2] += dz * k;
-    }
-    if (far < 0.01) {
-      playback.aim = null;
-      if (sidecar) sidecar.shown = (sidecar.shown || 0) + 1;
-    }
-    updateClothMesh();
-    updateStitchLines();
-    return true;
-  }
-  // nothing left to show and nothing more coming: settle on the final pose
-  if (playback.done && playback.solved && playback.final) {
-    const V = playback.target.verts;
-    playback.final.forEach((p, i) => { V[i][0] = p[0]; V[i][1] = p[1]; V[i][2] = p[2]; });
-    for (const v of sim.vel) { v[0] = 0; v[1] = 0; v[2] = 0; }
-    playback = null;
-    updateClothMesh();
-    updateStitchLines();
-    updateHUD();
-  }
-  return false;
-}
-
-/**
  * What the side-car is doing, as one line.
  *
  * A function and not an object literal indexed by state, which is how this
@@ -2020,15 +2023,15 @@ function stepPlayback() {
  * there was one and threw while the job was still running -- taking the
  * side-car call down with it.
  */
-function sidecarLine(sc) {
+function drapeLine(sc) {
   switch (sc.state) {
     case 'running':
-      return `side-car working… (${((Date.now() - sc.since) / 1000).toFixed(0)} s)`;
+      return `draping… (${((Date.now() - sc.since) / 1000).toFixed(0)} s)`;
     case 'done':
       return `${sc.backend}, ${sc.seconds} s -- ${sc.pen.worstCm} cm inside`
         + ` at ${sc.pen.insideSamples} of ${sc.pen.samples} sample points`;
     case 'failed':
-      return `side-car failed: ${sc.error}`;
+      return `the drape failed: ${sc.error}`;
     default:
       return String(sc.state);
   }
@@ -2065,10 +2068,9 @@ function assemblyRows(row0, cls0) {
       // Reporting 'falling' while paused is the same class of mistake as the
       // HUD reporting 0.00 cm inside the body while the figure was visibly
       // through the cloth: a label that cannot be falsified by the state.
+      if (drapeRun && drapeRun.state === 'running') return 'sewn, and falling';
       if (!playing) return 'sewn — paused. Space to run gravity.';
-      return sidecar && sidecar.state === 'running'
-        ? 'sewn, falling (preview) — the side-car is solving the real drape'
-        : 'sewn, and falling';
+      return 'sewn, and falling';
     }
     if (!nSel) return 'arranging -- nothing selected. Click a piece, or A for all.';
     return togo > params.weldTolCm
@@ -2102,7 +2104,41 @@ function assemblyRows(row0, cls0) {
 
 const fitReportOf = () => fitReport(garment, surface);
 
-function updateHUD() {
+/**
+ * The expensive half of the HUD, measured at checkpoints rather than at 60 Hz.
+ *
+ * `sim.report()` walks every edge for strain and asks the body collider about
+ * every vertex AND every edge midpoint; `hemProfile` walks the hem. On the
+ * darted skirt that is most of a frame: the wasm sewing steps in 17 ms and
+ * the viewer was taking **210 ms** a frame, because this ran inside the
+ * stepping loop. Measuring the cloth is not free and does not need to happen
+ * between one creep of the feed and the next.
+ *
+ * So it is computed when something has actually HAPPENED -- the pieces are
+ * laid out, a sewing pass ends, the weld, the drape returns, the cloth
+ * settles -- and the panel says so when what it is showing is older than the
+ * garment on screen. A stale number labelled stale is useful; a stale number
+ * labelled nothing is how a HUD comes to report 0.00 cm through a visibly
+ * broken drape.
+ */
+let hudStats = null;
+let hudStatsStale = false;
+
+function hudSnapshot(measure) {
+  if (!sim) { hudStats = null; return null; }
+  if (measure || !hudStats || hudStats.sim !== sim) {
+    hudStats = {
+      sim,
+      r: sim.report(),
+      hem: (asm && asm.meta && asm.meta.skirt) ? hemProfile(asm) : null,
+    };
+    hudStatsStale = false;
+  }
+  return hudStats;
+}
+
+/** @param opts.measure  re-measure the cloth; a checkpoint, not a frame. */
+function updateHUD(opts = {}) {
   const el = document.getElementById('stats');
   if (table && table.visible) {
     const r = table.report();
@@ -2147,7 +2183,8 @@ function updateHUD() {
   const cls0 = (ok) => (ok ? 'ok' : 'warn');
   const row0 = (k, v, c = '') => `<tr><td>${k}</td><td class="${c}">${v}</td></tr>`;
   if (sim) {
-    const r = sim.report();
+    const snap = hudSnapshot(opts.measure);
+    const r = snap.r;
     const p0 = sim.pattern && sim.pattern.meta;
     el.innerHTML = '<table>'
       + row0('cloth', `${params.fabric}, ${r.weightG} g over ${(r.areaCm2 / 10000).toFixed(2)} m2`)
@@ -2176,14 +2213,14 @@ function updateHUD() {
           + (r.deepestEdgeCm > r.deepestVertexCm ? ' (between the vertices)' : '');
       })(), cls0(r.deepestPenetrationCm
         <= Math.min(params.bodyInsetCm, params.clothThicknessCm / 2)))
-      + (sidecar ? row0('drape', sidecarLine(sidecar),
-        cls0(sidecar.state !== 'failed')) : '')
+      + (drapeRun ? row0('drape', drapeLine(drapeRun),
+        cls0(drapeRun.state !== 'failed')) : '')
       + row0('stretch mean / max', `${r.meanStrainPct} / ${r.maxStretchPct} %`,
         cls0(r.maxStretchPct < 10))
       + row0('seams stretched', `${r.stretchedSeamsPct} %`)
       + row0('hem height', `${r.bottomYcm.toFixed(1)} cm`)
-      + (asm.meta && asm.meta.skirt ? (() => {
-        const hp = hemProfile(asm);
+      + (asm.meta && asm.meta.skirt && snap.hem ? (() => {
+        const hp = snap.hem;
         return row0('panels / seams', `${asm.meta.panels} / ${(sim.pattern.seams || []).length}`)
           + row0('waist ring', `${asm.meta.waistRingCm} cm`)
           + row0('folds in the hem', `${hp.folds}, ${hp.foldDepthCm} cm deep`)
@@ -2191,6 +2228,9 @@ function updateHUD() {
           + row0('hem unevenness', `${hp.hemUnevennessCm} cm`,
             cls0(hp.hemUnevennessCm < 2));
       })() : '')
+      + (hudStatsStale
+        ? row0('these numbers', 'as of the last stop -- the cloth has moved since', 'warn')
+        : '')
       + '</table>'
       + '<div style="margin-top:6px;color:#9aa0aa;font-size:11px">'
       + 'red = stretched &middot; blue = slack, it will fold here</div>';
@@ -2608,6 +2648,15 @@ fSkirt.add({ f: () => { if (sim && asm.meta && asm.meta.skirt) console.table(hem
 fSkirt.add({ a: () => { if (loadedPattern) console.table(assemblyReport(loadedPattern)); } },
   'a').name('how it assembles');
 fSkirt.add({ p: exportPattern }, 'p').name('print the pattern [P]');
+// A deliberately lopsided fixture, because a symmetric garment hides
+// left-right mistakes: a mirrored piece and a correct one look the same.
+// app/js/skirtdarts.js says what it cuts and why. It goes on the TABLE, so
+// the darts can be seen before J lifts them onto the body, and J, W and X
+// then sew exactly what is drawn there.
+fSkirt.add(params, 'skirtDarts').name('cut the test darts in [J, K]');
+fSkirt.add(params, 'dartScale', 0.5, 4, 0.25)
+  .name('test dart size (1 = as drafted)');
+fSkirt.add({ d: cutAsymmetricDarts }, 'd').name('cut asymmetric darts into it');
 
 // ------------------------------------------------- sewing by hand
 
@@ -2685,29 +2734,25 @@ fSew.add({ r: () => { if (sim && sim.stitches.length) console.table(sim.stitchRe
   'r').name('seam report: tension and gaps');
 
 const telemetrySessionId = startTelemetry({
-  url: params.sidecarUrl, enabled: params.telemetry,
+  url: params.serverUrl, enabled: params.telemetry,
 });
 
-// ------------------------------------------------- the drape side-car
+// ------------------------------------------------- the drape
 
 /**
- * The real drape runs elsewhere. This project's solver keeps the cloth off the
- * body at its VERTICES and nowhere else, so the figure comes through the
- * triangles in between -- 0.47 cm at 130 sample points on a four-panel skirt,
- * against 0 cm at none for the side-car, which does triangle-against-triangle
- * contact. The local fall is a preview; this is the answer.
+ * The drape runs HERE, in wasm (src/sewcloth), and the side-car is gone from
+ * this path. Its contact is the oracle's: 0 % of the cloth's area inside the
+ * body on the four-panel skirt, measured over the cloth surface by
+ * clearance.js, which is what stock Blender scores on the same garment -- and
+ * 1.5 s against its 90.7 s. docs/16-solvers.md section 3b has the three-way
+ * table and says which backend is the reference for which question.
+ *
+ * Blender is still reachable, from the instruments and not from here:
+ * `node tools/trace.mjs --sidecar`.
  */
-const fSide = gui.addFolder('the drape side-car -- where the real contact happens');
-fSide.add(params, 'useSidecar').name('send the drape to the side-car');
-fSide.add(params, 'sidecarUrl').name('side-car url');
-fSide.add(params, 'sidecarSeconds', 1, 20, 1).name('seconds of drape to solve');
-fSide.add({ d: () => sendToSidecar() }, 'd').name('re-drape what is on screen now');
-fSide.add({ h: async () => {
-  const h = await sidecarHealth(params.sidecarUrl);
-  if (h) console.table(h.backends);
-  else console.warn(`no side-car at ${params.sidecarUrl}.`
-    + '  Start it with:  python3 sim/server.py');
-} }, 'h').name('is it running?');
+const fSide = gui.addFolder('the drape -- in this page, in wasm');
+fSide.add(params, 'drapeSeconds', 1, 20, 1).name('seconds of drape to solve');
+fSide.add({ d: () => sendToWasm() }, 'd').name('re-drape what is on screen now');
 fSide.add({ p: () => { if (sim) console.table(sim.penetration()); } }, 'p')
   .name('how much of the body is through the cloth?');
 fSide.add(params, 'bodyInsetCm', 0, 0.2, 0.01)
@@ -2801,6 +2846,40 @@ function currentArrangePattern() {
   return currentSkirtPattern();
 }
 
+/**
+ * Cut the asymmetric dart fixture into a freshly drafted skirt.
+ *
+ * Freshly drafted on purpose: darts REMOVE cloth, so cutting them into
+ * whatever is already on the table would stack a second set on top of the
+ * first every time the button is pressed, and the pattern would quietly lose
+ * area at every press. A skirt that has already been darted is replaced
+ * rather than added to, and that is said out loud.
+ */
+function cutAsymmetricDarts() {
+  const already = loadedPattern && loadedPattern.meta && loadedPattern.meta.darts
+    && loadedPattern.meta.darts.length;
+  const fresh = flaredSkirtPattern({
+    panels: params.skirtPanels,
+    waistCm: (() => {
+      const waistV = surface.landmarkV('waist');
+      return waistRing(surface, { waistV, ease: params.skirtEaseCm }).circumferenceCm;
+    })(),
+    hemCm: Math.max(params.skirtHemCm, 1),
+    lengthCm: params.skirtLengthCm,
+    gather: params.skirtGather,
+    edge: params.skirtEdge,
+    waistV: surface.landmarkV('waist'),
+  });
+  const cut = asymmetricDarts(fresh, { scale: params.dartScale });
+  if (already) console.log('the darted skirt was redrafted, not darted twice.');
+  console.table(cut.darts);
+  if (cut.skipped.length) console.table(cut.skipped);
+  console.log(`${cut.darts.length} darts, ${cut.removedCm2} cm2 taken out, `
+    + `intakes ${cut.darts.map((d) => d.intakeDeg).join(', ')} deg. `
+    + 'J lifts them onto the body; W sews the dart legs with the seams.');
+  putOnTable(cut.pattern, `skirt-asym-darts-${params.skirtPanels}`);
+}
+
 /** The pattern the table and the assembly share. */
 function currentSkirtPattern() {
   if (loadedPattern && loadedPattern.meta && loadedPattern.meta.test === 'flared-skirt') {
@@ -2808,7 +2887,7 @@ function currentSkirtPattern() {
   }
   const waistV = surface.landmarkV('waist');
   const ring = waistRing(surface, { waistV, ease: params.skirtEaseCm });
-  return flaredSkirtPattern({
+  const pattern = flaredSkirtPattern({
     panels: params.skirtPanels,
     waistCm: ring.circumferenceCm,
     hemCm: Math.max(ring.circumferenceCm * params.skirtGather + 1, params.skirtHemCm),
@@ -2817,6 +2896,36 @@ function currentSkirtPattern() {
     edge: params.skirtEdge,
     waistV,
   });
+  // THE TEST DARTS ARE IN THE SKIRT J DRAFTS, not only in the one the cutting
+  // table's button cuts. Reported twice from the screen: "when I do J I don't
+  // see the test darts" -- and measured on a fresh page, J laid out 1,064
+  // vertices and 1,872 triangles with **0 darts**, because the fixture was
+  // reachable only by pressing a button in another folder first. A fixture
+  // that has to be found is a fixture nobody tests with.
+  if (!params.skirtDarts) return pattern;
+  // DRAFTED WIDER BY WHAT THE DARTS TAKE OUT. A skirt drafted to the waist
+  // already holds exactly the cloth the body needs, so darts cut into it
+  // leave the waist short and they cannot close -- 16.6 cm short at 2x,
+  // against 3.8 cm of give in a woven. The allowance is part of the draft.
+  const draftAt = (waistCm) => flaredSkirtPattern({
+    panels: params.skirtPanels,
+    waistCm,
+    hemCm: Math.max(ring.circumferenceCm * params.skirtGather + 1, params.skirtHemCm),
+    lengthCm: params.skirtLengthCm,
+    gather: params.skirtGather,
+    edge: params.skirtEdge,
+    waistV,
+  });
+  const cut = dartedSkirt(draftAt, {
+    waistCm: ring.circumferenceCm, scale: params.dartScale,
+  });
+  console.log(`${cut.darts.length} test darts cut (${params.dartScale}x): `
+    + `${cut.darts.map((d) => d.intakeDeg).join(', ')} deg, `
+    + `${cut.removedCm2} cm2 taken out. Drafted ${cut.allowanceCm} cm wider at `
+    + `the waist to pay for them, so it finishes at ${cut.finishedWaistCm} cm `
+    + `against the body's ${ring.circumferenceCm.toFixed(1)} cm. `
+    + 'Turn them off in "flare and gathers" for a plain skirt.');
+  return cut.pattern;
 }
 
 // ------------------------------------------------- arranging, by hand
@@ -3124,10 +3233,17 @@ updateHUD();
  * only one of them.
  */
 function stepFrame() {
-  // A drape in flight owns the vertices. Stepping the local solver as well
-  // would be two simulations writing the same positions, which is what made
-  // the view snap backwards when the side-car's answer landed.
-  if (playback) { stepPlayback(); return; }
+  // THE DRAPE IS STEPPED EVEN THOUGH `playing` IS FALSE, and that is the
+  // point: `playing` means "the local solver may run", and the local solver
+  // must NOT run while the wasm drape owns the vertices -- two simulations
+  // writing the same positions is what made the view snap backwards when the
+  // side-car's answer used to land. The fall still has to be driven, so it is
+  // driven here, ahead of that guard.
+  //
+  // Putting this line AFTER the guard is the bug that was reported as "X says
+  // it is draping and nothing moves": `sendToWasm` sets `playing = false`, so
+  // the function returned before it ever reached the drape.
+  if (wasmDrape) { stepWasmDrape(); return; }
   if (!(playing && sim)) return;
   // A sewing pass: ramp the thread tension, then stop and report.
   //
@@ -3140,15 +3256,78 @@ function stepFrame() {
   // is no ramp to drive here. It stops itself once every seam being sewn has
   // had its whole gap taken up and the cloth has caught up with the feed --
   // or the moment W is pressed again, whichever comes first.
+  // THE WASM PASS OWNS THE VERTICES while it is running: stepping the local
+  // solver as well would be two simulations writing the same positions, which
+  // is the mistake the side-car taught (see sendToWasm's header).
+  if (wasmSew && assembling && assembling.phase === 'stitching') {
+    wasmSew.step((1 / 60) * params.slowMo);
+    wasmSew.mirrorOnto(null);
+    hudStatsStale = true;
+    updateClothMesh();
+    updateStitchLines();
+    const gap = wasmSew.maxGapCm();
+    if (!wasmSew.isSewing() && gap <= params.weldTolCm) {
+      pauseSewing('sewn');
+    } else if (wasmSew.stalled()) {
+      // IT HAS STOPPED GETTING ANYWHERE. Not an error and not a crash: a dart
+      // or a seam that the body has no room for cannot close, and the honest
+      // thing is to stop where it got to and leave it on screen, open, so the
+      // place it could not close can be SEEN rather than inferred from a
+      // number. Feeding more thread at it would only make the pass longer.
+      const p = wasmSew.progress();
+      console.warn(`the sewing stopped improving at ${gap.toFixed(2)} cm `
+        + `(stuck for ${p.stuckFrames} frames). What is still open is open `
+        + 'because the cloth will not reach, not because the pass gave up '
+        + 'early -- look at the garment, and at the seam table below.');
+      pauseSewing('as close as it gets');
+    } else if (!wasmSew.isSewing()) {
+      // The feed is spent and a seam is still wider than the weld will close.
+      pauseSewing('sewn (with seams still open)');
+    }
+    updateHUD();
+    return;
+  }
+  // Waiting for the wasm module: the garment is held exactly where J left it
+  // rather than being sewn by the solver that is about to be replaced.
+  if (assembling && assembling.awaitingWasm) return;
   if (assembling && assembling.phase === 'stitching') {
     if (!sim.isSewing() && sim.rmsSpeed() < 1.0) pauseSewing('sewn');
+    // A SEWING PASS THAT CANNOT FINISH HAS TO STOP ANYWAY.
+    //
+    // `isSewing()` stays true while any armed stitch still has feed left, and
+    // a stitch whose gap has stopped shrinking keeps that feed forever: with
+    // the asymmetric darts in, the worst gap parks at 1.72 cm and the feed
+    // 0.56 cm short, measured from frame 100 to frame 600 without moving. W
+    // then never stopped on its own and the page sewed at 2.3 fps
+    // indefinitely (docs/19-todo.md). A seam that will not close is the
+    // measurement -- the weld tolerance already leaves it open -- so the pass
+    // ends and says so rather than feeding into a wall.
+    //
+    // Stall, not failure: the gap not improving by `stallEpsCm` over
+    // `stallFrames` frames while the cloth is no longer moving quickly. The
+    // underlying bug is in the sewing solver and is queued; this makes the
+    // viewer honest in the meantime, and it belongs here rather than there
+    // because the stop-and-report decision is the viewer's either way.
+    else {
+      const gap = sim.maxStitchGap();
+      const st = assembling.stall || (assembling.stall = { best: Infinity, since: 0 });
+      if (gap < st.best - 0.002) { st.best = gap; st.since = 0; } else st.since++;
+      if (st.since > 120 && sim.rmsSpeed() < 2.0) {
+        console.warn(`the sewing stalled: the widest gap stopped improving at `
+          + `${gap.toFixed(2)} cm with ${sim.remainingFeedCm().toFixed(2)} cm `
+          + 'of thread still to feed. Stopping where it got to.');
+        pauseSewing('stalled');
+      }
+    }
   }
   sim.step((1 / 60) * params.slowMo);
+  hudStatsStale = true;
   updateClothMesh();
   updateStitchLines();
   if (!sim.healthy()) {
     playing = false;
     logDropSettled('blew-up');
+    hudSnapshot(true);
     console.error('the cloth solver blew up; try more substeps or a smaller triangle');
   } else if (sim.rmsSpeed() < 0.3 && sim.time > 0.5
     && !(assembling && assembling.phase === 'stitching')) {
@@ -3162,6 +3341,7 @@ function stepFrame() {
     // sewing on its first frame.
     playing = false;
     logDropSettled('settled');
+    hudSnapshot(true);
     console.table(sim.report());
     updateHUD();
   }
@@ -3176,6 +3356,12 @@ function stepFrame() {
   controls.update();
   renderer.render(scene, camera);
 })();
+
+// The wasm solver is wanted the moment someone presses W or X, and it takes
+// about a second to fetch and instantiate. Asking for it now costs nothing --
+// it is a promise, resolved once and kept -- and means the first pass does not
+// stand still waiting for it.
+sewclothModule().catch(() => { /* the fallbacks say so themselves */ });
 
 // expose for console poking
 Object.assign(globalThis, {
@@ -3222,8 +3408,4 @@ globalThis.__flushTelemetry = flushTelemetry;
  * yet; tools/viewshot.py and anything else driving the page needs a way to
  * ask for the wasm path without clicking through a menu that does not exist.
  * Returns the backend in force, so a caller can check rather than assume. */
-globalThis.__drapeBackend = (name) => {
-  if (name === 'wasm' || name === 'sidecar') params.drapeBackend = name;
-  return params.drapeBackend;
-};
 globalThis.__sel = (ids) => setSelection(ids);

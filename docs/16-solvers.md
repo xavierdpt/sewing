@@ -19,8 +19,10 @@ which, where each runs, and what was measured to decide.
      |
   WELD      union-find on what closed     browser + node   assemble.js
      |
-  DRAPE     hard contact, self-collision  SIDE-CAR         sim/server.py ->
-     |                                    (Blender, C)     sim/blender_drape.py
+  DRAPE     hard contact, self-collision  WASM, IN THE PAGE src/sewcloth ->
+     |                                    (Blender-derived) app/js/drapewasm.js
+     |      the oracle, for reference runs  stock Blender    tools/trace.mjs
+     |      only -- not in the page         sim/server.py     --sidecar
      |
   MEASURE   clearance to the skin         browser + node   clearance.js
 ```
@@ -93,6 +95,95 @@ the same body, with the same instrument:
 
 Hem 160.03 vs 160.09 cm and the same fold count, so the two agree about the
 garment and disagree about the body.
+
+## 3b — Three drape backends, and which one is the reference
+
+**Written down because it had to be said out loud instead.** The drape is no
+longer one solver behind one switch, and a session that does not know the
+order of authority will reach for the wrong one — or, worse, treat whichever
+solver it happens to have measured first as the truth.
+
+| backend | what it is | role |
+|---|---|---|
+| the side-car | **stock Blender**, triangle-against-triangle through a BVH | **the oracle.** Slow and right. Everything else is checked against it |
+| sewcloth, in wasm | **derived from Blender's own solver** and improved on it — `src/sewcloth`, checked against `src/blender-fork` within a stated tolerance ([20-fork.md](20-fork.md) §8) | **the product.** What the page runs. Inherits Blender's springs and its backward-Euler solve; what it does *not* inherit is `collision.cc` |
+| `cloth.js` | this project's own, hand-rolled | **to be deleted.** Not the reference for anything a solver is asked: §3 above is why the drape left it — its contact is a point query per vertex and cannot bound what happens between them. It still runs the sewing, and only until that is ported |
+
+**So when two of them disagree about a drape, `cloth.js` is not the side that
+is right by default — and neither is the one that was measured first.** The
+side-car settles it, because it is the only one of the three whose contact is
+not an approximation of something else. Rule 4 cuts both ways: deference to a
+library is as wrong as deference to one's own code, and the comparison exists
+precisely so neither is needed (`tools/drape_blender.mjs`,
+`tools/trace.mjs --sidecar`, `tools/trace.mjs --wasm`).
+
+**The three-way comparison, run 2026-10-16.** Same pattern, same body, same
+welded garment, same waist pins, six seconds; clearance measured by the same
+instrument over the cloth surface, not at its corners:
+
+| backend | wall | top y | hem y | inside area % | deepest | hem cm (cut 160) | folds |
+|---|---|---|---|---|---|---|---|
+| side-car, **stock Blender — the oracle** | 90.7 s | −0.6 | −55.2 | **0** | +0.03 clear | 160.07 | 4 |
+| **sewcloth in wasm** | **1.5 s** | +1.2 | −55.9 | **0** | +0.13 clear | 169.68 | 2 |
+| `cloth.js` | 10.7 s | −0.6 | −55.0 | 0.11 | −0.19 **inside** | 159.99 | 4 |
+
+Read it in that order. **On contact, sewcloth matches the oracle and
+`cloth.js` does not** — the only one of the three that still puts cloth inside
+the body is the hand-rolled one, and it does so after the wasm path's own
+collision was fixed ([00-backtotrack.md](00-backtotrack.md) §7). Sixty times
+faster than the oracle, at the oracle's clearance.
+
+Where sewcloth does diverge is **stretch**, not contact: 169.68 cm of hem
+where the pattern was cut at 160 and both others settle within 0.1 cm — about
+6 % long, and 2 deep folds instead of 4 shallow ones, which is the same fact
+seen from the side. It takes mass, tension and damping where `cloth.js` takes
+a named fabric with a measured strain limit, and nothing yet maps one onto the
+other. That is the open item, and it is a parameter question with a reference
+to check against rather than a defect in the solver.
+
+What this does *not* say is that sewcloth is right about everything. Its
+inherited gap is the collider: points and edge midpoints against a sampled
+field rather than a BVH over primitive pairs, so the cloth must stand off far
+enough to cover what a facet can do between the sampled points. That is a
+stated bound, measured, not a hope — see `app/js/drapewasm.js`'s thickness
+floor and [00-backtotrack.md](00-backtotrack.md) §7.
+
+And sewing is the opposite case, which is why it is §2 and not here: there the
+hand-rolled constant-rate feed measurably beats Blender's own sewing springs,
+0.024 cm against 9.2 cm. The reference depends on the question, not on who
+wrote the code.
+
+### The side-car is no longer in the page, and `cloth.js` is next
+
+**Removed 2026-10-16.** The viewer had three drape backends behind a switch
+(`params.drapeBackend`, defaulting to `'sidecar'`) and streamed Blender's
+frames back over HTTP as they solved. All of that is gone: `X` drapes in wasm,
+in the page, and nothing else does. What went with it — `sendToSidecar`,
+`pollFrames`, `stepPlayback`, the frame queue and the backend switch — was
+there to make a 90 s round trip watchable, and a 1.5 s in-page drape at the
+same clearance does not need it. `sim/server.py` stays, for two reasons that
+are not the interactive path: it is **the oracle** for reference runs, and it
+serves telemetry.
+
+**`cloth.js` is to go the same way, and cannot go yet.** What still runs in it,
+and what each one needs before the file can be deleted:
+
+| in `cloth.js` | used by | what has to happen |
+|---|---|---|
+| the sewing: constant-rate feed, force-limited stitches, hinge bending | **W** | `sc_set_hinges` + a bending solve and `sc_set_stitches` + `sc_feed_stitches` in `src/sewcloth`. sewcloth has springs, an implicit solve, SDF contact and vertex self-collision — it has **no bending and no stitches at all**, so W cannot move today. [19-todo.md](19-todo.md) item 2 |
+| `BodyCollider` | `clearance.js`, the viewer, the tools, the gate | it is not solver code. It moves to its own module, unchanged |
+| `FABRICS`, `rigidityOf` | everything that names a fabric | likewise — a table, not a solver. And see the open item on mapping them onto sewcloth's mass/tension/damping |
+| `penetration()`, `report()`, `settle()` | the viewer's HUD and the gate | the parts worth keeping are instruments; they follow `BodyCollider` out |
+
+So the order is: **port the sewing, move the two non-solver pieces out, then
+delete the file.** Deleting it before the first of those would leave the
+project with no way to sew at all, which is why it is still here.
+
+**That is a statement about the *algorithm*, not about the file.** The
+constant-rate feed is what wins; `cloth.js` is merely where it currently
+lives. The direction of this project is that it stops living there: the feed
+and the hinge solve move into `src/sewcloth` ([19-todo.md](19-todo.md)), and
+`cloth.js` goes. Nothing new should be built in it.
 
 ## 4 — The transport
 

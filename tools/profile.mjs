@@ -2,6 +2,8 @@
 //
 //   node tools/profile.mjs                      the accordion heap
 //   node tools/profile.mjs --scenario disc      the yoke disc
+//   node tools/profile.mjs --scenario sew       the skirt's seams closing (W)
+//   node tools/profile.mjs --scenario sew --darts   and with asymmetric darts
 //   node tools/profile.mjs --seconds 2 --top 25
 //   node tools/profile.mjs --mode vertex        the old thickness model
 //   node tools/profile.mjs --cell 1.0           override the broad-phase cell
@@ -21,6 +23,10 @@
 import { Session } from 'node:inspector';
 import { Body } from '../app/js/body.js';
 import { dropAccordion, dropDisc } from '../app/js/droptest.js';
+import { Cloth } from '../app/js/cloth.js';
+import { flaredSkirtPattern, waistRing } from '../app/js/skirt.js';
+import { layOut } from '../app/js/assemble.js';
+import { asymmetricDarts } from '../app/js/skirtdarts.js';
 
 const args = process.argv.slice(2);
 const flag = (n, d) => (args.includes(n) ? args[args.indexOf(n) + 1] : d);
@@ -38,6 +44,29 @@ body.includeArms = true; body.includeLegs = true;
 const run = () => {
   const cloth = { selfCollision: true, selfCollisionMode: mode };
   if (cell) cloth.selfCell = +cell;
+  // W, as the viewer runs it: the seams fed closed with gravity off and
+  // self-collision off (assemble.js says why), stepped at 1/60 for `seconds`.
+  // This is the phase the viewer is slow in, so it is the phase the profile
+  // has to be able to see.
+  if (scenario === 'sew') {
+    const waistV = body.landmarkV('waist');
+    const ring = waistRing(body, { waistV, ease: 1.0 });
+    const pattern = flaredSkirtPattern({
+      panels: 4, waistCm: ring.circumferenceCm, hemCm: 160, lengthCm: 55,
+      gather: 1.0, edge, waistV,
+    });
+    if (args.includes('--darts')) asymmetricDarts(pattern);
+    const laid = layOut(pattern, body, { standoffCm: 6 });
+    const sew = new Cloth(laid.asm, body, {
+      fabric, gravityScale: 0, stitches: laid.stitches, selfCollision: false,
+      substeps: +flag('--substeps', 10), sewSpeedCmPerSec: 12, edgeCollision: true,
+    });
+    sew.stitchStrength = 1;
+    sew.startSewing();
+    const frames = Math.round(seconds * 60);
+    for (let f = 0; f < frames; f++) sew.step(1 / 60);
+    return { cloth: sew, asm: laid.asm, frames };
+  }
   if (scenario === 'disc') {
     return dropDisc(body, { innerR: 7.5, outerR: 28, edge, dropCm: 4, seconds, fabric, cloth });
   }
@@ -83,11 +112,18 @@ const rows = [...self.entries()]
   .slice(0, top);
 
 const c = r.cloth;
+if (r.frames) {
+  console.log(`${r.frames} frames in ${(wallMs / 1000).toFixed(1)} s wall`
+    + ` -- ${(wallMs / r.frames).toFixed(1)} ms/frame,`
+    + ` ${(1000 * r.frames / wallMs).toFixed(1)} fps`);
+}
 console.log(`${scenario}: ${seconds} s simulated in ${(wallMs / 1000).toFixed(1)} s wall`
   + `, ${fabric}, ${edge} cm triangles, thickness model '${mode}'`);
 console.log(`mesh: ${r.asm.verts.length} vertices, ${r.asm.tiles.length} triangles,`
   + ` ${c.stretch.length} edges`);
-if (mode === 'slab') {
+// the broad-phase counters only mean something when self-collision is on,
+// and the sewing phase deliberately has it off (assemble.js)
+if (mode === 'slab' && c.opts && c.opts.selfCollision) {
   const vt = c.vtPairs.length / 2, ee = c.eePairs.length / 2;
   const all = c.stretch.length * (c.stretch.length - 1) / 2;
   console.log(`broad phase: cell ${(c.selfCellUsed || c.cell).toFixed(2)} cm over ${c.selfCells} cells,`

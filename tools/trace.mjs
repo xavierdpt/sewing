@@ -1,6 +1,10 @@
 // Trace the whole arrange -> sew -> weld -> drape workflow, in numbers.
 //   node tools/trace.mjs                  this project's solver throughout
 //   node tools/trace.mjs --sidecar        hand the drape to the side-car
+//   node tools/trace.mjs --wasm           drape with sewcloth, as the viewer does
+//   node tools/trace.mjs --wasm --cell 0.5   and with a finer body field
+//   node tools/trace.mjs --darts          cut asymmetric darts first
+//   node tools/trace.mjs --sew-wasm       sew in wasm instead of cloth.js
 //   node tools/trace.mjs --json out.json  machine-readable, for diffing runs
 //   node tools/trace.mjs --above 20       lift the arrangement 20 cm first
 //   node tools/trace.mjs --no-pin         do not pin the waist before the drape
@@ -19,9 +23,25 @@ import { flaredSkirtPattern, waistRing, hemProfile } from '../app/js/skirt.js';
 import { layOut, weldStitched } from '../app/js/assemble.js';
 import { floorOf } from '../app/js/droptest.js';
 import { clearance, offendersOBJ } from '../app/js/clearance.js';
+import { asymmetricDarts } from '../app/js/skirtdarts.js';
 
 const args = process.argv.slice(2);
 const useSidecar = args.includes('--sidecar');
+// The viewer's own drape backend (app/js/drapewasm.js), run from here. Without
+// this the table measured a solver the viewer no longer uses for X, which is
+// rule 7 with the roles reversed: the headless path has to be able to do what
+// the viewer does, or the viewer's clipping cannot be measured at all.
+const useWasm = args.includes('--wasm');
+// The body field's cell, in cm. sewcloth tests points against a sampled SDF,
+// so this is the resolution at which the body exists as far as X is
+// concerned -- the number to sweep when the body comes through.
+const cellCm = args.includes('--cell') ? +args[args.indexOf('--cell') + 1] : 1.0;
+const withDarts = args.includes('--darts');
+// W, through sewcloth instead of cloth.js. The two sew the same garment with
+// the same algorithm -- the constant-rate feed -- in two implementations, so
+// this is the switch that holds them against each other on a real pattern
+// rather than on a two-vertex test (docs/19-todo.md item 1 step 4).
+const sewInWasm = args.includes('--sew-wasm');
 const jsonAt = args.includes('--json') ? args[args.indexOf('--json') + 1] : null;
 const objAt = args.includes('--obj') ? args[args.indexOf('--obj') + 1] : null;
 // The arrangement the pieces are sewn in. Lifting it is what someone does by
@@ -40,6 +60,13 @@ const pattern = flaredSkirtPattern({
   panels: 4, waistCm: ring.circumferenceCm, hemCm: 160, lengthCm: 55,
   gather: 1.0, edge: 3.0, waistV,
 });
+
+if (withDarts) {
+  const cut = asymmetricDarts(pattern);
+  console.log(`${cut.darts.length} asymmetric darts, `
+    + `${cut.removedCm2} cm2 taken out, intakes `
+    + `${cut.darts.map((d) => d.intakeDeg).join(', ')} deg`);
+}
 
 const rows = [];
 const mark = (phase, asm, sim, extra = {}) => {
@@ -80,29 +107,60 @@ mark('J arranged', laid.asm, null, {
 });
 
 // ---- W: sew. the seams are fed closed at a constant rate.
+if (sewInWasm) {
+  const { createRequire } = await import('node:module');
+  const { readFileSync } = await import('node:fs');
+  const require = createRequire(import.meta.url);
+  const factory = require('../src/sewcloth/build/sewcloth.cjs');
+  const mod = await factory({ wasmBinary: readFileSync('src/sewcloth/build/sewcloth.wasm') });
+  const { setSewclothModule } = await import('../app/js/drapewasm.js');
+  setSewclothModule(mod);
+  const { sewWasm } = await import('../app/js/sewwasm.js');
+  const out = await sewWasm(laid.asm, laid.stitches, b, {
+    fabric, sewSpeedCmPerSec: 12, maxSeconds: 8,
+  });
+  mark('W sewn (sewcloth-wasm)', laid.asm, null, {
+    'seam gap cm': out.maxGapCm,
+    'to go cm': out.feedLeftCm,
+    'strain %': strain(laid.asm),
+    wall: +(out.ms / 1000).toFixed(1),
+    'ms/frame': +out.msPerFrame.toFixed(1),
+  });
+  console.log(`sewn in wasm: ${out.frames} frames, `
+    + `${out.msPerFrame.toFixed(1)} ms/frame`);
+  console.table(out.seams);
+}
+
 const sew = new Cloth(laid.asm, b, {
   fabric, gravityScale: 0, stitches: laid.stitches,
   selfCollision: false, substeps: 10, sewSpeedCmPerSec: 12, edgeCollision: true,
 });
 sew.stitchStrength = 1;
 sew.startSewing();
+// With --sew-wasm the seams are already closed, by sewcloth, above: the Cloth
+// is still built because the weld wants its stitch list and its velocities,
+// but it must not sew the garment a second time.
 let f = 0;
-while (sew.isSewing() && f < 3000) {
-  sew.step(1 / 60); f++;
-  // a sample mid-way, because the half-sewn state is the one that looks worst
-  if (f === 60) {
-    mark('W sewing (1 s)', laid.asm, sew, {
-      'seam gap cm': +sew.maxStitchGap().toFixed(2),
-      'to go cm': +sew.remainingFeedCm().toFixed(1),
-      'tension gf': +Math.max(0, ...sew.stitches.filter((s) => s.active).map((s) => s.tensionGf)).toFixed(0),
-    });
+if (!sewInWasm) {
+  while (sew.isSewing() && f < 3000) {
+    sew.step(1 / 60); f++;
+    // a sample mid-way, because the half-sewn state is the one that looks worst
+    if (f === 60) {
+      mark('W sewing (1 s)', laid.asm, sew, {
+        'seam gap cm': +sew.maxStitchGap().toFixed(2),
+        'to go cm': +sew.remainingFeedCm().toFixed(1),
+        'tension gf': +Math.max(0, ...sew.stitches.filter((s) => s.active).map((s) => s.tensionGf)).toFixed(0),
+      });
+    }
   }
+  mark('W sewn', laid.asm, sew, {
+    'seam gap cm': +sew.maxStitchGap().toFixed(3),
+    'to go cm': +sew.remainingFeedCm().toFixed(1),
+    'strain %': strain(laid.asm),
+  });
+} else {
+  sew.stopSewing();
 }
-mark('W sewn', laid.asm, sew, {
-  'seam gap cm': +sew.maxStitchGap().toFixed(3),
-  'to go cm': +sew.remainingFeedCm().toFixed(1),
-  'strain %': strain(laid.asm),
-});
 
 // ---- weld
 const w = weldStitched(laid.asm, sew.stitches, { velocities: sew.vel, closedCm: 0.25 });
@@ -123,6 +181,26 @@ if (useSidecar) {
   });
   r.verts.forEach((p, i) => { w.asm.verts[i][0] = p[0]; w.asm.verts[i][1] = p[1]; w.asm.verts[i][2] = p[2]; });
   final = mark(`X draped (${r.backend || 'blender'})`, w.asm, null, { wall: r.seconds });
+} else if (useWasm) {
+  // the viewer's path, module and all: the ESM build is for the browser, so
+  // node loads the CommonJS one and hands it over (app/js/drapewasm.js).
+  const { createRequire } = await import('node:module');
+  const { readFileSync } = await import('node:fs');
+  const require = createRequire(import.meta.url);
+  const factory = require('../src/sewcloth/build/sewcloth.cjs');
+  const mod = await factory({ wasmBinary: readFileSync('src/sewcloth/build/sewcloth.wasm') });
+  const { drapeWasm, setSewclothModule } = await import('../app/js/drapewasm.js');
+  setSewclothModule(mod);
+  const out = await drapeWasm(w.asm, b, {
+    seconds: 6, fps: 30, substeps: 8, cell: cellCm,
+    pinned: pinWaist ? [...waistIds] : [],
+    fabric: { friction: 0.4 },
+  });
+  out.verts.forEach((p, i) => { w.asm.verts[i][0] = p[0]; w.asm.verts[i][1] = p[1]; w.asm.verts[i][2] = p[2]; });
+  final = mark(`X draped (sewcloth-wasm, ${cellCm} cm field)`, w.asm, null, {
+    wall: +(out.ms / 1000).toFixed(1),
+    'ms/frame': +out.msPerFrame.toFixed(1),
+  });
 } else {
   const drop = new Cloth(w.asm, b, {
     fabric, floorY: floorOf(b), substeps: 10,

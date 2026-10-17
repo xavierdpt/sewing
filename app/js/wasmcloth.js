@@ -123,6 +123,144 @@ export class WasmCloth {
     return this;
   }
 
+  /**
+   * The hinges: one quadruple (apex A, apex B, edge, edge) and one compliance
+   * each, in exactly the order `cloth.js` keeps them, so the two solvers bend
+   * the same mesh the same way.
+   *
+   * `app/js/bending.js` produces both from the assembly, which is the only
+   * place either is decided.
+   */
+  setHinges(stencils, rigidity, bendScale) {
+    const { mod } = this;
+    const n = stencils.length;
+    if (!n) return this;
+    const quads = new Int32Array(n * 4);
+    const alphas = new Float32Array(n);
+    stencils.forEach((g, k) => {
+      quads[k * 4] = g.v[0]; quads[k * 4 + 1] = g.v[1];
+      quads[k * 4 + 2] = g.v[2]; quads[k * 4 + 3] = g.v[3];
+      // The same compliance formula cloth.js uses, and for the same reason:
+      // A / (B |e|^2) makes the stiffness resolution-independent.
+      alphas[k] = g.alpha ?? (g.area / (bendScale * rigidity * g.len * g.len));
+    });
+    const pq = mod._malloc(quads.byteLength);
+    const pa = mod._malloc(alphas.byteLength);
+    mod.HEAP32.set(quads, pq >> 2);
+    mod.HEAPF32.set(alphas, pa >> 2);
+    const got = mod.ccall('sc_set_hinges', 'number',
+                          ['number', 'number', 'number', 'number'],
+                          [this.ptr, n, pq, pa]);
+    mod._free(pq); mod._free(pa);
+    if (got !== n) throw new Error(`sewcloth: ${got} of ${n} hinges accepted`);
+    this.nhinges = got;
+    return this;
+  }
+
+  setBendSweeps(sweeps) {
+    this.mod.ccall('sc_set_bend_sweeps', null, ['number', 'number'],
+                   [this.ptr, sweeps]);
+    return this;
+  }
+
+  /**
+   * The stitches: pairs of vertices that are the same point of the garment,
+   * cut on different pieces. `rest` defaults to the gap each one has, which is
+   * the garment as arranged.
+   */
+  setStitches(stitches, rest = null) {
+    const { mod } = this;
+    const n = stitches.length;
+    if (!n) return this;
+    const pairs = new Int32Array(n * 2);
+    stitches.forEach((st, k) => { pairs[k * 2] = st.a; pairs[k * 2 + 1] = st.b; });
+    const pp = mod._malloc(pairs.byteLength);
+    mod.HEAP32.set(pairs, pp >> 2);
+    let pr = 0;
+    if (rest) {
+      const r = new Float32Array(rest);
+      pr = mod._malloc(r.byteLength);
+      mod.HEAPF32.set(r, pr >> 2);
+    }
+    const got = mod.ccall('sc_set_stitches', 'number',
+                          ['number', 'number', 'number', 'number'],
+                          [this.ptr, n, pp, pr]);
+    mod._free(pp);
+    if (pr) mod._free(pr);
+    if (got !== n) throw new Error(`sewcloth: ${got} of ${n} stitches accepted`);
+    this.nstitches = got;
+    return this;
+  }
+
+  /** Compliance, the force limit in gram-force, and a 0..1 scale on it. */
+  setStitchParams(alpha, maxGf, strength = 1) {
+    this.mod.ccall('sc_set_stitch_params', null,
+                   ['number', 'number', 'number', 'number'],
+                   [this.ptr, alpha, maxGf, strength]);
+    return this;
+  }
+
+  /** The fabric's measured ceiling on stretch, swept until nothing is over
+   *  it. `sc_strain_residual` says what, if anything, it could not pull back. */
+  setStrainLimit(maxStrain, passes = 200, tol = 1e-4) {
+    this.mod.ccall('sc_set_strain_limit', null,
+                   ['number', 'number', 'number', 'number'],
+                   [this.ptr, maxStrain, passes, tol]);
+    return this;
+  }
+
+  strainResidual() {
+    return this.mod.ccall('sc_strain_residual', 'number', ['number'], [this.ptr]);
+  }
+
+  /** Feed rate in cm/s and the lag the feed will wait for. 0 stops it. */
+  setSewSpeed(cmPerSec, slackCm = 0.5) {
+    this.mod.ccall('sc_set_sew_speed', null, ['number', 'number', 'number'],
+                   [this.ptr, cmPerSec, slackCm]);
+    return this;
+  }
+
+  /** Put the thread in, or take it out. */
+  armStitches(on = true) {
+    this.mod.ccall('sc_arm_stitches', null, ['number', 'number'],
+                   [this.ptr, on ? 1 : 0]);
+    return this;
+  }
+
+  /** Per stitch, as a plain array: the gap, the last substep's tension, or the
+   *  hardest it ever pulled. The seam report is built from the PEAKS -- the
+   *  instantaneous tension is near zero whenever the cloth has caught up with
+   *  the feed, which reads as a seam under no strain at all. */
+  _perStitch(fn) {
+    const { mod } = this;
+    const n = this.nstitches || 0;
+    if (!n) return [];
+    const p = mod._malloc(n * 4);
+    mod.ccall(fn, 'number', ['number', 'number'], [this.ptr, p]);
+    const out = Array.from(new Float32Array(mod.HEAPF32.buffer, p, n));
+    mod._free(p);
+    return out;
+  }
+
+  stitchGaps() { return this._perStitch('sc_stitch_gaps'); }
+
+  stitchTensions() { return this._perStitch('sc_stitch_tensions'); }
+
+  stitchPeaks() { return this._perStitch('sc_stitch_peaks'); }
+
+  /** What the feed has taken up: the rest length per stitch, cm. */
+  stitchRests() { return this._perStitch('sc_stitch_rests'); }
+
+  /** The widest rest length still to take up, cm. */
+  feedLeftCm() {
+    return this.mod.ccall('sc_feed_left', 'number', ['number'], [this.ptr]);
+  }
+
+  /** Is thread still being fed? False once the feed is spent OR stopped. */
+  isSewing() {
+    return !!this.mod.ccall('sc_is_sewing', 'number', ['number'], [this.ptr]);
+  }
+
   pin(index, on = true) {
     this.mod.ccall('sc_set_pinned', null, ['number', 'number', 'number'],
                    [this.ptr, index, on ? 1 : 0]);
