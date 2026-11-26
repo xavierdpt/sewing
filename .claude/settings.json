@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__knowledge-tree__kt_list_tags",
+      "mcp__knowledge-tree__kt_find_nodes_by_tags",
+      "mcp__knowledge-tree__kt_search_text",
+      "mcp__knowledge-tree__kt_get_node",
+      "mcp__knowledge-tree__kt_get_tree",
+      "mcp__knowledge-tree__kt_check",
+      "mcp__knowledge-tree__kt_list_snapshots",
+      "mcp__knowledge-tree__kt_edit_status"
+    ]
+  }
+}

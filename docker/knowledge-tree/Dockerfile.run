@@ -1,0 +1,44 @@
+# The RUN image: node, the built tree and nothing else. No compiler, no npm,
+# no git -- what came out of the build image is copied in whole.
+#
+# BUILD_IMAGE is the tag the build image was given, so the two stay separate
+# images built by separate commands, rather than one multi-stage file.
+ARG BUILD_IMAGE=knowledge-tree-build:latest
+FROM ${BUILD_IMAGE} AS build
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates nodejs \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /opt/knowledge-tree /opt/knowledge-tree
+WORKDIR /opt/knowledge-tree
+
+# The database is the one thing that must NOT be in the image: it is the
+# knowledge, it lives in the repository at docs/knowledge.db, and it is
+# mounted at /data. The snapshot and edit folders stay inside the container so
+# that nothing but the database appears beside it on the host.
+# The folders the two env vars below name have to exist and be writable by
+# whatever uid runs the container (ktdocker.sh passes the invoking user's),
+# because nothing creates them at startup.
+RUN mkdir -p /opt/knowledge-tree/data/snapshots /opt/knowledge-tree/data/edit \
+ && chmod -R 1777 /opt/knowledge-tree/data
+
+# MEASURED, so nobody reads it as a broken image: running the test suite in
+# THIS image reports 1 failure of 25 -- `snapshot: consistent copy` asserts
+# the snapshot path derived from the database's own folder, and KT_SNAPSHOT_DIR
+# below overrides exactly that. The suite is the build image's job, where no
+# KT_* variable is set, and it passes 25 of 25 there.
+ENV KT_DB=/data/knowledge.db \
+    KT_SNAPSHOT_DIR=/opt/knowledge-tree/data/snapshots \
+    KT_EDIT_DIR=/opt/knowledge-tree/data/edit \
+    PORT=3001 \
+    HOST=0.0.0.0
+
+# HOST is 0.0.0.0 and not the project's 127.0.0.1 on purpose: a server bound
+# to the loopback INSIDE a container is reachable from nothing, published port
+# or not. The published port is what keeps it off the network: `-p
+# 127.0.0.1:3001:3001` in ktdocker.sh binds the host side to loopback.
+EXPOSE 3001
+CMD ["node", "server/index.js"]

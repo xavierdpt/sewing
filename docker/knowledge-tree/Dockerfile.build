@@ -1,0 +1,39 @@
+# The BUILD image: everything needed to compile and build the knowledge tree,
+# and nothing that has to be present to run it.
+#
+# The source is COPYed from this repository (build context: kt/). It is not
+# cloned from anywhere -- the tree is this project's own code now, so a
+# checkout of this repository is the only thing the build depends on.
+#
+# Ubuntu 24.04 is not an arbitrary base. Its archive node is 18.19, and the
+# tree pins `better-sqlite3@11` and `vite@5` precisely to stay on Node 18 --
+# so the distribution's own package is the version the project wants, with no
+# node version manager and no third-party apt repository. On Node 24 the
+# native module still builds, but `npm test`'s `node --test test/` form does
+# not run at all (it resolves `test/` as a module), which is how a green suite
+# can look like a broken one.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# python3/make/g++ are here because better-sqlite3 is a native module and
+# compiles from source when no prebuilt binary matches the image's Node.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates nodejs npm python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/knowledge-tree
+# kt/.dockerignore keeps the host's node_modules, dist and data out: a
+# host-built native module is compiled against the host's Node ABI.
+COPY . .
+
+RUN npm install --no-audit --no-fund
+
+# The gate, inside the image that built it: a run image is not worth starting
+# if the tree's invariants do not hold. Called file by file rather than as
+# `npm test`, so the same line works whatever node the base has.
+RUN node --test test/*.test.js
+
+# The read-only viewer. `server/index.js` serves `dist/` when it exists.
+RUN npm run build

@@ -3,6 +3,101 @@
 These are not general advice. Each one is here because it was broken in this
 repo, and the cost is recorded next to it.
 
+## 0. Every question starts in the knowledge tree.
+
+The knowledge of this project lives in three places, and they are consulted in
+this order, every time — not only when a question looks like a research
+question.
+
+1. **The knowledge tree.** `mcp__knowledge-tree__kt_list_tags` for the
+   vocabulary, then `kt_find_nodes_by_tags` (also with `partial: true`) and
+   `kt_search_text`, then `kt_get_node` to read what they return. Answer from
+   the tree if the tree answers.
+2. **The documents** in `docs/` and this file, when the tree is silent or
+   thin. What is found there and was missing from the tree **goes into the
+   tree before the answer is given**, as a node that states the fact and names
+   its source document and section. Reading a document and not writing it down
+   is how the same thing gets rediscovered — rule 5's cost, paid again.
+3. **The source code**, when neither answers. Read the path the person
+   presses, not the capability (rule 9), and write what it does into the tree
+   the same way, naming the file and the function.
+
+**Disagreements are resolved by the user, not by the writer.** When a node and
+a document say different things, or when the code contradicts either, stop and
+put the two readings to the user — what each source says, where, and what
+would follow from each. Once the user has said which is right, **both** are
+corrected in the same turn, so that the tree, the documents and the code agree
+again. Never quietly take one source as the true one; the project has already
+paid for deference to the wrong reference (rule 4).
+
+A node that was written from a source that no longer says that is worse than a
+missing node, because it will be trusted.
+
+### What is gathering, and what is not
+
+The tree code's own rules, now `kt/TREE.md`, are deliberately
+restrictive: write exactly what was asked for, work only from the tree and
+from what the user provides, and do not search the web or run probes to extend
+the content. That restriction is kept **as to scope** and lifted **as to
+sources**, because here the tree is not the whole world — it is an index of a
+repository that already exists.
+
+- Reading `docs/` and this repo's source to answer the question in hand is not
+  unrequested gathering: it is steps 2 and 3, and the node that comes out of
+  it is the question's answer written down once instead of twice.
+- **Driving the existing instruments is not a probe.** `tools/trace.mjs`,
+  `tools/viewshot.py` and the rest are the repo's own measurements (rules 1
+  and 3), and rule 9 is specifically the instruction to press the key rather
+  than read the capability. Running them to answer the question is expected.
+- **New throwaway scripts still are not.** A question worth a new script is a
+  missing tool in `tools/` (rule 3), and that is a change to the project, so
+  it is proposed, not performed.
+- The web is not a source for a node. Nothing goes into the tree from outside
+  this repository unless the user puts it there or asks for it.
+- Scope is unchanged: asked for one node, write one node. No figures,
+  assessments or follow-ups that were not requested, even when the repository
+  holds them — and when the request is unclear, ask instead of filling the
+  gap.
+
+### Working the tree
+
+- The tools are the `knowledge-tree` MCP server, declared in `.mcp.json`;
+  `node kt/bin/kt.js help` is the same operations on the command line. It
+  needs the same environment `.mcp.json` gives the server —
+  `KT_DB=docs/knowledge.db KT_SNAPSHOT_DIR=kt/data/snapshots
+  KT_EDIT_DIR=kt/data/edit` — and without them it writes its edit and snapshot
+  folders next to the database, in `docs/`.
+- The tree's code is **`kt/`**: this project's own code, vendored from the
+  `knowledge-tree-base` template on 2026-11-26 and no longer tracking it. Its
+  own rules are `kt/TREE.md`, renamed from the `CLAUDE.md` it arrived with so
+  that a nested rules file cannot compete with this one.
+- The rules of the tree are enforced by the database: one parent per node, a
+  single root, 1–10 kebab-case tags, **at most 5 children** (split the parent
+  first), at most 8192 characters of content. Never write to the database with
+  raw SQL.
+- How a node is written — opening, sections, sources, cross-references — is
+  `kt/writing_style.md`. Follow it; nodes say where a
+  fact came from, and a fact that was not checked against a source says so.
+- Changing the content of existing nodes goes through an editing session
+  (`kt_edit_start`, `kt_edit_dump`, edit the files, `kt_edit_close`), not
+  retyped into `kt_update_node`. Take a `kt_snapshot` before any
+  restructuring, and run `kt_check` after a large change.
+- Report every node created or changed by its full path from the root and its
+  id, so it can be found in the viewer.
+- The tree is at `docs/knowledge.db` and **is committed**: it is knowledge, not
+  a cache. Its `-wal` and `-shm` side-files are not.
+- The read-only viewer runs **in docker**, so a machine needs docker and
+  nothing else: `./docker/knowledge-tree/ktdocker.sh build`, then `start`, on
+  `http://127.0.0.1:3001`. The database is mounted, never baked into the
+  image. `npm start` in `kt/` still works for a machine
+  that already has the toolchain.
+
+> **Cost:** none recorded yet; like rule 8, this one is written down before it
+> is broken rather than after. The tree was installed empty, on 2026-11-26,
+> with a root and four hubs and nothing else — every fact in it from here on
+> arrives by the order above, which is also what keeps it worth consulting
+> first.
+
 ## 1. Instrument before diagnosing. Never guess at a cause.
 
 When something cannot be seen, build the measurement and let it say what is
@@ -136,9 +231,22 @@ node tools/trace.mjs              # arrange → sew → weld → drape, as numbe
 node tools/trace.mjs --sidecar    # the same, draped by the side-car
 node tools/trace.mjs --obj bad.obj   # dump the triangles the body comes through
 node tools/drape_blender.mjs      # this solver against Blender's, same metric
+node tools/drape_blender.mjs --all   # ...swept across every preset, by stiffness
+node tools/drape_blender.mjs --edges 1.5,3,4.5 --settle 30   # ...and by mesh
+node tools/drape_coefficient.mjs  # Cusick drape test: 100 is card, 0 is no stiffness
+node tools/fabric.mjs --mesh-law  # measured bending length against element size
+node tools/edits.mjs              # every cutting-table edit, and what each costs
+node tools/edits.mjs --darts      # every dart folded shut: the step and the turn
 python3 sim/server.py             # the drape side-car the viewer talks to
-node test/run.mjs                 # the gate
+node test/run.mjs                 # the gate. 310 pass / 0 fail
 python3 tools/viewshot.py out.png --eval 'JS'   # the viewer, headless, as a PNG
 cd app && python3 -m http.server 8777
 mkdir -p src && cd src && apt-get source blender   # read a dependency's source
+
+export KT_DB=docs/knowledge.db                     # the knowledge tree (rule 0)
+node kt/bin/kt.js get_tree    # the whole tree as an outline
+node kt/bin/kt.js help        # every tree operation
+./docker/knowledge-tree/ktdocker.sh build          # the build image, then the run image
+./docker/knowledge-tree/ktdocker.sh start          # the read-only viewer on :3001
+./docker/knowledge-tree/ktdocker.sh stop | logs | status
 ```

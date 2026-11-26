@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "knowledge-tree": {
+      "command": "node",
+      "args": ["kt/mcp/server.js"],
+      "env": {
+        "KT_DB": "docs/knowledge.db",
+        "KT_SNAPSHOT_DIR": "kt/data/snapshots",
+        "KT_EDIT_DIR": "kt/data/edit"
+      }
+    }
+  }
+}

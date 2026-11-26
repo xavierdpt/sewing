@@ -9,3 +9,12 @@ src/
 
 # build outputs: blend files, profiles, draped meshes
 out/
+
+# knowledge tree: the database is committed; its WAL side-files are not
+docs/knowledge.db-wal
+docs/knowledge.db-shm
+
+# the knowledge tree's own build output and transient folders (kt/ itself is
+# this project's code now, and is versioned)
+kt/dist/
+kt/data/

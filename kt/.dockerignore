@@ -1,0 +1,6 @@
+# The image installs and builds from source: anything built on the host would
+# be copied over the top of it, and a host-built better-sqlite3 is compiled
+# against the host's Node ABI, not the image's.
+node_modules
+dist
+data
