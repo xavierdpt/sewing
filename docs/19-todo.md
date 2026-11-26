@@ -17,6 +17,450 @@ record.
 
 ## Open
 
+**Opened 2026-10-17, from a report that the presets do not look like cloth.**
+
+**Diagnosed and repaired over 2026-10-17/18**
+([18-validation.md](18-validation.md) §6.11-6.16): `BEND_SCALE` in
+`bending.js` was **30** and should have been **1.8** — a constant its own
+comment says "in theory is 1", fitted on the one instrument that could not
+see the error, because `peirce()` sizes its mesh as `asked / 12` and so
+samples the solver at a single `edge / c` by construction.
+
+**The fabric data was never at fault and `FABRICS` is untouched.** That was
+the point of measuring before editing, and it held through **four** wrong
+mechanisms, each plausible and each killed by the next measurement. §6.12
+keeps the whole sequence rather than only the answer.
+
+**REPAIRED 2026-10-18.** `BEND_SCALE` is **1.8**, down from 30, and the
+gate is **310 pass, 0 fail** — including, for the first time, a bending
+check that measures the material property (1.793 cm against an asked 1.7)
+rather than the fixed-overhang quantity §6.9 withdrew.
+
+Validated on three rigs that share no harness: the Peirce cantilever
+(mesh-independent, 1.02-1.09 across a 4x range of element size), the Cusick
+drape (seven presets spread 32.6-97.3 across their published class bands,
+correctly ordered, against 87-98 for everything before), and the gate.
+
+**The repair itself is done and has moved to the Done list.** What is still
+open from it is a separate defect it exposed rather than caused: the garment
+path over-folds against the oracle, and only half of that is the 3 cm
+element. The first two items below are that, and the harness it is measured
+with.
+
+So the first item below is the repair that finding calls for, and the
+fabric-authoring item stays last for the same reason it always did: there is
+no point authoring parameters for a solver that cannot render the ones it
+already has.
+
+- [ ] **`tools/drape_blender.mjs` is not a pure comparison, and cannot
+      answer the question it exists for.** Found 2026-10-18
+      ([18-validation.md](18-validation.md) §6.15). `buildGarment()` sews the
+      garment with THIS project's solver and hands the sewn mesh to Blender,
+      so any change to our sewing moves the starting state for BOTH columns.
+      It is sound as a same-day A/B and unsound across exactly the changes it
+      is wanted for. Every cross-session figure in §6.11 is subject to this.
+
+      **PARTLY FIXED 2026-10-18.** `BEND_SCALE` is now passed explicitly as
+      `SEW_BEND_SCALE` where the fixture is sewn, the way `fabric` always
+      was. Verified by flipping the shipped constant to 9.9 and back: ours
+      moves 6.2 -> 6.8, **Blender stays at 2.23 to the digit**. Acceptance
+      met for this term.
+
+      *Still to do:* the same hole exists for every other sewing term —
+      stretch compliance, feed rate, stitch model — and would move the
+      fixture just as silently. Sew once, cache the welded assembly to a
+      file, drape THAT in both. `--sew-cache <file>`, with the fabric and
+      element size recorded in it so a stale cache cannot be used without
+      noticing.
+
+      *Acceptance:* changing ANY solver term changes our column and leaves
+      Blender's identical.
+
+      *Also open, same measurement:* our fold depths show **no ordering with
+      stiffness** on this rig — denim (3.3 cm) deepest at 6.94, twill (5.0)
+      at 2.47, poplin (1.7) at 6.20. The Cusick rig orders the same seven
+      fabrics correctly at a 1 cm element, so this is the garment path at a
+      3 cm element, not the fabrics. Two of seven also failed to settle.
+
+- [ ] **The garment path over-folds by ~2.3x against the oracle, and the
+      mesh only explains half of it.** Measured 2026-10-18
+      ([18-validation.md](18-validation.md) §6.16). Denim: ratio 0.19 at a
+      3 cm element, **0.44 at 1.5 cm**, both settled. Refining helps — the
+      3 cm default is genuinely too coarse for the repaired cloth — and
+      leaves us 2.3x deeper than Blender.
+
+      **Both candidates eliminated 2026-10-18, and what replaced them is
+      worse.** Seams: not applicable, the garment is WELDED after sewing so
+      none exist at drape time — established by reading. Contact:
+      exonerated, and backwards — removing the body collider makes our folds
+      DEEPER (6.94 -> 8.81), so contact was suppressing them.
+
+      **NEITHER SOLVER IS CONVERGED AT GARMENT MESHES.** Halving the element
+      moves ours 1.3x and **Blender 3.0x** (1.32 -> 3.91), and neither has
+      flattened. The 0.19 and the 0.44 are comparisons between two
+      unconverged results: the ratio is a property of the mesh, not of
+      either solver. **The oracle is only an oracle where it has converged,
+      and nobody has established where that is.**
+
+      *Do:* halve the element until BOTH columns stabilise — 1.5, 0.75,
+      0.4 cm — on one fabric, and report where each flattens. Only then does
+      a ratio mean anything. 1.5 cm already costs 313 s per fabric, so this
+      is an overnight run; it may also show that a converged garment
+      comparison is out of reach at interactive cost, which would itself
+      answer several open questions.
+
+      *Consequence for everything already recorded:* every garment-vs-oracle
+      figure in §6.11 and §6.16 was taken at 3 cm or 1.5 cm. None of them is
+      a converged comparison.
+
+      *Also:* raise the comparison's default element from 3 cm, or report
+      the ratio at two elements as standard, so no future figure is quoted
+      from the coarse end alone.
+
+- [x] ~~**`test/run.mjs`'s resolution-independence check is too loose to
+      fail.**~~ **DONE 2026-10-18.** It settled a strip on a 1.0 cm mesh and
+      asserted tip reach between 2.0 and 6.0 cm — a 3x window on a PROXY,
+      which is why it passed throughout the period when the bending length
+      was moving 0.93 to 3.93 cm across garment element sizes.
+
+      It now measures **the bending length itself at 0.3 and 0.6 cm** and
+      asserts they agree within **10 %**. Measured post-repair at **1.4 %
+      apart**, so the threshold is seven times the observed margin: loose
+      enough not to trip on solver noise, far tighter than the 2.5x the
+      defect produced over the same range. Costs ~74 s, nearly all of it the
+      0.3 cm bisection, and the comment says so.
+
+      *Only possible after the repair.* Before it there was no baseline to
+      tighten towards — the quantity itself was wrong, so a tight check
+      would have been a second red light for one defect. That is why it was
+      queued this morning rather than fixed on the spot.
+
+      *The superseded item, for the record:*
+      Found 2026-10-18 while repairing the cantilever swap. It asserts "the
+      same cloth on a coarser mesh is still the same cloth" with a window of
+      **2.0 to 6.0 cm of tip reach — a 3x spread** — while §6.12 measures the
+      bending length moving 0.93 to 3.93 cm over the element sizes garments
+      use. A check whose tolerance is wider than the defect it is named after
+      passes through the defect, which is the same shape of fault as §6.13
+      one check along.
+
+      *Do:* tighten it to a stated factor on the MEASURED bending length at
+      two element sizes, using `peirce()` with explicit `edge`, once the
+      bending repair gives something to regress against. Not before — there
+      is no baseline to tighten towards while the quantity itself is wrong
+      (rule 6), and it would simply be a second red light for one defect.
+
+      *Acceptance:* the check fails on today's solver and passes after the
+      repair, with the two element sizes named in its message.
+
+      *Not this:* editing `FABRICS`. The data is exonerated; §6.11 says why.
+
+      *Gap not explained:* the drape at 1.5 cm wants a 29.5x softening; the
+      cantilever at 1.5 cm shows a 12x excess. Same order, not the same
+      number.
+
+- [ ] **A test menu that answers "is this linen, cardboard, or cotton
+      candy?"** Asked for directly: something you can run and look at. The
+      project already specifies the instrument and never built it —
+      [18-validation.md](18-validation.md) **Step 2, the Cusick drape test**
+      (BS 5058 / ISO 9073-9), whose coefficient is literally that scale:
+      `DC = (A_draped − A_support) / (A_specimen − A_support)`, **1** for a
+      rigid sheet, toward **0** for a limp one. `tools/fabric.mjs` already
+      carries `(80 gsm office paper)` in its published table, so the cardboard
+      end of the comparison is in the repo too.
+
+      *Do:*
+      1. ~~`tools/drape_coefficient.mjs`~~ — **done 2026-10-17**, with
+         `app/js/cusick.js` as the three.js-free half so the viewer entry can
+         call the same code. DC, fold count, published class bands, a verdict
+         per fabric, the mesh's fold ceiling beside the count, and `settled` /
+         `starShaped` validity flags per row. First results in
+         [18-validation.md](18-validation.md) §6.12: **every preset reads as
+         card**, poplin at DC 96.4 against a 40-65 class band.
+      2. ~~Rename `drop test ▾` to `tests ▾`, and add `drape (Cusick)`~~ —
+         **done 2026-10-17**, driven end to end in the page: menu → dialog →
+         `drape a specimen` → `measure it`, reporting DC against the fabric's
+         published class band. It drapes beside the body in free air with no
+         collider, as the standard apparatus does. One bug found only by
+         looking at the screenshot: the specimen dropped off the edge of the
+         screen, because `frameScene(true)` frames the BODY. The test ran
+         perfectly and was invisible. `frameOn()` fixes it.
+      3. ~~Add **cantilever (Peirce)**.~~ **Done 2026-10-18**, driven end to
+         end in the page: `tests > cantilever (Peirce) > measure the current
+         fabric` reports **1.793 cm against an asked 1.7, published 1.5-2**
+         — identical to `test/run.mjs` and `tools/fabric.mjs`, because all
+         three now call one `peirce()` in `app/js/cantilever.js`.
+         `PUBLISHED_BEND` moved there too, so the page quotes the same band
+         the tool does rather than keeping a second copy.
+
+         It defaults to a **0.6 cm element**, with the reason in the code:
+         converged at the page's substep count (1.793 at 20, 1.815 at 160)
+         and ten seconds rather than two hundred. It reports the row count
+         and warns below four rows, because a coarse mesh silently cannot
+         measure a limp cloth (§6.12).
+      4. **`against Blender` — HELD, deliberately, 2026-10-18.** It would
+         put the oracle comparison in front of a person at whatever mesh the
+         viewer runs, and §6.16 established that **neither solver is
+         converged at garment meshes**: halving the element moves ours 1.3x
+         and Blender 3.0x. A button reporting that ratio as a verdict would
+         ship exactly the error the rest of this queue is about — a number
+         presented as a judgement when it is a property of the mesh.
+
+         *Unblock it with the convergence sweep.* The entry should then
+         report the element it measured at, and refuse a verdict where the
+         oracle has not flattened.
+
+      *Acceptance:* each entry driven through the page, each reporting a
+      number against a published band rather than a picture alone.
+
+      *Note what the first Cusick run cost, because it is the general
+      lesson:* the fold counter reported 30 folds against a mesh ceiling of
+      23, i.e. more folds than the triangles can represent, and it did so most
+      confidently on the specimens that did not drape at all — a nearly
+      circular outline is all noise, and every noise peak counted. The
+      ceiling column, added so that a mesh-limited result could not be
+      mistaken for a material one, caught it within the hour on its author's
+      own code. Build the readout that says when the instrument is lying
+      before trusting the instrument.
+
+- [ ] **Custom fabrics, carrying Blender's full parameter set.** Asked for:
+      create new cloths beside the seven examples, and have the cloth
+      parameters include everything Blender exposes.
+
+      The surface, counted from source rather than memory
+      (`src/blender-fork/source/blender/makesrna/intern/rna_cloth.cc`, rule 8):
+
+      | | parameters |
+      |---|---|
+      | Blender `ClothSettings` | **61** |
+      | Blender `ClothCollisionSettings` | **13** |
+      | — of those, scene wiring, not fabric | 12 (seven `vertex_group_*` names, the collider `collection`, `rest_shape_key`, `effector_weights`) |
+      | what the side-car actually sets (`blender_drape.py:118`) | **11** |
+      | what `src/sewcloth` honours | ~8 (mass, tension, damping, gravity, thickness, friction, self-collision distance, hinge α, strain limit) |
+      | what this project's presets carry (`cloth.js:74`) | **7**, all physical |
+
+      **The unresolved design question, which blocks the build:** this
+      project's seven are *measurable* — gsm, a Peirce bending length in cm, a
+      strain limit, a trellis angle — and `cloth.js` argues for that at
+      length. Blender's are dimensionless solver gains (`tension_stiffness
+      15`, `bending_stiffness 0.5`). So "include all of Blender's" can mean
+      *alongside* the measured ones, with the Blender layer derived and
+      overridable, or *instead of* them. The second spends something this repo
+      paid for, and the item above may change which of them is trustworthy
+      anyway — **which is why this is third and not first.**
+
+      **THE DESIGN QUESTION IS ANSWERED, on evidence rather than taste, and
+      the record exists.** `app/js/fabricio.js`, 2026-10-18: physical fields
+      primary, Blender's set derived from them.
+
+      The argument is the one this session produced. The presets looked
+      wrong for days and the cause was `BEND_SCALE`, out by 16x. It was
+      findable **only because `bendLengthCm` has a published range to be
+      wrong against** — poplin read 3.93 cm where the literature says
+      1.5-2.0. There is no published band for `tension_stiffness = 15`, so
+      the same defect expressed in Blender's parameters would have been
+      invisible. *A fabric record whose numbers cannot be wrong is a fabric
+      record that cannot find a bug.*
+
+      Every authored field is measurable — a kitchen scale and a 10 cm
+      square for gsm, ASTM D1388 for the bending length (and
+      `tests > cantilever (Peirce)` runs the same test on the simulated
+      cloth, so the two are directly comparable), a protractor for the
+      trellis angle. The two that are not — `friction`, `damp` — carry
+      `measurable: false` so the UI can say so rather than imply a tape
+      measure exists for them.
+
+      **Built:** `fabricFrom`, `checkFabric`, `exportFabricJSON`,
+      `importFabricJSON`, `fabricFileName`, `FABRIC_FIELDS` with ranges and
+      provenance notes. Round-trips, drops unknown keys and reports them,
+      validates with specific complaints.
+
+      **Still to do:**
+      - wire it into the `cloth` dialog: pick a fabric including custom
+        ones, "new from this one", edit the fields with their notes as
+        tooltips, save and load to file and `localStorage`;
+      - the Blender override layer — `clothSettings()` in `drapejob.js`
+        already derives Blender's parameters from the physical ones; what is
+        missing is a per-fabric override where the derivation is known to be
+        poor, and a marker on each field saying which backends honour it;
+      - the seven examples stay read-only, so `cotton poplin` keeps meaning
+        what [18-validation.md](18-validation.md) means by it.
+
+      *Original storage note, still the plan:* follow `formio.js` exactly — a `triangulated-bodice-fabric/1` JSON file plus
+      `localStorage`, the same shape the dress form already uses. New fabric
+      starts as a copy of the selected one; the seven examples stay read-only,
+      so `cotton poplin` keeps meaning what [18-validation.md](18-validation.md)
+      means by it when it quotes a result. Every field marked with which
+      backends honour it, shown in the UI — 74 equal-looking sliders where ~8
+      reach the in-page solver is rule 9's house error at scale.
+
+Three interface items opened 2026-10-17, while answering what the menubar's
+leftmost cell did. They are small, and none of them is a solver question;
+they are on top because this document puts the newest there, not because they
+outrank the pattern-editor six below.
+
+- [ ] **Eleven of the fifteen sections are still in the single panel.**
+      `17-interface.md` opens by naming that panel as the problem — the folder
+      you want is scrolled off, and two you want to watch at once cannot both
+      be open — and four sections have moved to the bar since: `files`,
+      `cloth`, and the two drop tests, which now share one `drop test ▾`
+      menu. Those four are the testing corner. Measured on the running page,
+      what is left in `gui` is
+      everything a person uses to *make a garment*: body, shell (step two),
+      fit, explicit joining, pattern, try a pattern on, flare and gathers,
+      sewing by hand, the drape, the cutting table, view.
+
+      *Do:* move them, newest-pressed first — *the cutting table* and *sewing
+      by hand* are the two that want to be open beside the garment at once,
+      which is the case the dialogs were built for. One per commit, and
+      **group as you go**: `MenuBar.menu` exists now (17-interface.md), so
+      *pattern*, *try a pattern on*, *flare and gathers* and *the cutting
+      table* want one entry between them rather than four, the same way the
+      drop tests do. Grouping afterwards is a second pass over the same
+      files.
+
+      *Acceptance:* each move driven through the page, not just the source
+      (rule 9), and `refreshGUI()` — not `gui.controllersRecursive()` — kept
+      as the refresh path, or the moved dialog shows stale numbers after a
+      programmatic `params` change.
+
+- [ ] **The help strip is wrong about a key someone presses.**
+      `app/index.html:109` advertises `T try on`; `main.js:3345` binds `t` to
+      `openTable()`. Try-on is reachable only from the panel's *try a pattern
+      on* folder. This is rule 9's failure on the one line of the page whose
+      entire job is to say what the keys do.
+
+      *Do:* check the whole strip against the handler at `main.js:3323`, not
+      just this entry — a line that was wrong about one key has no claim to be
+      trusted about the rest.
+
+      *Acceptance:* every key the strip names dispatched as a real `keydown`
+      and the resulting call named, so the strip is a measurement rather than
+      a caption.
+
+- [ ] **The lil-gui panel is still titled `'bodice'`** (`main.js:2331`) — the
+      same constant the menubar stopped claiming on 2026-10-17, one panel
+      over, wrong the moment `params.garment` is `skirt`, `dress`, `torso` or
+      `full`. Small, but it is the last copy of the lie.
+
+      *Do:* title it from `params.garment`, refreshed where the garment
+      changes. *Acceptance:* draft a skirt through the page and read the
+      panel title back.
+
+The pattern editor's five items are done (below). Building them opened these
+six, which are the pattern-editor queue now. None of them displaces the
+sewing-frame item further down; they are here because this document puts the
+newest on top.
+
+- [ ] **`check()` cannot see a seam lose a stitch.** It compares the two sides
+      of a seam by LENGTH, and a seam's sides can have the same length and
+      different vertices. Measured: cutting a piece across its two side seams
+      with `propagateSplit` disabled gives **63 stitches instead of 65** --
+      two points of a seam with no partner to be sewn to -- while `check()`
+      reports `ok`, no problems, and a worst seam mismatch of **0 cm**. A
+      split along a straight edge costs no length, which is exactly why a
+      length test cannot find it.
+
+      *Do:* have `check()` compare the two sides of every seam by the vertex
+      ids they carry, and report the ids that are on one side only, with the
+      seam and the piece they are on -- a list, not a count (rule 2).
+      `layOut(...).stitches.length` is the number that moved; `check()` should
+      not need the assembler to notice.
+
+      *Acceptance:* the disabled-propagation case fails `check()` with the two
+      lone ids named, and the gate keeps it failing.
+
+      *Why it is first of these:* every other item here is a feature. This one
+      is the instrument being wrong, and the editor's whole safety net is
+      `check()` running after every edit.
+
+- [ ] **A cut and a join are recorded as coordinates, so they do not replay
+      onto another body.** Darts and spreads record a construction -- a
+      fraction along a named edge and an offset in from it -- and replay onto
+      a skirt 6 cm wider in the waist with nothing skipped. `splitPiece`
+      records `from` and `to` as raw points on the table, and `joinPieces`
+      records two piece names. So a pattern whose seam lines were moved
+      replays those moves onto whatever happens to be at those coordinates.
+
+      *Do:* record a cut as the two edges it runs between and the fraction
+      along each (`describeApex` already does the measuring half), and resolve
+      it the same way on replay. A join needs nothing new -- it names pieces
+      -- but it should refuse rather than guess when the named pieces no
+      longer share a seam.
+
+      *Acceptance:* a cut replayed onto a body 8 cm bigger lands on the same
+      place of the piece, measured as the fraction along the edges it ends on,
+      and the gate covers it beside the dart case.
+
+- [ ] **The allowance and the grain are set for the whole pattern, or for
+      piece 1.** The data model is per RUN (`r.allowanceCm`) and per piece
+      (`panel.grainDeg`, `panel.allowanceCm`), and the SVG honours all of it.
+      What the viewer offers is three numbers for the pattern and a grain
+      slider wired to `panelIndex: 0` -- which is the house error in miniature:
+      the capability is there and the thing a person presses cannot reach it
+      (rule 9).
+
+      *Do:* a piece has to be selectable on the table first -- click to select,
+      the HUD says which -- and then the allowance and grain fields apply to
+      the selection. Per-edge allowance wants the edge selectable too, which is
+      the same mechanism one level down.
+
+      *Acceptance:* a hem allowance set on one piece and not its neighbour
+      prints that way, driven through the page rather than through the
+      functions.
+
+- [ ] **Seamly2D's corner modes and notch shapes, which were left out on
+      purpose and are now the cheapest thing left.** `offsetPoly` turns every
+      corner with a fixed `miter = 3.0`, where their `PieceNodeAngle`
+      (`src/seamly2d/src/libs/vmisc/def.h:172`) offers six answers to what the
+      allowance does at a corner, and their `NotchType` (`def.h:237`) seven
+      notch shapes by three subtypes where this draws one slit.
+
+      *Do:* the corner modes first, because a mitred corner that is wrong is
+      cloth cut away that cannot be put back; the notch shapes are cosmetic
+      and can follow. Both are print-time only -- nothing about the mesh or
+      the ids changes.
+
+      *Acceptance:* the corner of a 1 cm allowance meeting a 2.5 cm hem comes
+      out where the chosen mode says it should, measured on the SVG.
+
+- [ ] **A refused join has a right answer that nothing offers.** Two pieces
+      flattened separately do not share an edge shape, so joining them past
+      the tolerance would stretch the cloth; `joinPieces` refuses and names
+      the worst vertex. The honest way on is to **re-unfold the shell with
+      those two panels as one**, which `makePattern` can do and nothing wires
+      to the refusal.
+
+      *Do:* when a join is refused, offer the re-unfold: coarsen with the two
+      panels merged, flatten, and lay the result back on the table. The edits
+      recorded against the old pieces then have to be replayed onto the new
+      one, which is what the edit list is for.
+
+      *Acceptance:* a join refused at 0.8 cm, re-unfolded, comes back as one
+      piece with the darts still in it.
+
+- [ ] **Undo keeps fifty copies of the pattern beside a list that says what
+      changed.** Now that `pattern.edits` exists, undo could be "replay the
+      first n-1 edits onto the draft", which is smaller, and would let a
+      person remove an edit from the MIDDLE of the list -- which is what
+      Seamly2D's History panel is actually for.
+
+      *Do:* not until the replay is exact for every operation, which the
+      coordinate items above are in the way of. Measure first: replay the
+      current fixture's edits and compare the result to the pattern they came
+      from, vertex by vertex, and see whether the difference is zero or merely
+      small.
+
+And what is already done. The five pattern-editor items that stood here from 2026-10-17 are **done**,
+and are recorded in [14-editing.md](14-editing.md) §6 with the numbers they
+produced — truing the darts and the closed-dart profile, the rigid transforms
+and cut-on-fold, cutting a piece in two and joining two into one, the edit
+list and its replay onto another body, and the per-edge allowance and grain.
+That is a deviation from the rule above, and a deliberate one: those items
+settled nothing in [18-validation.md](18-validation.md), which is about the
+solver, so the record lives with its subject. `node tools/edits.mjs` is the
+instrument, and the gate covers every one of them.
+
 - [ ] **Find what the viewer spends a sewing frame on, and stop doing it every
       frame.** The wasm solver steps the darted skirt in **17 ms**; the page
       takes **210-440 ms a frame** sewing the same garment. So ~95 % of the
@@ -368,7 +812,148 @@ file is the only place that has to be read to know what is next.
 
 ## Done
 
-Removed from the queue and recorded in [18-validation.md](18-validation.md):
+Removed from the queue and recorded in [18-validation.md](18-validation.md),
+except where an item is interface rather than solver and its record is in
+[17-interface.md](17-interface.md):
+
+- **A dialog title is a name, not a sentence** — done 2026-10-17. Three of
+  the four titles were sentences, and `.dlg-title` clips with an ellipsis at
+  the dialog's own width, so the explanatory half was precisely the part
+  nobody could read: `the cloth itself -- shared by every test` measured
+  379 px into a 357 px bar and showed `...shared by every te`; the accordion's
+  427 px showed `...the pleated strip, for th`. Split into `title` (a name)
+  and a new `hint` (a tooltip on the title bar and on the entry that opens
+  it, so it is readable *before* the dialog is open). All four now fit at
+  357/357. Gate green across these three interface changes: **310 pass, 0
+  fail**, twice — though note the gate exercises the headless pipeline and has
+  no check that would notice a broken menubar, so what actually verifies them
+  is `tools/viewshot.py` driving the page. Two of the qualifiers were
+  scaffolding the bar had already replaced — `drop test -- ` repeated the menu the dialog sits under, and
+  `the cloth **itself**` distinguished the fabric from the tests that use it,
+  which a separate `cloth` entry says structurally. Recorded at
+  [17-interface.md](17-interface.md).
+
+- **Why the presets did not look like cloth: `BEND_SCALE` was 30 and should
+  have been 1.8** — diagnosed and repaired 2026-10-17/18, recorded at
+  [18-validation.md](18-validation.md) §6.11-6.16.
+
+  One line in `app/js/bending.js`. Validated on three rigs sharing no
+  harness: the Peirce cantilever (1.793 cm against an asked 1.7,
+  mesh-independent across a 4x range of element size), the Cusick drape
+  (seven presets spread 32.6-97.3 across their published class bands,
+  correctly ordered, against 87-98 for every one of them before), and the
+  gate (**310 pass, 0 fail**, its bending check green on the material
+  property for the first time).
+
+  **The data was never at fault**, which was the point of measuring before
+  editing: `FABRICS` is untouched.
+
+  *The diagnosis was wrong four times before it was right* — cotangent
+  weights, `BEND_SCALE` as a free-standing fudge, mesh dependence, then a
+  constant with the mesh dependence explained away as a substep artifact.
+  Every wrong reading is left standing in §6.12 rather than deleted, because
+  the pattern across them is the transferable part: **every reading taken at
+  a setting nobody questioned turned out to be the thing that mattered** —
+  first `peirce()`'s auto-mesh, which holds `edge / c` constant and so
+  samples the solver at one point by construction; then its substep count,
+  which moves a measured bending length by 63 %.
+
+  *Three consequences in the gate, each diagnosed rather than tuned away:*
+  the check measured at a mesh that became too fine to converge once the
+  cloth softened; the free-hang settle budget was tuned to the stiff cloth
+  (threshold kept, time extended after measuring it settles at 8 s); and a
+  **real stall-detection bug** in `cloth.js` where a permanently stuck seam
+  reported "being sewn" (§6.14).
+
+  *What it exposed and did not cause:* the garment path over-folds against
+  the oracle, which is open above.
+
+- **`tools/fabric.mjs --mesh-law`** — done 2026-10-17. Sweeps the cantilever
+  across element sizes and reports measured-against-asked bending length, and
+  the excess as rigidity. It is the instrument the repair needed and it
+  answered its question in the negative: the dependence is a plateau with a
+  steep fine-mesh transition, not a clean law. Recorded at
+  [18-validation.md](18-validation.md) §6.12.
+
+- **Three instruments gained what they needed to answer any of this** — done
+  2026-10-17. `drapeTrace` (DC against time, which is how the static
+  equilibrium was found), `--no-drag` / `--no-damping` (which exonerated
+  damping), `--jitter` (which exonerated symmetry), and `hemDropCm` (which
+  separates "too stiff to fold" from "not bending at all" — DC alone cannot,
+  because when nothing drapes every DC is near 100). Recorded at
+  [18-validation.md](18-validation.md) §6.12.
+
+- **`drape (Cusick)` is in the `tests` menu** — done 2026-10-17, and the
+  viewer and the headless tool verified to agree: both report DC 97.2, 0
+  folds, not settled, for poplin at 1.2 cm. They share `app/js/cusick.js`,
+  whose `setupCusick` / `measureCusick` split exists so the page cannot grow a
+  second implementation of the scoring. The `measure it` button refuses to
+  report while the cloth is moving, naming the speed.
+
+- **The Cusick drape test exists** (Step 2, specified long before this
+  session, never built) — done 2026-10-17. `app/js/cusick.js` +
+  `tools/drape_coefficient.mjs`, standard 30 cm specimen on an 18 cm support,
+  DC on the scale where 100 is card and 0 is no stiffness at all. First
+  results say **every preset reads as card** — poplin 96.4 against a published
+  class band of 40-65, linen 98.1 against 50-75, habotai 87.4 against 15-35 —
+  which is §6.11's skirt finding on an independent scale with published
+  numbers. Shipped with its own defect found and fixed: a fold counter that
+  reported 30 folds on a 23-fold mesh, worst on exactly the specimens that did
+  not drape. Recorded at [18-validation.md](18-validation.md) §6.12.
+
+- **The menubar's test menu is called `tests`** — done 2026-10-17. It was
+  `drop test`, which had stopped covering what belongs in it: the Cusick drape
+  test and the Peirce cantilever are both tests and neither drops anything.
+  Verified in the page; the bar reads `files · cloth · tests`.
+
+- **Which component makes the presets look wrong: the data or the solver?** —
+  answered 2026-10-17, the solver. The sweep across all seven presets against
+  the oracle, the per-fold distribution behind the scalar, and the two
+  instrument bugs that had to be fixed to get there (a comparison hard-coded
+  to one fabric; a measurement whose output never reached the pipe because
+  Node's stdout is asynchronous and the loop is synchronous) are recorded at
+  [18-validation.md](18-validation.md) §6.11. The repair is queued above.
+  **Nothing in `FABRICS` changed**, which was the point of asking first.
+
+- **The two drop tests share one `drop test ▾` menu** — done 2026-10-17.
+  They had a bar entry each, `drop: disc` and `drop: accordion`, which is a
+  prefix doing a container's job; the bar is flat and eleven sections are
+  still waiting to move onto it. `MenuBar.menu({ id, label })` plus
+  `MenuBar.dialog({ ..., menu })` is the new affordance, and it holds **no
+  state of its own** — the entries are the same `Dialog`s with the same ids
+  and remembered positions, so both drop tests can still be open side by
+  side, which is the whole point of the dialogs. It closes on the next click
+  elsewhere, on Escape, and on a pick; the bar entry stays lit while any
+  dialog under it is open; an already-open entry carries a dot, without which
+  picking it closes the dialog and looks like the menu did nothing. One real
+  bug came out of driving it rather than reading it: the capture-phase
+  dismiss listener called `ev.target.closest(...)`, which is an `Element`
+  method, and threw `TypeError` on a pointerdown that targeted the document
+  itself. Popup placement is measured from `getBoundingClientRect()` because
+  the bar scrolls sideways when narrow — verified `popLeft 253 = btnLeft
+  253`, `popTop 35 = btnBottom 35`. Recorded at
+  [17-interface.md](17-interface.md).
+
+- **The menubar's leftmost cell names the open document** — done 2026-10-17.
+  It held the constant `bodice`, hard-coded into `dockui.js`: an inert
+  `<span>` with no handler, the third copy of that word on screen after the
+  `<title>` and the HUD `<h1>`, and wrong whenever `params.garment` was
+  `skirt`, `dress`, `torso` or `full`. It holds `loadedName` now, falling back
+  to `(unsaved)`. `MenuBar.setBrand` is called from **one** place, the top of
+  `updateHUD`: `loadedName` is assigned at eight scattered sites, and a call
+  beside each is one more place for the ninth to forget, whereas everything
+  that changes what is in hand already paints the HUD — so the bar and the
+  HUD's `pattern` row cannot disagree. Driven through the real page rather
+  than read off the source: `(unsaved)` → `skirt-4panel` (K) →
+  `accordion-20x60` (A) → `bodice-8gore` (try-on). The first run of that
+  measurement showed no change at all, because the evaluations read the label
+  before the async draft had finished; pumping frames inside the eval is what
+  made it say anything true. Two CSS findings came with it — `text-transform:
+  uppercase` is right for a brand and wrong for a file name, and
+  `text-overflow: ellipsis` has no effect on a flex container's anonymous
+  item, so the first version clipped a long name mid-letter with no ellipsis
+  (`scrollWidth 430 > clientWidth 253` after the fix). Recorded at
+  [17-interface.md](17-interface.md).
 
 - **Stop running two simulations of one fall; stream the side-car's frames** —
   done 2026-10-12, from the report that the garment "teleported back up" after

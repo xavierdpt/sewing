@@ -103,13 +103,38 @@ would buy is precision, and that is available without it — **look down at the
 table** snaps the camera to an orthographic view straight down, which *is* a 2D
 view, with true distances and no foreshortening.
 
-The tools:
+The tools. Every one of them is a drag, and the drag is the argument:
 
-| | gesture |
-|---|---|
-| **dart** | drag from the apex outwards; the direction sets the bisector, the intake comes from the field |
-| **spread** | the same, with the spread angle from its field |
-| **undo** | **U** — the pattern is snapshotted before every operation, fifty deep |
+| | gesture | what it does |
+|---|---|---|
+| **dart** | drag from the apex outwards | the direction sets the bisector, the intake comes from the field |
+| **spread** | the same, from the pivot | the spread angle comes from its field |
+| **turn** | drag round the point you press | turns the piece about that point by the angle the drag sweeps |
+| **move** | drag the piece | slides it; the cloth is not touched |
+| **mirror** | drag the line to reflect about | *cut 2, one reversed* / *open out on the fold* / *flip this piece over*, from the field beside it |
+| **cut in two** | drag the line to cut along | two pieces and a new seam where the cut was |
+| **join** | press one piece, release on another | one piece, with the seam between them gone |
+| **undo** | **U** | the pattern is snapshotted before every operation, fifty deep — commands included |
+
+And the four that are not a gesture, as buttons: **true the darts**, **measure
+the darts folded shut**, **list the edits**, **replay these edits onto this
+body**; plus the allowance and grain fields, which are edits like any other.
+All of them go through `table.command`, which is the same machinery a drag
+goes through — snapshot, operation, `check()`, report — so **U** undoes them
+too.
+
+The tool menu also lists the five gestures that are **planned and not built**
+— turn, move, mirror, join, cut — and the folder lists the four planned
+commands beside them, each marked *(not built)*. Picking one, or pressing on
+the table with one picked, opens a dialog saying what the tool will do and
+what it is waiting on; the HUD shows it in the warning colour meanwhile. They
+are in the menu on purpose: a tool nobody can find is a tool nobody can ask
+for, and listing capabilities in a document while the thing a person presses
+does not have them is this project's own recorded mistake (rule 9). The
+wording lives in `PLANNED` in `patternedit.js`, so the headless path refuses
+them in the same words, and the table refuses the gesture itself rather than
+trusting the viewer to — an unknown tool used to fall through to the spread,
+because `apply` chose between the two operations with a ternary.
 
 Dragging snaps to the nearest pattern point within 2.5 cm, so an apex lands on
 a real vertex rather than near one. An operation that cannot be done where it
@@ -155,11 +180,191 @@ Round-tripped in the gate: every measurement, the pose, the rebuilt body's
 landmarks, and a 15° dart's area through save and load (`test/run.mjs`,
 "saving and loading").
 
-## 6 — Limits
+## 6 — The tools, and what each one cost
 
-- **Only two operations.** No grading, no truing a curve, no moving a single
-  point, no adding a seam allowance to an edited edge. Point-level editing is
-  the obvious next thing and is not built.
+Seamly2D's source is unpacked in `src/seamly2d` and inventoried in
+[03-prior-art.md](03-prior-art.md) §12. Nine tools came out of that inventory.
+They were in the menu, marked *(not built)*, for about an hour on 2026-10-17;
+this section is what they turned out to be once built. `node tools/edits.mjs`
+runs every one of them headlessly and prints these numbers.
+
+**The four constraints that decided which of Seamly2D's tools could come over
+at all**, stated once because every item below obeys them:
+
+1. a piece is a **triangulated mesh**, not an outline, and every edit goes
+   through `splitEdgeAt`, which rewires the triangles on *both* sides — a
+   T-junction is a crack the moment the cloth is pulled;
+2. **`v3` identity is the seam correspondence.** New points take fresh ids,
+   paired points share one;
+3. edits are **isometric or explicitly add and remove cloth**, and must
+   survive being applied again;
+4. the shape comes from a **body, by unfolding** — not from measurements and
+   formulas. So Seamly2D's spine (SeamlyMe, the variables table, the
+   expression engine) stayed where it was: it would be a second source of
+   truth for shape, competing with `body.js`.
+
+### Truing a dart, which is the only one that needed a new measurement
+
+A dart is cut as two rays from an apex, and the legs come out as long as the
+cut happened to reach. Sewn shut, the edge the dart crossed — a waist, a hem —
+is left with a **step** and a **corner**, by exactly as much as the legs
+disagree. `takeOutWedge` has always printed the leg mismatch; what nothing
+measured is what that does to the edge, which is the thing a person sees.
+
+`closedDartProfile` folds every dart shut arithmetically and reports both, per
+dart, located. On the asymmetric fixture at 2x:
+
+```
+panel      dart  intake   legs (cm)        step    turn
+SKIRT-01   0     18.24    12.410 / 12.399  0.011   22.154
+SKIRT-01   1      9.12     9.198 /  9.211  0.014   10.425
+SKIRT-02   0     18.00    12.225 / 13.032  0.807   20.609
+SKIRT-04   0     26.40    15.824 / 15.733  0.090   31.619
+```
+
+The step was the expected finding. **The turn was not**: a waistline comes out
+of this fixture with a 31.6° corner at a dart mouth, and no instrument in the
+repository would have said so.
+
+`trueDart` is Seamly2D's construction (`vtooltruedarts.cpp:102`), adapted:
+rotate the far side of the edge about the apex by the dart's own angle so it
+lands where it will be once the dart is closed, draw the edge across, and take
+the leg to where that line crosses it. Rotating back by the same angle puts the
+other leg at the same length **by construction**, which is why the step and the
+corner go together. The legs' interior points are rescaled along their rays with
+the ends, so the two legs keep the matching fractions `harmoniseLegs` gave them
+— without that, truing would fix the edge and quietly break the pairing.
+
+Measured, same fixture: worst step **0.807 → 0 cm**, worst turn
+**31.619 → 0°**, total cloth 6898.2 → 6898.5 cm² (the slivers the trued cut
+adds), and the pattern still checks out.
+
+### Turn, move, mirror: one operation with three faces
+
+Every point goes through the same affine map, so the cloth is untouched and the
+result is isometric by construction. Moving and turning a piece changes its
+area by less than 1e-6 cm² and undoes itself exactly.
+
+Mirror is not quite as cheap, and the difference is **not geometric**. A
+reflection reverses orientation, so the triangles are re-wound or the piece is
+the only thing in the pattern facing the other way. And the three modes differ
+only in what happens to the ids:
+
+* **cut 2, one reversed** — a new piece, with *fresh* ids. The left of a body
+  and the right of it are different places even when the pieces are the same
+  shape; giving the copy the original's ids would weld the two together along
+  every point at once. Measured: the copy shares no id with its original, and
+  the pattern gains no seam.
+* **open out on the fold** — the reflection is welded to the piece along the
+  line, and the points **on** the line are the only ones shared. Folding a
+  skirt panel about its own side edge gives 11 points on the fold and doubles
+  the area exactly, 1468.8 → 2937.5 cm². Two things are refused rather than
+  approximated: a piece that straddles the fold, whose halves would overlap;
+  and a fold line that only *touches* the piece. The second was found by
+  trying it — a line through the leftmost vertex was accepted and doubled the
+  piece, joined at a single point, which is a hinge and not anything anyone
+  could cut.
+* **flip this piece over** — the same cloth the other way up, so the ids are
+  untouched.
+
+### Cut in two, and join: moving a seam line
+
+The cut follows mesh edges, every edge it crosses is split on both sides, and
+the points along the cut keep their ids and appear in **both** halves — which
+is what makes it a seam rather than two unrelated pieces, by the same trick a
+dart uses. Measured: a skirt panel cut down the middle keeps every square
+centimetre (0 cm² lost), shares 37 points along a 55 cm cut, and the pattern
+gains exactly one seam.
+
+**A cut that crosses a piece's edge has to cross its neighbour's too.**
+`propagateSplit` makes the same split in the partner, at the same fraction of
+the same edge, and gives both points the same id. What that buys, measured on
+a cut across a skirt panel's two side seams: **65 stitches with it and 63
+without** — two points of a seam that would simply have no partner to be sewn
+to. Cheap to state and easy to get wrong: a split *along* a straight edge
+costs no length, so nothing about the seam's measurements changes, and
+
+> **`check()` does not notice.** With the propagation disabled it still
+> reports `ok`, a worst seam mismatch of 0 cm and no problems, while the
+> garment quietly loses two stitches. `check()` compares the two sides of a
+> seam by LENGTH and never by which vertex ids they carry — queued in
+> [19-todo.md](19-todo.md).
+
+A separate number, and worth keeping apart from that one because it was first
+written up as the same fault: driving the page, `check()` reported *"seam S03
+differs by 0.26 cm between its sides"* after a cut. That was **not** the
+propagation. The cut had separated a dart's two legs into different pieces, so
+the dart became a seam between them — and an untrued dart's legs are different
+lengths. Truing the darts first and making the same cut gives 0 cm. Two
+instruments, one defect: the same leg mismatch §6 opens with, arriving by
+another road.
+
+Joining is the inverse and is **not free**. The two pieces were flattened
+separately, so their shared edge has two shapes, one in each piece's plane.
+`joinPieces` lays one onto the other by best rigid fit (Kabsch, in 2D),
+measures the residual **per welded vertex**, and refuses past a tolerance
+rather than stretching the cloth to make up the difference — the refusal names
+how many points are over, the worst one, and the vertex it is at. Two halves of
+a piece that was cut in two join back at a worst residual of 0.000 cm, which is
+the case where the answer is known.
+
+### The edit list, and the fit test it makes possible
+
+The pattern now keeps **what was done to it**, not just what it looks like.
+Undo keeps whole copies and can say nothing about what changed; `pattern.edits`
+can, and — the point of it — can be applied to pieces unfolded for a different
+body.
+
+That needs the apex to be a **construction** rather than a coordinate. A dart
+apex is an interior point, so a fraction along an edge cannot name it alone; it
+is recorded as *so far along that edge, and so far in from it*
+(`describeApex`), which is how a dart is actually placed. Measured: replaying
+13 edits onto the draft they were cut into, and onto a skirt **6 cm wider in
+the waist**, applies all 13 with none skipped and both patterns check out.
+Before the construction existed, every dart missed on the wider skirt — the
+apex snapped to whatever vertex was nearest its old (x, y) and the legs no
+longer reached an edge.
+
+### What a piece is made up as
+
+Allowance is now a property of the **pattern**, per edge kind, with a per-piece
+override; `offsetPoly` takes an array, so a hem can take 2.5 cm where the seams
+beside it take 1. It was a single number given to the printer, which meant a
+pattern saved and reloaded came back with whatever the slider happened to say.
+Grain is a per-piece angle that the printed arrow follows, instead of always
+pointing up the page.
+
+One claim in an earlier draft of this document was **wrong** and is corrected
+here: the SVG's `.notch` class is not a stub. Balance marks *are* drawn, at
+points chosen by `v3` identity so both sides of a seam are marked in the same
+place — a correspondence Seamly2D has to ask the user for. What is missing is
+only its taxonomy of notch *shapes*, which is cosmetic.
+
+## 7 — Limits
+
+- **`check()` is a length test.** It catches a seam whose two sides measure
+  differently, a triangle wound against the rest and a degenerate one. It does
+  **not** catch a seam whose two sides carry different vertices, which is a
+  stitch that will not exist — see the measurement in §6 and the first item in
+  [19-todo.md](19-todo.md).
+- **The allowance and the grain reach the whole pattern, or piece 1.** The
+  data model is per piece and per edge and the SVG honours it; the viewer has
+  three numbers and a slider wired to the first piece, because a piece cannot
+  be selected on the table yet.
+- **No grading, no truing a curve, no moving a single point.** Point-level
+  editing is still the obvious next thing and is still not built. §6 says
+  which of a pattern CAD's tools were worth bringing over and which would be
+  a second source of truth for shape.
+- **Moving a piece moves its own coordinates, and the table re-spaces the
+  pieces whenever how many of them there are changes.** So a move survives
+  until a mirror, a cut or a join, and then the row is laid out again from
+  scratch. Printing re-places everything anyway (`nest`), so a move is a
+  convenience for reaching a piece, not a decision about the sheet.
+- **A join can be refused and that is the honest answer, not a workaround.**
+  Two pieces flattened separately do not share an edge shape, and past the
+  tolerance the only ways on are to stretch the cloth or to re-unfold the
+  shell with those two panels as one. The second is right and is not wired to
+  anything.
 - **The dart apex must be a vertex of the mesh**, and the wedge must reach an
   edge of the piece. Both are checked and refused rather than approximated.
 - **A spread's pivot must sit on the boundary** for the operation to be exactly

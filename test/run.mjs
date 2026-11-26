@@ -19,9 +19,12 @@ import { dropDisc, dropAccordion, neckFrame, floorOf } from '../app/js/droptest.
 import { flaredSkirtPattern, placeSkirt, hemProfile, waistRing } from '../app/js/skirt.js';
 import { layOut, weldStitched, assembleGarment } from '../app/js/assemble.js';
 import { takeOutWedge, letInWedge, check as patternCheck,
-  panelArea } from '../app/js/patternedit.js';
+  panelArea, movePiece, turnPiece, mirrorPiece, splitPiece, joinPieces,
+  closedDartProfile, trueDarts, setAllowance, setGrain, editList,
+  replayEdits } from '../app/js/patternedit.js';
 import { exportFormJSON, importFormJSON, applyForm, formFileName } from '../app/js/formio.js';
 import { DEG, dist, add, mul } from '../app/js/geom.js';
+import { peirce } from '../app/js/cantilever.js';
 import * as arrange from '../app/js/arrange.js';
 
 const line = (s) => console.log(`\n=== ${s}`);
@@ -808,78 +811,90 @@ line('bending: the model itself');
 
 line('bending: a cantilever, in centimetres');
 {
-  // The Peirce cantilever, which is how a textile lab measures stiffness and
-  // why "bending length" is a number you can look up. A strip is clamped and
-  // droops; the overhang at which the tip reaches 41.5 degrees below
-  // horizontal is twice the bending length. tools/fabric.mjs is the same
-  // measurement over every preset.
-  const edge = 0.5, overhang = 16, clamp = 4, width = 2;
-  const cantilever = (fabric, bend = null) => {
-    const pat = rectanglePattern({ width, height: overhang + clamp, edge });
-    const asm = sewFlat(pat, { y: 0 });
-    const clampTo = -(overhang + clamp) / 2 + clamp;
-    asm.verts.forEach((p, i) => { asm.pinned[i] = p[2] <= clampTo + 1e-6; });
-    const xs = [...new Set(asm.verts.map((p) => +p[0].toFixed(5)))];
-    const xMid = xs.reduce((a, x) => (Math.abs(x) < Math.abs(a) ? x : a), xs[0]);
-    const line2 = asm.verts
-      .map((p, i) => ({ i, x: p[0], z: p[2] }))
-      .filter((q) => Math.abs(q.x - xMid) < 1e-6 && q.z >= clampTo - 1e-6)
-      .sort((a, b) => a.z - b.z).map((q) => q.i);
-    const sim = new Cloth(asm, null, {
-      fabric, bend, substeps: 20, selfCollision: false, floorY: null,
-      terminalCmPerSec: 0, linearDragPerSec: 1.0,
-    });
-    const settle = sim.settle({ maxSeconds: 12 });
-    const o = asm.verts[line2[0]];
-    let sLen = 0, c = null;
-    for (let k = 1; k < line2.length; k++) {
-      const a = asm.verts[line2[k - 1]], b2 = asm.verts[line2[k]];
-      sLen += Math.hypot(b2[0] - a[0], b2[1] - a[1], b2[2] - a[2]);
-      const ang = Math.atan2(o[1] - b2[1],
-        Math.max(1e-9, Math.hypot(b2[0] - o[0], b2[2] - o[2]))) * 180 / Math.PI;
-      if (c === null && ang >= 41.5) c = sLen / 2;
-    }
-    return { c, settled: !!settle.settled, rms: sim.rmsSpeed() };
-  };
-
-  const poplin = cantilever('cotton poplin');
-  console.log(`  cotton poplin: asked for ${FABRICS['cotton poplin'].bendLengthCm} cm`
-    + ` of bending length, measured ${poplin.c === null ? '>8' : poplin.c.toFixed(2)} cm`);
+  // THE PEIRCE CANTILEVER, FROM app/js/cantilever.js -- the same function
+  // tools/fabric.mjs calls, not a second one.
+  //
+  // What was here until 2026-10-18 clamped a FIXED 16 cm overhang and
+  // reported the arclength at which the chord from the clamp crossed 41.5
+  // deg. docs/18-validation.md 6.9 withdrew that reading on 2026-10-11 as not
+  // a material property -- the strip's whole shape depends on how much of it
+  // is hanging -- and fixed tools/fabric.mjs the same day. This file was not
+  // fixed, and its comment went on claiming the two were "the same
+  // measurement" for seven days while they differed by 1.9x on one fabric.
+  //
+  // The cost of that: this check PASSED at 1.77 cm against an asked 1.7,
+  // certifying bending as calibrated, while the material property read 0.93.
+  // A gate that cannot see the defect it is named after is worse than no
+  // gate, because it is quoted (docs/18-validation.md 6.13).
+  // AT A STATED ELEMENT, NOT peirce()'s AUTO MESH. The auto mesh is
+  // `asked / 12` = 0.142 cm for this fabric, which since BEND_SCALE came
+  // down to 1.8 is too FINE to converge at the 20 substeps this runs at: it
+  // reads 0.855 cm there against 1.793 at 0.6 cm and 1.818 at 0.3 cm
+  // (docs/18-validation.md 6.12). 0.6 cm is converged -- substeps 160 gives
+  // 1.815 against 20's 1.793 -- resolves the specimen at 6 rows, and takes
+  // 10 s instead of 200.
+  const poplin = peirce('cotton poplin', { edge: 0.6 });
+  const ask = FABRICS['cotton poplin'].bendLengthCm;
+  console.log(`  cotton poplin: asked for ${ask} cm of bending length,`
+    + ` measured ${poplin.bendLengthCm ?? '--'} cm`
+    + ` (overhang ${poplin.overhangCm} cm, element ${poplin.rowCm} cm,`
+    + ` ${poplin.rowsSpanningL} rows, ${poplin.evals} settles)`);
+  // EXPECTED TO FAIL until the bending repair lands. 0.93 against 1.7 is the
+  // defect of docs/18-validation.md 6.12, and the threshold is deliberately
+  // NOT widened to accommodate it: a gate tuned to pass the current solver
+  // would be the same false green in new numbers.
   check('a fabric bends by as much as it was asked to',
-    poplin.c !== null && Math.abs(poplin.c - FABRICS['cotton poplin'].bendLengthCm) < 0.4,
-    `${poplin.c} cm against ${FABRICS['cotton poplin'].bendLengthCm}`);
-  check('and the cantilever comes to rest', poplin.settled,
-    `${poplin.rms.toFixed(2)} cm/s`);
+    poplin.bendLengthCm !== null && Math.abs(poplin.bendLengthCm - ask) < 0.4,
+    `${poplin.bendLengthCm} cm against ${ask} -- see docs/18-validation.md 6.12`);
+  check('and the bisection converged', poplin.bracketed && poplin.converged,
+    `bracket ${poplin.bracketCm} cm in ${poplin.evals} settles`);
 
   // The parameter has to MEAN something: this is the check the old
   // cross-spring model failed, with every fabric and even a compliance of
-  // zero giving the same 0.76 cm.
-  const limp = cantilever('cotton poplin', 1.1);
-  const stiff = cantilever('cotton poplin', 2.3);
-  console.log(`  the same cloth at 1.1 and 2.3 cm: ${limp.c} vs ${stiff.c} cm measured`);
+  // zero giving the same 0.76 cm. Run at a FIXED coarse element because it
+  // asserts an ORDERING, not a value -- which costs seconds instead of the
+  // ~200 s an auto-meshed bisection takes, and the ordering is the whole
+  // claim.
+  const limp = peirce('cotton poplin', { bend: 1.1, edge: 0.5 });
+  const stiff = peirce('cotton poplin', { bend: 2.3, edge: 0.5 });
+  console.log(`  the same cloth at 1.1 and 2.3 cm: ${limp.bendLengthCm}`
+    + ` vs ${stiff.bendLengthCm} cm measured (element 0.5 cm, ordering only)`);
   check('a limper fabric droops sooner than a stiffer one',
-    limp.c !== null && stiff.c !== null && stiff.c > limp.c + 0.5,
-    `${limp.c} cm against ${stiff.c} cm`);
+    limp.bendLengthCm !== null && stiff.bendLengthCm !== null
+      && stiff.bendLengthCm > limp.bendLengthCm + 0.5,
+    `${limp.bendLengthCm} cm against ${stiff.bendLengthCm} cm`);
 
-  // Resolution independence: the same cloth on a coarser mesh is the same
-  // cloth. This is what the discrete-shells scaling buys.
-  const coarse = (() => {
-    const pat = rectanglePattern({ width: 3, height: overhang + clamp, edge: 1.0 });
-    const asm = sewFlat(pat, { y: 0 });
-    const clampTo = -(overhang + clamp) / 2 + clamp;
-    asm.verts.forEach((p, i) => { asm.pinned[i] = p[2] <= clampTo + 1e-6; });
-    const sim = new Cloth(asm, null, {
-      fabric: 'cotton poplin', substeps: 20, selfCollision: false, floorY: null,
-      terminalCmPerSec: 0, linearDragPerSec: 1.0,
-    });
-    sim.settle({ maxSeconds: 12 });
-    const tip = asm.verts.reduce((a, p) => (p[2] > a[2] ? p : a), asm.verts[0]);
-    return Math.hypot(tip[0], tip[2]);
-  })();
-  console.log(`  tip reach: ${poplin.c === null ? '?' : ''}0.5 cm mesh vs 1.0 cm mesh`
-    + ` -> ${coarse.toFixed(2)} cm at 1.0`);
+  // RESOLUTION INDEPENDENCE, asserted on the quantity it is about.
+  //
+  // What was here until 2026-10-18 settled a strip on a 1.0 cm mesh and
+  // asserted its tip reach fell between 2.0 and 6.0 cm -- a 3x window, on a
+  // proxy. Meanwhile the bending length itself moved from 0.93 cm to 3.93 cm
+  // across the element sizes a garment uses (docs/18-validation.md 6.12).
+  // **A check whose tolerance is wider than the defect it is named after
+  // passes through the defect**, and this one did, for as long as the defect
+  // existed.
+  //
+  // It now measures the same thing twice, at elements a factor of two apart,
+  // and asserts they agree. Measured after the BEND_SCALE repair: 1.818 cm
+  // at 0.3 and 1.793 cm at 0.6, which is **1.4 % apart**. The 10 % threshold
+  // is seven times that margin -- loose enough not to fail on solver noise,
+  // and far tighter than the 2.5x the old defect produced over the same
+  // range.
+  //
+  // Costs ~74 s, nearly all of it the 0.3 cm run. That is the price of
+  // asserting the property rather than a proxy for it.
+  const fine = peirce('cotton poplin', { edge: 0.3 });
+  const coarse = peirce('cotton poplin', { edge: 0.6 });
+  const spread = (fine.bendLengthCm && coarse.bendLengthCm)
+    ? Math.abs(fine.bendLengthCm - coarse.bendLengthCm)
+      / Math.min(fine.bendLengthCm, coarse.bendLengthCm) : null;
+  console.log(`  bending length at 0.3 cm vs 0.6 cm elements:`
+    + ` ${fine.bendLengthCm} vs ${coarse.bendLengthCm} cm`
+    + ` (${fine.rowsSpanningL} and ${coarse.rowsSpanningL} rows)`);
   check('the same cloth on a coarser mesh is still the same cloth',
-    coarse > 2.0 && coarse < 6.0, `${coarse.toFixed(2)} cm of reach`);
+    spread !== null && spread < 0.10,
+    spread === null ? 'a bisection did not bracket'
+      : `${(100 * spread).toFixed(1)} % apart over a 2x change of element`);
 }
 
 line('the accordion drop: does the cloth have thickness');
@@ -946,7 +961,13 @@ line('cloth physics: elastics and weights');
   check('areal density gives a sensible weight',
     sim.weightG > 20 && sim.weightG < 30, `${sim.weightG.toFixed(1)} g of 120 gsm cotton`);
   const before = asm.verts.reduce((a, p) => Math.min(a, p[1]), Infinity);
-  sim.run(3.0);
+  // 10 s, not the 3 s this ran for until 2026-10-18. The THRESHOLD below is
+  // unchanged; only the time allowed to reach it has moved, because
+  // BEND_SCALE came down from 30 to 1.8 and a cloth 16x limper swings more
+  // slowly. Measured on this exact rig: rms 1.663 cm/s at 3 s, 1.541 at 5 s,
+  // **0.002 at 8 s** -- it settles hard, just later. Widening the threshold
+  // instead would have hidden a real settle failure later on.
+  sim.run(10.0);
   const after = asm.verts.reduce((a, p) => Math.min(a, p[1]), Infinity);
   check('it hangs: the hem falls', after < before - 5, `${(before - after).toFixed(1)} cm`);
   check('hanging under its own weight it comes to rest',
@@ -1838,16 +1859,28 @@ line('an impossible seam shows tension instead of being forced shut');
   for (const q of w0.pts) q.y = wTop + (q.y - wTop) * 0.8;
   const weak = assembleGarment(weakPattern, b, {
     fabric: 'linen', standoffCm: 6, stitchSeconds: 2.5, fallSeconds: 1,
-    floorY: floorOf(b), cloth: { maxTensionGf: 4 },
+    // 2 gf, not the 4 this used until 2026-10-18. THE STIMULUS IS RELATIVE
+    // TO THE CLOTH, and the cloth changed: BEND_SCALE came down from 30 to
+    // 1.8, a limper cloth needs less thread tension to pull together, and at
+    // 4 gf the seam now gets to within 0.5 cm and is still feeding -- so it
+    // is not stalled, and `being sewn, 0.5 cm to go` is the CORRECT verdict
+    // rather than a wrong one. The assertion below is unchanged; only the
+    // thread that is supposed to be too weak has had to get weaker.
+    floorY: floorOf(b), cloth: { maxTensionGf: 2 },
   });
   const stuck = weak.seams.filter((x) => x.maxGapCm > 0.25);
-  console.log(`  with a 4 gf thread: ${stuck.length} of ${weak.seams.length}`
+  console.log(`  with a 2 gf thread: ${stuck.length} of ${weak.seams.length}`
     + ' seams cannot be closed at all');
   check('a thread too weak to close a sound seam saturates',
     stuck.length > 0 && stuck.every((x) => x.atTheLimit > 0),
     `${stuck.map((x) => x.atTheLimit).join('/')} stitches at the limit`);
+  // The message carries the verdicts. Until 2026-10-18 it carried nothing,
+  // so when this failed after BEND_SCALE changed it said only that it had
+  // failed -- a check that cannot say what it saw costs a whole run to
+  // diagnose.
   check('and the report blames the thread, not the cloth',
-    stuck.every((x) => /thread is at its limit/.test(x.verdict)));
+    stuck.every((x) => /thread is at its limit/.test(x.verdict)),
+    stuck.map((x) => `"${x.verdict}"`).join('  |  ') || 'no stuck seams');
 }
 
 line('editing a piece: taking a wedge out, letting a wedge in');
@@ -1937,6 +1970,189 @@ line('editing a piece: taking a wedge out, letting a wedge in');
   check('letting cloth in adds no seam -- it is one piece still',
     pat2.seams.length === mk().seams.length,
     `${pat2.seams.length} seams, same as before`);
+
+  // ---- truing a dart: what it does to the edge it crosses
+  //
+  // Cutting a dart leaves the edge it crossed with a step and a corner once
+  // the dart is sewn shut, by as much as the two legs disagree. The profile
+  // measures that -- per dart, located -- and truing takes both to zero by
+  // moving the leg ends to where the closed edge crosses them.
+  const pat3 = mk();
+  takeOutWedge(pat3, 0, { apex: [-2, -14], bisectDeg: 80, intakeDeg: 18 });
+  const prof0 = closedDartProfile(pat3);
+  console.log(`  dart folded shut: step ${prof0.step.worst} cm,`
+    + ` turn ${prof0.turn.worst} deg at the mouth`);
+  check('a dart cut off the radial turns the edge it crosses',
+    prof0.turn.worst > 1, `${prof0.turn.worst} deg`);
+  const tr = trueDarts(pat3);
+  console.log(`  trued ${tr.trued}/${tr.darts}: step ${tr.stepBeforeCm.worst}`
+    + ` -> ${tr.stepAfterCm.worst} cm, turn ${tr.turnBeforeDeg.worst}`
+    + ` -> ${tr.turnAfterDeg.worst} deg`);
+  check('truing takes the step out of the edge', tr.stepAfterCm.worst < 1e-6,
+    `${tr.stepAfterCm.worst} cm`);
+  check('and the corner with it', tr.turnAfterDeg.worst < 1e-3,
+    `${tr.turnAfterDeg.worst} deg`);
+  check('and leaves the legs equal', Math.abs(
+    pat3.panels[0].darts[0].legCm[0] - pat3.panels[0].darts[0].legCm[1]) < 1e-6);
+  check('a trued pattern still checks out', patternCheck(pat3).ok,
+    patternCheck(pat3).problems.join('; ') || 'no problems');
+
+  // ---- the rigid transforms change the piece's place, never its cloth
+  const pat4 = mk();
+  const areaBefore = panelArea(pat4.panels[0]);
+  movePiece(pat4, 0, { dx: 7, dy: -3 });
+  turnPiece(pat4, 0, { degrees: 23 });
+  check('moving and turning a piece changes no cloth at all',
+    Math.abs(panelArea(pat4.panels[0]) - areaBefore) < 1e-6,
+    `${panelArea(pat4.panels[0]).toFixed(4)} cm2`);
+  turnPiece(pat4, 0, { degrees: -23 });
+  movePiece(pat4, 0, { dx: -7, dy: 3 });
+  check('and they undo themselves exactly', Math.abs(
+    pat4.panels[0].pts[0].x - mk().panels[0].pts[0].x) < 1e-9);
+
+  // ---- mirroring: a copy is a DIFFERENT piece of the garment
+  const pat5 = mk();
+  const seams5 = pat5.seams.length;
+  const m = mirrorPiece(pat5, 0, { axis: 'y', mode: 'copy' });
+  check('a mirrored copy is a new piece', m.pattern.panels.length === 5);
+  check('and shares no vertex id with the piece it came from -- '
+    + 'the left of a body is not the right of it',
+    (() => {
+      const a = new Set(pat5.panels[0].pts.map((q) => q.v3));
+      return pat5.panels[4].pts.every((q) => !a.has(q.v3));
+    })());
+  check('so it adds no seam', pat5.seams.length === seams5,
+    `${pat5.seams.length} seams`);
+  // cut on the fold: the two halves share the points ON the line and nothing
+  // else, and the line has to be an EDGE of the piece rather than a line that
+  // happens to touch it
+  const pat5b = mk();
+  const area5 = panelArea(pat5b.panels[0]);
+  const loop5 = pat5b.panels[0].loop.map((i) => ({ i, ...pat5b.panels[0].pts[i] }))
+    .sort((u, v) => u.x - v.x);
+  const F1 = loop5[0];
+  const F2 = loop5.find((q) => Math.hypot(q.x - F1.x, q.y - F1.y) > 5 && Math.abs(q.x - F1.x) < 2);
+  const fold = mirrorPiece(pat5b, 0, { line: [[F1.x, F1.y], [F2.x, F2.y]], mode: 'fold' });
+  console.log(`  fold: ${fold.onFold} points on the fold, ${area5.toFixed(1)}`
+    + ` -> ${fold.areaCm2} cm2`);
+  check('opening a piece out on the fold doubles it exactly',
+    Math.abs(fold.areaCm2 - 2 * area5) < 0.01, `${fold.areaCm2} cm2`);
+  check('and the fold is the only thing the two halves share',
+    fold.onFold > 2 && pat5b.panels.length === 4, `${fold.onFold} points`);
+  check('a fold line that only touches the piece is refused -- '
+    + 'that is a hinge, not a fold', (() => {
+      const t = mk();
+      const xs = t.panels[0].pts.map((q) => q.x);
+      try {
+        mirrorPiece(t, 0, { line: [[Math.min(...xs), -100], [Math.min(...xs), 100]], mode: 'fold' });
+        return false;
+      } catch { return true; }
+    })());
+
+  check('mirrored twice is where it started', (() => {
+    const t = mk();
+    const x0 = t.panels[0].pts.map((q) => q.x);
+    mirrorPiece(t, 0, { axis: 'y', mode: 'flip' });
+    mirrorPiece(t, 0, { axis: 'y', mode: 'flip' });
+    return t.panels[0].pts.every((q, i) => Math.abs(q.x - x0[i]) < 1e-9);
+  })());
+
+  // ---- cutting a piece in two makes a seam; joining puts it back
+  const pat6 = mk();
+  const area6 = panelArea(pat6.panels[0]);
+  const xs6 = pat6.panels[0].pts.map((q) => q.x);
+  const ys6 = pat6.panels[0].pts.map((q) => q.y);
+  const midx = (Math.min(...xs6) + Math.max(...xs6)) / 2;
+  const sp6 = splitPiece(pat6, 0, {
+    from: [midx, Math.min(...ys6) - 10], to: [midx, Math.max(...ys6) + 10],
+  });
+  console.log(`  cut: ${sp6.names.join(' + ')}, ${sp6.sharedPoints} points along the cut,`
+    + ` ${sp6.cutLengthCm} cm, ${sp6.neighboursCut} neighbouring pieces cut to match`);
+  check('cutting a piece in two keeps every square centimetre',
+    Math.abs(sp6.areaLostCm2) < 1e-6, `${sp6.areaLostCm2} cm2`);
+  check('the cut is a seam, not a gap -- both halves carry the same ids',
+    sp6.sharedPoints > 5, `${sp6.sharedPoints} shared points`);
+  check('so the pattern gained exactly one seam',
+    pat6.seams.length === seams5 + 1, `${pat6.seams.length} seams`);
+  check('and it still checks out', patternCheck(pat6).ok,
+    patternCheck(pat6).problems.join('; ') || 'no problems');
+  // Where the cut leaves through a seam, the neighbour is cut to match, or
+  // the seam loses a stitch there. Measured: 65 stitches with, 63 without --
+  // and `check()` reports nothing either way, which is its own open item.
+  const pat6b = mk();
+  const xs6b = pat6b.panels[1].pts.map((q) => q.x);
+  const ys6b = pat6b.panels[1].pts.map((q) => q.y);
+  const midy6 = (Math.min(...ys6b) + Math.max(...ys6b)) / 2;
+  const across = splitPiece(pat6b, 1, {
+    from: [Math.min(...xs6b) - 10, midy6], to: [Math.max(...xs6b) + 10, midy6],
+  });
+  console.log(`  cut across two seams: ${across.neighboursCut} neighbours cut to match,`
+    + ` ${layOut(across.pattern, b, { standoffCm: 6 }).stitches.length} stitches`);
+  check('a cut leaving through a seam cuts the neighbour too',
+    across.neighboursCut === 2, `${across.neighboursCut} neighbours`);
+  check('so every point of that seam still has a partner to be sewn to',
+    (() => {
+      const n = new Map();
+      for (const pan of across.pattern.panels) {
+        for (const q of pan.pts) n.set(q.v3, (n.get(q.v3) || 0) + 1);
+      }
+      return across.pattern.panels.every((pan) => (pan.runs || []).every((r) => r.kind !== 'seam'
+        || r.pts.every((i) => (n.get(pan.pts[i].v3) || 0) >= 2)));
+    })());
+  const j6 = joinPieces(pat6, 0, 1, { toleranceCm: 0.5 });
+  console.log(`  joined back: ${j6.weldedPoints} points welded, worst ${j6.worstCm} cm`);
+  check('joining the two halves back is exact -- they were one piece',
+    j6.worstCm < 1e-6, `${j6.worstCm} cm`);
+  check('and gives the area back', Math.abs(panelArea(pat6.panels[0]) - area6) < 1e-6,
+    `${panelArea(pat6.panels[0]).toFixed(3)} cm2`);
+  check('a piece cannot be joined to one it shares no seam with', (() => {
+    const t = mk();
+    try { joinPieces(t, 0, 2, {}); return false; } catch { return true; }
+  })());
+
+  // ---- the edit list, and replaying it onto a body it was not cut for
+  const pat7 = mk();
+  takeOutWedge(pat7, 0, { apex: [-2, -14], bisectDeg: 80, intakeDeg: 18 });
+  takeOutWedge(pat7, 1, { apex: [1, -12], bisectDeg: 95, intakeDeg: 12 });
+  setAllowance(pat7, { bottom: 2.5 });
+  setGrain(pat7, 0, 90);
+  const rows = editList(pat7);
+  console.log(`  edits: ${rows.map((e) => e.what).join(' | ')}`);
+  check('every edit is recorded, in order', rows.length === 4, `${rows.length} edits`);
+  check('and a dart is recorded as a construction, not as a coordinate',
+    pat7.edits[0].on && pat7.edits[0].on.run !== undefined,
+    JSON.stringify(pat7.edits[0].on));
+
+  const again = replayEdits(mk(), pat7.edits);
+  check('replayed onto the same draft, every edit lands',
+    again.applied === 4 && again.skipped.length === 0, again.skipped.join('; '));
+  check('and gives back the same cloth',
+    Math.abs(panelArea(again.pattern.panels[0]) - panelArea(pat7.panels[0])) < 0.5,
+    `${panelArea(again.pattern.panels[0]).toFixed(1)} vs ${panelArea(pat7.panels[0]).toFixed(1)} cm2`);
+
+  // THE FIT TEST: the same edits onto a skirt drafted for a bigger waist.
+  // This is the one that a coordinate cannot do -- the apex would snap to
+  // whatever vertex was nearest its old (x, y) and the dart would miss.
+  const bigger = flaredSkirtPattern({
+    panels: 4, waistCm: ring.circumferenceCm + 8, circleFraction: 0.25,
+    lengthCm: 50, edge: 5.0, waistV,
+  });
+  const onBigger = replayEdits(bigger, pat7.edits);
+  console.log(`  replayed onto a waist 8 cm bigger: ${onBigger.applied} applied,`
+    + ` ${onBigger.skipped.length} skipped`);
+  check('the edits replay onto a body they were not cut for',
+    onBigger.applied === 4 && onBigger.skipped.length === 0, onBigger.skipped.join('; '));
+  check('and that pattern checks out', patternCheck(onBigger.pattern).ok,
+    patternCheck(onBigger.pattern).problems.join('; ') || 'no problems');
+  check('the darts are there, and in the bigger piece',
+    onBigger.pattern.panels[0].darts.length === 1
+    && panelArea(onBigger.pattern.panels[0]) > panelArea(pat7.panels[0]),
+    `${panelArea(onBigger.pattern.panels[0]).toFixed(0)} cm2`);
+
+  // ---- the allowance is the pattern's, and the hem can differ from the seams
+  const svgWide = patternSVG(pat7, { seamAllowanceCm: 1.0 });
+  check('the sheet prints the allowances the pattern carries, not one number',
+    svgWide.svg.includes('2.5'), 'hem allowance 2.5 cm on the sheet');
 }
 
 line('saving and loading');
@@ -1999,6 +2215,11 @@ line('saving and loading');
   check('and so does the cloth the dart removed',
     Math.abs(panelArea(reloaded.panels[0]) - panelArea(skirt.panels[0])) < 1e-9,
     `${panelArea(reloaded.panels[0]).toFixed(2)} cm2`);
+  check('the edit list survives the save and the load too -- which is what '
+    + 'makes a saved pattern replayable onto another body',
+    (reloaded.edits || []).length >= 1 && reloaded.edits[0].op === 'dart'
+    && !!reloaded.edits[0].on,
+    `${(reloaded.edits || []).length} edits, apex as ${JSON.stringify((reloaded.edits || [{}])[0].on)}`);
   check('the reloaded pattern still checks out', patternCheck(reloaded).ok,
     patternCheck(reloaded).problems.join('; ') || 'no problems');
 }

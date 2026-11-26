@@ -51,13 +51,30 @@ class CDP:
     def __init__(self, ws, settle=15.0):
         self.ws, self.n, self.logs = ws, 0, []
         self.settle = settle
+        # alert() blocks the page until someone answers it, and nothing here
+        # was answering: with the Page domain enabled, a dialog opened by an
+        # --eval would hang the evaluate it came from and the run would time
+        # out with no idea why. So dialogs are dismissed as they open and kept
+        # here, which also makes them MEASURABLE -- `cdp.dialogs` is what the
+        # page said, and a test can assert on it.
+        self.dialogs = []
+        self.dn = 10_000_000
 
     async def send(self, method, **params):
         self.n += 1
         await self.ws.send(json.dumps({'id': self.n, 'method': method, 'params': params}))
         while True:
             msg = json.loads(await self.ws.recv())
-            if msg.get('method') == 'Runtime.consoleAPICalled':
+            if msg.get('method') == 'Page.javascriptDialogOpening':
+                text = msg['params'].get('message', '')
+                self.dialogs.append(text)
+                self.logs.append(('dialog', text.replace('\n', ' | ')))
+                self.dn += 1
+                await self.ws.send(json.dumps({
+                    'id': self.dn, 'method': 'Page.handleJavaScriptDialog',
+                    'params': {'accept': True},
+                }))
+            elif msg.get('method') == 'Runtime.consoleAPICalled':
                 args = ' '.join(str(a.get('value', a.get('description', ''))) for a in msg['params']['args'])
                 self.logs.append((msg['params']['type'], args))
             elif msg.get('method') == 'Runtime.exceptionThrown':

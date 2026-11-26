@@ -104,6 +104,18 @@ unusable here: its gradient carries a 1/sin(angle) that is singular exactly
 at the rest state, and the strip never stopped moving — 30 to 340 cm/s of
 residual flailing where settled cloth reads 0.2.
 
+> **STALE, flagged 2026-10-17.** This section says the quadratic model is what
+> works. `app/js/bending.js` records it as **model 2 of three, measured and
+> discarded** — "only valid for SMALL deflections... a dropped denim disc
+> landed like a thin metal plate and bounced back off its rim". The model in
+> use is a **dihedral-angle** constraint taken with `atan2`, with the normals
+> over the triangle heights as gradients, which is model 3 there. Read
+> `bending.js` for what the solver does; this passage is kept because the
+> reasoning about why the cross-spring failed is still correct, and because
+> the discarded model's failure is worth knowing. It cost a wrong diagnosis
+> on 2026-10-17 ([18-validation.md](18-validation.md) §6.12), which was
+> written from this passage rather than from the code.
+
 What works is the **quadratic (isometric) bending model** (Bergou et al.
 2006). For each interior edge there is a vector of four cotangent weights
 `K`, fixed by the flat rest shape, with the property that `sum(K_i x_i) = 0`
@@ -114,8 +126,29 @@ instead of ringing.
 
 Three things came out of making it work, each measured:
 
-* **The fabric parameter is now a measurable property.** `FABRICS` carries
-  `bendLengthCm`, and the flexural rigidity follows: `B = w g c³`. Five of
+* **The fabric parameter is now a measurable property — but see
+  `BEND_SCALE`, and the claim below is out of date.** Re-measured
+  2026-10-17, cotton poplin reads **0.93 cm against 1.7 asked** at the
+  tool's own mesh — 1.6x too limp, outside its published 1.5-2.0. "Five of
+  the seven presets measure back in the published range" has not held since
+  the Peirce bisection replaced the fixed-overhang reading (§6.9) and should
+  be re-measured before it is quoted.
+   `FABRICS` carries `bendLengthCm`, and the flexural rigidity
+  follows: `B = w g c³`. What the solver is actually given is that rigidity
+  **multiplied by `BEND_SCALE`** (in `bending.js`, applied at
+  `cloth.js:856`) — a constant that was 30 until 2026-10-18 and is now
+  **1.8**, originally fitted so that the cantilever reads back the bending
+  length it was asked for. Measured 2026-10-17, that same factor is
+  roughly the amount by which a draped specimen is too stiff. **Settled and
+  changed in the code 2026-10-18: the value is now 1.8, not 30** — a 16x
+  error, and the gate is green on the real quantity with it. At 1.8 the
+  cantilever reads its asked bending length to 2 % across a 4x range of
+  element size, and the Cusick drape coefficients spread across their
+  published class bands instead of every preset reading 87-98
+  ([18-validation.md](18-validation.md) §6.12). The theoretical 1 overshoots
+  (ratio 0.71), so a real solver deficit survives — but a factor of 1.8, not
+  30. So "measurable property" held only on the experiment the constant was
+  fitted to. Five of
   the seven presets now measure back in the published range. Denim and
   interfaced twill saturate at 2.27 cm — the solver's ceiling at eight bend
   sweeps — so the stiffest cloths are limper than they should be, by 1.2x and

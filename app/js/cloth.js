@@ -210,6 +210,13 @@ export const DEFAULTS = {
   // no bending resistance at all, which is what creases like paper instead of
   // folding like cloth.
   bendSweeps: 8,
+  // Override `BEND_SCALE` from bending.js, which multiplies the bending
+  // stiffness by 30. An INPUT since 2026-10-18 because it is the leading
+  // candidate for the over-stiffness of docs/18-validation.md 6.12 --
+  // converged, the solver reads ~2.5x too high a bending length on every
+  // fabric at every mesh, which is ~15x in rigidity, and a constant factor
+  // needs a constant to blame. null keeps the 30.
+  bendScale: null,
   // Velocity retained per substep, on top of the drag and the internal
   // damping above. This is pure numerical insurance and should stay close to
   // 1: the dissipation that belongs in the model is in the two terms above.
@@ -852,8 +859,9 @@ export class Cloth {
     // viscosity acts on.
     this.hinges = bendingStencils(asm);
     this.hingeLambda = new Float64Array(this.hinges.length);
+    const bendScale = o.bendScale ?? BEND_SCALE;
     for (const g of this.hinges) {
-      g.alpha = g.area / (BEND_SCALE * this.rigidity * g.len * g.len);
+      g.alpha = g.area / (bendScale * this.rigidity * g.len * g.len);
     }
     this.bend = [];
     for (const e of asm.edges.values()) {
@@ -1953,7 +1961,24 @@ export class Cloth {
       // started working: stiffer cloth needs more thread tension to pull
       // together, so a seam that used to finish now stalls at 2.4 cm to go.
       const waiting = list.filter((x) => x.feeding && x.waiting).length;
-      const stalled = waiting > list.length * 0.5 && sat > 0;
+      // ARREARS: how far the cloth is behind where the thread is pulling it.
+      // A seam genuinely being sewn has `maxGap` close to `toGo`, because the
+      // cloth follows the feed. A seam that has lost has the feed almost
+      // finished and the gap still wide open.
+      //
+      // This second test was added 2026-10-18, when BEND_SCALE came down from
+      // 30 to 1.8 and the `waiting` count stopped catching the case it was
+      // written for. Measured on the gate's own weak-thread seam: 11
+      // stitches, **8 at the thread's limit**, feed down to 0.49 cm to go,
+      // and an actual gap of 2.16 cm -- the cloth 1.7 cm behind and not
+      // moving at fallSeconds 1, 3 or 6. Only 2 of 11 were flagged `waiting`,
+      // against a threshold of half, so the seam reported "being sewn,
+      // 0.5 cm to go" for ever. That is the exact failure the comment above
+      // says this must not hide, and `waiting` was always a proxy for it.
+      const arrears = toGo === null ? 0 : maxGap - toGo;
+      const stalled = sat > 0
+        && (waiting > list.length * 0.5
+          || (sat > list.length * 0.5 && arrears > closedCm));
       rows.push({
         seam: id,
         pieces: list[0].pa !== undefined ? `${list[0].pa} + ${list[0].pb}` : '-',

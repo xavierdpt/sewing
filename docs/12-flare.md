@@ -185,7 +185,36 @@ fast (docs/11-cloth.md section 4).
   survives at the pins. Treat the gathered strain figures as an upper bound.
 - **The fold count is not stable to the mesh.** Flutes are a buckling pattern, and
   which mode you land in depends on the mesh and the path. Expect the count to
-  move by one or two between resolutions; the depth is more reliable.
+  move by one or two between resolutions.
+
+- **The depth is not reliable ACROSS FABRICS, which this section used to claim
+  it was.** The sentence here read "the depth is more reliable" — true against
+  a change of mesh, false against a change of cloth, and the figures above are
+  all one fabric so nothing in them exposed it. Measured 2026-10-17 against
+  Blender on the same garment
+  ([18-validation.md](18-validation.md) §6.11): Blender's fold depth varied by
+  1.6x across the seven presets, this solver's by **52x**, agreeing at silk
+  and 29x flatter at interfaced twill. So depth is trustworthy for comparing
+  two *cuts* in the same cloth — which is what the table above does — and not
+  for comparing two cloths.
+
+  **Two caveats on those figures, both from 2026-10-18.** The cause was found
+  and fixed: `BEND_SCALE` was 30 and should have been 1.8 (§6.12), so the
+  solver that produced the 52x no longer exists. And the harness that
+  measured it sews its fixture with our own solver, which makes
+  cross-session comparisons unsound (§6.15) — the 29x is from before both.
+  **The conclusion stands and the numbers do not:** the garment path still
+  shows no sensible ordering of fold depth with stiffness after the repair
+  (denim deepest at 6.94, twill 2.47), so depth across cloths remains
+  untrustworthy. Re-measure before quoting a figure.
+
+- **`hemProfile` reports the distribution as well as the range**, since
+  2026-10-17. `foldDepthCm` is `max - min` over the whole hem, so a single
+  fold standing proud of the rest sets it alone; `foldDepthsCm` lists every
+  fold's own depth (its peak radius against the mean of the troughs either
+  side), with `meanFoldDepthCm` and `foldDepthSpreadCm` beside it. Quote the
+  distribution when the question is what the garment looks like; the scalar is
+  fine as a regression check, which is what the gate uses it for.
 - **Panels are identical.** Real skirts have different front and back panels, and
   the waist dart intake differs between them. This generator makes `n` of one
   shape.

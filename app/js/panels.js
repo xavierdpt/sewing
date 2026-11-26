@@ -536,10 +536,16 @@ export function bbox(poly) {
   return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
 }
 
-/** Outward offset by `s` along the angle bisector at each vertex (seam allowance). */
+/**
+ * Outward offset by `s` along the angle bisector at each vertex (seam
+ * allowance). `s` may be one number for the whole outline, or an array with
+ * one number per vertex -- which is what lets a hem take 2 cm where the seams
+ * beside it take 1, instead of the whole piece taking whichever is wrong.
+ */
 export function offsetPoly(poly, s, miter = 3.0) {
   const n = poly.length;
   if (n < 3) return poly;
+  const sAt = Array.isArray(s) ? (i) => (s[i] === undefined ? 0 : s[i]) : () => s;
   const ccw = polyArea(poly) > 0;
   const sign = ccw ? 1 : -1;
   const out = [];
@@ -549,12 +555,13 @@ export function offsetPoly(poly, s, miter = 3.0) {
     const e2 = normalize2(b.x - p.x, b.y - p.y);
     const n1 = { x: e1.y * sign, y: -e1.x * sign };
     const n2 = { x: e2.y * sign, y: -e2.x * sign };
+    const si = sAt(i);
     let bx = n1.x + n2.x, by = n1.y + n2.y;
     const bl = Math.hypot(bx, by);
-    if (bl < 1e-9) { out.push({ x: p.x + n1.x * s, y: p.y + n1.y * s }); continue; }
+    if (bl < 1e-9) { out.push({ x: p.x + n1.x * si, y: p.y + n1.y * si }); continue; }
     bx /= bl; by /= bl;
     const cosHalf = Math.max(0.2, bx * n1.x + by * n1.y);
-    const d = Math.min(s / cosHalf, s * miter);
+    const d = Math.min(si / cosHalf, si * miter);
     out.push({ x: p.x + bx * d, y: p.y + by * d });
   }
   return out;

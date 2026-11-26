@@ -61,17 +61,49 @@ app/
     lattice.js          grid tiling, library quantisation, greedy growth
     relax.js            static constraint projection ("let it fall")
     sdf.js              signed distance field of the body
-    cloth.js            XPBD: mass, gravity, friction, force-limited seams
+    cloth.js            XPBD: mass, gravity, friction, force-limited seams. BEING RETIRED
+                        `bendScale` overrides bending.js's BEND_SCALE,
+                        which is 1.8 since 2026-10-18, down from 30
+                        (docs/18-validation.md 6.12)
+    bending.js          the hinge stencils: a property of the mesh, not of a solver
     panels.js           shell -> flattenable panels
     patternio.js        the pattern file format, sew(), drape(), fitReport()
     patternedit.js      darts and spreads
+    patternsvg.js       SVG pattern output, true scale, a view of the JSON
+    formio.js           saving and loading the dress form
+    fabricio.js         making, saving and loading a cloth. PHYSICAL fields
+                        (gsm, Peirce bending length, strain limit, trellis
+                        angle) with Blender's set derived, not authored --
+                        the header says why, from docs/18-validation.md 6.12
     skirt.js            flared and gathered skirts
+    skirtdarts.js       asymmetric darts on purpose: a symmetric garment hides mistakes
+    testpieces.js       flat shapes whose drape is known in advance (the hollow disc)
+    cantilever.js       the Peirce cantilever: bending length by bisecting
+                        the free length to a 41.5 deg TIP, plus PUBLISHED_BEND.
+                        Shared by tools/fabric.mjs, test/run.mjs and the
+                        viewer's `tests > cantilever (Peirce)` -- the first
+                        two used to have one each measuring different
+                        quantities (docs/18 6.13)
+    cusick.js           the Cusick drape test (BS 5058): DC on a 0-100 scale
+                        where 100 is card -- the one number comparable with
+                        a value a textile lab publishes. setupCusick /
+                        measureCusick are split so the viewer and the tool
+                        score with the same code; drapeTrace samples DC
+                        against time, which is how the static equilibrium
+                        was found
+    droptest.js         let go of a piece of cloth in mid-air: the dynamic experiment
     assemble.js         arrange -> stitch -> weld
     arrange.js          STORED RIGID PLACEMENTS: the transform buttons
     clearance.js        how far the cloth is from the skin, everywhere
     drapejob.js         builds a side-car job; shared with node
     remote.js           posts the garment to the side-car
+    telemetry.js        what the viewer tells the side-car about itself
+    wasmcloth.js        src/sewcloth compiled to wasm, driven from the page
+    wasmcloth.test.mjs  its own checks
+    drapewasm.js        drape in the page: one solve, same shape as drapeRemote
+    sewwasm.js          sew in the page: a frame at a time, deliberately not drapewasm
     table.js            the cutting table
+    dockui.js           the menubar, its menus and its floating dialogs (docs/17)
     main.js             the only file that imports three.js
 sim/                    THE DRAPE SIDE-CAR -- see docs/16-solvers.md
   server.py             stdlib HTTP: POST /drape, GET /health
@@ -81,17 +113,74 @@ sim/                    THE DRAPE SIDE-CAR -- see docs/16-solvers.md
     Codim-IPC/          submodule, branch ubuntu-24.04 (four build fixes)
     build_cipc.sh       configure and make
     fabrics.md          its MEASURED fabric parameters vs this project's
+src/                    UNPACKED UPSTREAM SOURCE, not this project's code (rule 8)
+  sewcloth/             the solver this project ships: Blender-derived, wasm
+  blender-fork/         Blender's own source, and two builds of it
+  seamly2d/             read for its pattern model
+  asm-reference/
 tools/
   trace.mjs             arrange -> sew -> weld -> drape, as numbers
   check_sidecar.mjs     round-trip a garment over HTTP
-  drape_blender.mjs     this solver against Blender's, same metric
+  drape_blender.mjs     this solver against Blender's, same metric. Its
+                        fixture is sewn by OUR solver, so sewing changes move
+                        Blender's column too; BEND_SCALE is pinned at that
+                        step, other terms are not (docs/18-validation.md 6.15)
+                        --fabric <name> | --all   sweep the presets by stiffness
+                        --edges 1.5,3,4.5         sweep the mesh resolution
+                        --no-collider             diagnostic: OURS drapes in
+                                                  free air, Blender keeps the
+                                                  body. Not a fair comparison
+                        --settle <s>              settle budget; 6 is too few
+                                                  at a fine mesh, and an
+                                                  unsettled row is not a
+                                                  measurement
   sew_blender.mjs       this project's sewing against Blender's
+  to_blender.mjs        put the garment after W into Blender's own window
   prep_bodice.py        extract the bodice band from the MakeHuman mesh
+  make_pattern.mjs      draft a fitted bodice and write a printable SVG
+  try_pattern.mjs       draft for one body, sew onto another, report the fit
+  assemble.mjs          arrange, stitch, then drop the pieces
+  skirt.mjs             flared and gathered panels, draped and printed
+  darts.mjs             do a dart's two legs pair up as a sewer would pair them?
+  edits.mjs             every cutting-table edit, and what each costs
+  drop_disc.mjs         the drop test from the command line
+  accordion.mjs         has the cloth thickness? fold a strip, drop it, measure
+  fabric.mjs            what the fabrics in cloth.js actually DO, measured
+                        (minutes per fabric; streams a line as each resolves)
+                        --mesh-law  measured bending length against element
+                                    size: the sweep that showed the excess is
+                                    a plateau, not a clean function of edge/c
+  shearnet.mjs          how much curvature fabric shear absorbs for free
+  poses.mjs             range of motion: draft at rest, then make the body move
+  skirt_poses.mjs       can you walk in it? can you sit down in it?
+  wasmclip.mjs          where the body comes through when the VIEWER drapes it
   sweep.mjs             module size vs seam length vs fit
   ease_sweep.mjs        how much ease the chord sag forces on you
+  drape_coefficient.mjs the Cusick drape test, per preset, against published
+                        class bands (docs/18-validation.md Step 2)
+                        --trace    DC against time, which is how the static
+                                   equilibrium was found
+                        --bend / --stretch / --sweeps   override one solver
+                                   term at a time: the discriminators that
+                                   narrowed the defect down to BEND_SCALE
+                        --no-drag / --no-damping / --jitter   the three
+                                   candidates these ruled out
+                        --bend-scale <x>   test a BEND_SCALE other than the
+                                   shipped 1.8
+  profile.mjs           where the solver spends its time: ask V8, not a guess
+  viewshot.py           drive the real page headlessly, as a PNG (docs/17)
 test/
-  run.mjs               headless checks of the entire pipeline
+  run.mjs               headless checks of the entire pipeline -- THE GATE
+  drape_wasm.mjs        the real garment in wasm: what it costs, and does it
+                        stay out of the body
 ```
+
+This tree had drifted by **26 files** before 2026-10-17 — eleven modules and
+fifteen tools that existed and were not written down, including the whole wasm
+path (`wasmcloth.js`, `drapewasm.js`, `sewwasm.js`) and `src/`. A map that is
+missing a third of the territory is worse than no map, because it is read as
+complete: rule 5 says to read this project's own documents before proposing a
+direction, and that is only safe while they say what is there.
 
 **The one architectural rule:** every geometry module is plain JavaScript with no
 three.js import, so the whole pipeline runs under node. That now includes the
@@ -333,11 +422,28 @@ cd app && python3 -m http.server 8777
 # then open http://127.0.0.1:8777/
 ```
 
-Keys: `R` rebuild, `space` relax, `Q` requantise, `S` settle, `G` grow, `E` export OBJ,
-`C` cycle colour mode (angle defect / seam strain / tile type / plain). The GUI exposes
-body measurements, the asymmetry fields, module size, ease, and every solver weight.
-`asm`, `torso`, `relax`, `quantize`, `settle` and `LIBRARY` are on `globalThis` for
-console work.
+Keys, read off the handler at `app/js/main.js:3332` rather than off the help strip —
+which is wrong about `T`, recorded as an open item in
+[19-todo.md](19-todo.md):
+
+`R` rebuild · `space` relax 20, or play/pause once a simulation exists ·
+`Q` requantise · `S` settle · `G` grow · `E` export OBJ · `P` print the pattern ·
+`I` import a pattern · `T` open the **cutting table** · `U` undo a table edit ·
+`D` drop test · `A` accordion drop · `K` draft and hang a skirt ·
+`J` lay the pieces out · `W` sew / stop the seams ·
+`C` cycle colour mode (angle defect / seam strain / tile type / plain).
+
+**While pieces are laid out for arranging, a different map is in force** and takes
+the key first (`arrangeKey`): `A` select all · `N` select none · `G` select adjacent ·
+`M` mirror · `F` flip · `0` reset · `X` finish and weld · arrows nudge ·
+`[` `]` spin · `;` `'` tilt, with `shift` ×5 and `alt` ×0.2. So `A` and `G` mean
+one thing on the table and another off it.
+
+The controls live in a menubar of floating dialogs and, still, one lil-gui panel —
+[17-interface.md](17-interface.md), which also carries how much of that migration is
+done. The panel exposes body measurements, the asymmetry fields, module size, ease,
+and every solver weight. `asm`, `torso`, `relax`, `quantize`, `settle` and `LIBRARY`
+are on `globalThis` for console work.
 
 Colour-by-defect is the view to live in: orange is positive Gaussian curvature (domes —
 bust, shoulder), blue is negative (saddles — waist, underarm), grey is flat. It is a

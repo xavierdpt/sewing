@@ -86,8 +86,34 @@ export function bendingStencils(asm) {
  * it is 1 -- the energy IS (B|e|^2/A) theta^2 -- and in practice the solver
  * reaches a fraction of the stiffness it is asked for, because the bending
  * pass gets a fixed number of sweeps and shares its vertices with
- * constraints four orders stiffer. Fixed by measurement: `tools/fabric.mjs
- * --scan` asks for a bending length and reads one back, and this is the
- * value that makes those two the same number. See docs/11-cloth.md.
+ * constraints four orders stiffer.
+ *
+ * WAS 30.0, AND THAT WAS WRONG BY A FACTOR OF 16. Measured 2026-10-18
+ * (docs/18-validation.md 6.12), on two rigs that share only the solver:
+ *
+ *   - Peirce cantilever, cotton poplin at 160 substeps: ratio measured to
+ *     asked is 1.07 / 1.02 / 1.09 at element sizes 0.15 / 0.30 / 0.60 cm.
+ *     One constant across a 4x range of mesh. At 30 the same readings were
+ *     2.1 to 2.8; at the theoretical 1 they overshoot to 0.71, so a real
+ *     solver deficit of ~1.8x survives and 1 is not reachable today.
+ *   - Cusick drape, all seven presets at the viewer's own substep count:
+ *     DC spreads 32.6 to 97.3 across the published class bands, two inside
+ *     them, against every preset reading 87-98 at BEND_SCALE 30. Poplin's
+ *     hem falls 5.38 cm of a 6 cm overhang with 8 folds, against 1.14 cm
+ *     and none.
+ *
+ * WHY THE OLD VALUE SURVIVED. It was fitted on the cantilever alone, and
+ * `peirce()` sizes its mesh as `asked / 12` -- so the instrument held
+ * `edge / c` constant for every fabric and sampled the solver at exactly one
+ * configuration, by construction. A constant fitted at one point of a curve
+ * nobody had plotted, on the only experiment that could not see the error.
+ * The fix for that is not this number: it is that `tools/fabric.mjs` and
+ * `test/run.mjs` now call one `peirce()` (app/js/cantilever.js), and that
+ * the drape has to agree before this value moves again.
+ *
+ * NOT fitted to the drape. The Cusick bands are class ranges from the
+ * literature, not measurements of these cloths, and five of seven sit
+ * 1.0-1.1x past an edge at this value. Centring them would be fitting a
+ * solver constant to numbers that were never about this fabric.
  */
-export const BEND_SCALE = 30.0;
+export const BEND_SCALE = 1.8;

@@ -464,9 +464,57 @@ export function hemProfile(asm, { smooth = 2, ids = null } = {}) {
     hung += Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
   }
   const ys = ids.map((i) => asm.verts[i][1]);
+
+  // PER-FOLD DEPTHS, because `foldDepthCm` below is `max - min` over the whole
+  // hem: one fold standing further out than the rest sets it by itself, and a
+  // garment with four even folds reads the same as one with three flat folds
+  // and a spike. Comparing this solver with Blender on cotton poplin gave 3.48
+  // against 7.07 cm, and that single number cannot say which of those two
+  // shapes the difference is -- so it is reported as a list and a spread, and
+  // the old scalar is kept beside it rather than redefined.
+  //
+  // A fold's depth is its peak radius minus the mean of the two troughs either
+  // side of it, which is what a depth means on a wavy closed curve: measuring
+  // every peak against the single global minimum would charge each fold for
+  // the deepest trough on the other side of the garment.
+  const peaks = [];
+  for (let k = 0; k < n; k++) {
+    const prev = r[(k - 1 + n) % n], next = r[(k + 1) % n];
+    if (r[k] > prev && r[k] >= next && r[k] > mean) peaks.push(k);
+  }
+  const troughAfter = (k) => {
+    // walk forward to the next local minimum
+    for (let d = 1; d <= n; d++) {
+      const j = (k + d) % n;
+      if (r[j] <= r[(j - 1 + n) % n] && r[j] < r[(j + 1) % n]) return r[j];
+    }
+    return Math.min(...r);
+  };
+  const troughBefore = (k) => {
+    for (let d = 1; d <= n; d++) {
+      const j = (k - d + n) % n;
+      if (r[j] <= r[(j + 1) % n] && r[j] < r[(j - 1 + n) % n]) return r[j];
+    }
+    return Math.min(...r);
+  };
+  const foldDepthsCm = peaks
+    .map((k) => r[k] - (troughBefore(k) + troughAfter(k)) / 2)
+    .map((d) => +d.toFixed(2))
+    .sort((a, b) => b - a);
+  const depthMean = foldDepthsCm.length
+    ? foldDepthsCm.reduce((a, b) => a + b, 0) / foldDepthsCm.length : 0;
+
   return {
     folds,
     meanRadiusCm: +mean.toFixed(2),
+    // every fold's own depth, deepest first: the distribution behind the
+    // scalar on the next line
+    foldDepthsCm,
+    meanFoldDepthCm: +depthMean.toFixed(2),
+    // how uneven the folds are. 0 means every fold is the same depth; a large
+    // value means the peak-to-trough figure is being set by one fold.
+    foldDepthSpreadCm: foldDepthsCm.length
+      ? +(foldDepthsCm[0] - foldDepthsCm[foldDepthsCm.length - 1]).toFixed(2) : 0,
     foldDepthCm: +(Math.max(...r) - Math.min(...r)).toFixed(2),
     hemLengthCm: +hung.toFixed(2),
     hemLowYcm: +Math.min(...ys).toFixed(2),

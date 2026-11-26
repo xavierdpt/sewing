@@ -62,9 +62,16 @@
     border-bottom: 1px solid var(--line); backdrop-filter: blur(6px);
     overflow-x: auto; scrollbar-width: thin;
   }
+  /* The open document's name, not a brand: no uppercasing, because this is a
+     file name now and "MY-DRESS" is not what the person typed. Elided rather
+     than allowed to push the menu entries off the right edge. */
   .menubar-brand {
-    display: flex; align-items: center; padding: 0 12px 0 4px; color: var(--accent);
-    font-size: 15px; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
+    /* block, not flex: text-overflow has no effect on a flex container's
+       anonymous item, so a flex brand would clip mid-letter with no ellipsis. */
+    display: block; line-height: var(--bar-h); padding: 0 12px 0 4px;
+    color: var(--accent); font-size: 15px; letter-spacing: .04em;
+    white-space: nowrap; max-width: 28ch; overflow: hidden;
+    text-overflow: ellipsis; flex: 0 0 auto;
   }
   .menubar-item {
     background: none; border: 0; border-bottom: 2px solid transparent; color: var(--ink);
@@ -72,6 +79,26 @@
   }
   .menubar-item:hover { background: #262a33; }
   .menubar-item.on { border-bottom-color: var(--accent); color: var(--accent); }
+  /* An entry that drops a menu says so, and stays lit while it is down. */
+  .menubar-item.has-menu::after { content: ' \25be'; color: var(--dim); }
+  .menubar-item.has-menu.open { background: #262a33; }
+
+  .menu-pop {
+    position: fixed; z-index: 5001; min-width: 160px; padding: 4px 0;
+    border: 1px solid var(--line); border-top: 0; border-radius: 0 0 6px 6px;
+    background: color-mix(in srgb, var(--panel) 97%, transparent);
+    backdrop-filter: blur(6px); box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  }
+  .menu-item {
+    display: block; width: 100%; text-align: left; background: none; border: 0;
+    color: var(--ink); font: inherit; font-size: 14px; padding: 5px 12px 5px 24px;
+    white-space: nowrap; cursor: pointer; position: relative;
+  }
+  .menu-item:hover { background: #262a33; }
+  /* The dot is the only thing that says this dialog is already on screen --
+     without it, picking an open entry looks like the menu did nothing. */
+  .menu-item.on { color: var(--accent); }
+  .menu-item.on::before { content: '\25cf'; position: absolute; left: 9px; font-size: 10px; }
 
   .dlg {
     position: fixed; z-index: 1100; border: 1px solid var(--line); border-radius: 6px;

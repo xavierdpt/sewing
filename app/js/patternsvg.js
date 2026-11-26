@@ -22,6 +22,32 @@ const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;
 const flipY = (panel) => ({ ...panel, pts: panel.pts.map((q) => ({ ...q, y: -q.y })) });
 const polyOf = (panel) => (panel.loop || []).map((i) => ({ x: panel.pts[i].x, y: panel.pts[i].y }));
 
+/**
+ * What allowance does each vertex of this piece's outline take?
+ *
+ * One number for the whole pattern is what this did first, and it is wrong in
+ * the one place it matters most: a hem is turned up and wants two or three
+ * centimetres where the seams beside it want one. The allowance is therefore
+ * per edge KIND -- seam, top, bottom -- with a per-piece override, and the
+ * outline is offset by a different distance at each vertex (`offsetPoly`
+ * takes the array).
+ */
+function allowanceAt(panel, pattern, fallback) {
+  const base = { seam: fallback, top: fallback, bottom: fallback,
+    ...(pattern.allowance || {}), ...(panel.allowanceCm || {}) };
+  const loop = panel.loop || [];
+  const byPoint = new Map();
+  for (const r of panel.runs || []) {
+    const a = r.allowanceCm !== undefined ? r.allowanceCm : base[r.kind];
+    for (const i of r.pts) {
+      // a point shared by two runs takes the larger of them, so a corner is
+      // never cut short of either edge it belongs to
+      byPoint.set(i, Math.max(byPoint.has(i) ? byPoint.get(i) : 0, a));
+    }
+  }
+  return loop.map((i) => (byPoint.has(i) ? byPoint.get(i) : fallback));
+}
+
 export function patternSVG(pattern, {
   fabricWidthCm = 140, gapCm = 2.0, seamAllowanceCm = 1.0,
   title = null, pageGuides = true, showTiles = false,
@@ -93,7 +119,7 @@ export function patternSVG(pattern, {
       }
     }
 
-    const cutLine = offsetPoly(p.poly, seamAllowanceCm);
+    const cutLine = offsetPoly(p.poly, allowanceAt(p, pattern, seamAllowanceCm));
     const path = (poly) => poly.map((q, i) => `${i ? 'L' : 'M'}${f((q.x + dx) * CM)},${f((q.y + dy) * CM)}`).join(' ') + ' Z';
     S.push(`<path class="cut" d="${path(cutLine)}"/>`);
     S.push(`<path class="stitch" d="${path(p.poly)}"/>`);
@@ -147,9 +173,23 @@ export function patternSVG(pattern, {
     const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
     const gx = (cx + dx) * CM;
     const yTop = (b.y0 + 2 + dy) * CM, yBot = (b.y1 - 2 + dy) * CM;
-    S.push(`<path class="grain" d="M${f(gx)},${f(yBot)} L${f(gx)},${f(yTop)}"/>`);
-    S.push(`<path class="grain" d="M${f(gx - 0.5 * CM)},${f(yTop + 0.8 * CM)}`
-      + ` L${f(gx)},${f(yTop)} L${f(gx + 0.5 * CM)},${f(yTop + 0.8 * CM)}"/>`);
+    // The grain runs up the piece unless the piece says otherwise. A piece
+    // turned deliberately -- cut on the bias, or squared to a stripe -- says
+    // so in `grainDeg`, and the arrow has to follow it or the printed sheet
+    // contradicts the pattern it came from.
+    const gAng = ((p.grainDeg === undefined ? 90 : p.grainDeg) - 90) * Math.PI / 180;
+    const gL = (yBot - yTop) / 2;
+    const gc = [gx, (yTop + yBot) / 2];
+    const gdir = [Math.sin(gAng), -Math.cos(gAng)];
+    const gTip = [gc[0] + gdir[0] * gL, gc[1] + gdir[1] * gL];
+    const gTail = [gc[0] - gdir[0] * gL, gc[1] - gdir[1] * gL];
+    const wing = (sgn) => [
+      gTip[0] - gdir[0] * 0.8 * CM + sgn * 0.5 * CM * -gdir[1],
+      gTip[1] - gdir[1] * 0.8 * CM + sgn * 0.5 * CM * gdir[0],
+    ];
+    S.push(`<path class="grain" d="M${f(gTail[0])},${f(gTail[1])} L${f(gTip[0])},${f(gTip[1])}"/>`);
+    S.push(`<path class="grain" d="M${f(wing(-1)[0])},${f(wing(-1)[1])}`
+      + ` L${f(gTip[0])},${f(gTip[1])} L${f(wing(1)[0])},${f(wing(1)[1])}"/>`);
     S.push(`<text class="small" transform="translate(${f(gx + 0.35 * CM)},${f((cy + 6 + dy) * CM)})`
       + ` rotate(-90)" text-anchor="middle">GRAIN / UP</text>`);
     S.push(`<text class="big" x="${f(gx)}" y="${f((cy + dy) * CM)}" text-anchor="middle">${p.name}</text>`);
@@ -165,7 +205,9 @@ export function patternSVG(pattern, {
   // ---- sewing schedule
   let y = layout.heightCm + 3.0;
   S.push(`<text class="lab" x="${f(1 * CM)}" y="${f(y * CM)}">`
-    + `${esc(name)} - ${panels.length} panels, seam allowance ${seamAllowanceCm} cm.`
+    + `${esc(name)} - ${panels.length} panels, seam allowance `
+    + `${[...new Set(panels.flatMap((q) => allowanceAt(q, pattern, seamAllowanceCm)))]
+      .sort((u, v) => u - v).map((v) => +v.toFixed(2)).join(' / ')} cm.`
     + ` Solid = cut, dashed red = stitch line.</text>`);
   y += 1.4;
   S.push(`<text class="lab" x="${f(1 * CM)}" y="${f(y * CM)}">SEWING ORDER (match the balance marks):</text>`);

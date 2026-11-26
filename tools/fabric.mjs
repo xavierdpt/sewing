@@ -23,12 +23,18 @@
 // Simulated the same way for every fabric: one strip, clamped, nothing else
 // touching it, run until it stops moving.
 
+import fs from 'node:fs';
 import { Cloth, FABRICS, rigidityOf } from '../app/js/cloth.js';
 import { rectanglePattern } from '../app/js/testpieces.js';
 import { sewFlat } from '../app/js/patternio.js';
 import { clothSettings } from '../app/js/drapejob.js';
+import { peirce as sharedPeirce, PEIRCE_DEG as SHARED_PEIRCE_DEG,
+  PUBLISHED_BEND } from '../app/js/cantilever.js';
 
 const args = process.argv.slice(2);
+// Synchronous, because stdout is asynchronous when it is a pipe and these
+// loops never yield; see the long note further down.
+const say = (line) => fs.writeSync(1, line);
 const flag = (name, dflt) => (args.includes(name) ? args[args.indexOf(name) + 1] : dflt);
 const useBlender = args.includes('--blender');
 const edgeCm = +flag('--edge', 1.5);
@@ -83,16 +89,9 @@ const scan = args.includes('--scan');
 // Office paper is in the table on purpose. It is what the solver is being
 // accused of behaving like, and it is the control: if a fabric measures up
 // there, the complaint is right.
-const PUBLISHED = {
-  'cotton poplin': [1.5, 2.0],
-  linen: [2.0, 2.6],
-  'wool crepe': [1.6, 2.2],
-  'silk habotai': [0.9, 1.4],
-  'cotton jersey': [1.1, 1.8],
-  denim: [2.8, 3.8],
-  'interfaced twill': [4.0, 6.0],
-  '(80 gsm office paper)': [5.0, 7.0],
-};
+// moved to app/js/cantilever.js 2026-10-18, so the viewer quotes the same
+// band this does rather than keeping a second copy
+const PUBLISHED = PUBLISHED_BEND;
 
 const DEG = Math.PI / 180;
 const PEIRCE_DEG = 41.5;
@@ -192,85 +191,17 @@ function beam(fabric, { bend = null, rows = 12, Lcm = null } = {}) {
  * cannot droop: `rows` is how many rows of cloth span the free length, and it
  * is the knob a convergence check turns.
  */
-function peirce(fabric, { bend = null, rows = 12, maxEvals = maxSettles } = {}) {
-  let evals = 0;
-  const ask = bend ?? FABRICS[fabric].bendLengthCm;
-  // THE MESH MUST NOT DEPEND ON THE UNKNOWN. Sizing it as `L / rows` -- the
-  // obvious thing, and what this did first -- makes the measurement chase its
-  // own tail: a shorter trial length gives a finer mesh, a finer mesh gives a
-  // limper cloth (section 6.8), a limper cloth droops at a shorter length
-  // still. Silk habotai ran away to an 0.45 cm overhang on 0.037 cm triangles,
-  // which is a specimen barely longer than the cloth is thick. So the element
-  // size comes off the ASKED bending length and is held fixed across the
-  // bisection; only the specimen length varies.
-  const eff = edgeGiven ? edgeCm : Math.max(0.02, ask / rows);
-  const tipAngle = (L) => {
-    evals++;
-    const clampCm = Math.max(3, L);
-    const pattern = rectanglePattern({
-      width: widthCm, height: L + clampCm, edge: eff,
-    });
-    const asm = sewFlat(pattern, { y: 0 });
-    const z0 = -(L + clampCm) / 2;
-    const clampTo = z0 + clampCm;
-    asm.verts.forEach((p, i) => { asm.pinned[i] = p[2] <= clampTo + 1e-6; });
-    const xs = [...new Set(asm.verts.map((p) => +p[0].toFixed(5)))];
-    const xMid = xs.reduce((a, x) => (Math.abs(x) < Math.abs(a) ? x : a), xs[0]);
-    const line = asm.verts
-      .map((p, i) => ({ i, x: p[0], z: p[2] }))
-      .filter((q) => Math.abs(q.x - xMid) < 1e-6 && q.z >= clampTo - 1e-6)
-      .sort((a, b) => a.z - b.z)
-      .map((q) => q.i);
-    if (line.length < 3) return null;
-    const sim = new Cloth(asm, null, {
-      fabric, bend, substeps, bendSweeps, selfCollision: false, floorY: null,
-      terminalCmPerSec: 0, linearDragPerSec: 1.0,
-      ...(stretchSweeps ? { stretchSweeps } : {}),
-    });
-    sim.settle({ maxSeconds: 10 });
-    const o = asm.verts[line[0]], t = asm.verts[line[line.length - 1]];
-    const dh = Math.hypot(t[0] - o[0], t[2] - o[2]);
-    return Math.atan2(o[1] - t[1], Math.max(1e-9, dh)) / DEG;
-  };
-
-  // Centred on the answer Peirce's own definition predicts, L = 2c, rather
-  // than reaching five times past it: the trials at large L carry the whole
-  // cost of this measurement, because the mesh is fixed and the specimen is
-  // what grows. The halving and doubling below still rescue a bracket that
-  // turns out to be on the wrong side.
-  let lo = Math.max(0.3, 1.2 * ask), hi = Math.max(lo * 1.5, 3.2 * ask);
-  let aLo = tipAngle(lo), aHi = tipAngle(hi);
-  // A limp cloth droops past 41.5 even at the short end, a stiff one not even
-  // at the long end: widen until the crossing is bracketed.
-  while (aLo !== null && aLo > PEIRCE_DEG && lo > 0.15 && evals < maxEvals) {
-    hi = lo; aHi = aLo; lo = lo / 2; aLo = tipAngle(lo);
-  }
-  while (aHi !== null && aHi < PEIRCE_DEG && hi < 80 && evals < maxEvals) {
-    lo = hi; aLo = aHi; hi = hi * 2; aHi = tipAngle(hi);
-  }
-  if (aLo === null || aHi === null || aLo > PEIRCE_DEG || aHi < PEIRCE_DEG) {
-    return { bendLengthCm: null, overhangCm: null, evals, bracketed: false };
-  }
-  while (evals < maxEvals && (hi - lo) > 0.01 * Math.max(0.3, lo)) {
-    const span = aHi - aLo;
-    let mid = span > 1e-9 ? lo + (PEIRCE_DEG - aLo) * (hi - lo) / span : (lo + hi) / 2;
-    mid = Math.min(hi - 1e-4, Math.max(lo + 1e-4, mid));
-    const a = tipAngle(mid);
-    if (a === null) break;
-    if (a < PEIRCE_DEG) { lo = mid; aLo = a; } else { hi = mid; aHi = a; }
-  }
-  const L = (lo + hi) / 2;
-  return {
-    converged: (hi - lo) <= 0.01 * Math.max(0.3, lo),
-    bracketCm: +(hi - lo).toFixed(3),
-    bendLengthCm: +(L / 2).toFixed(3),
-    overhangCm: +L.toFixed(2),
-    rowCm: +eff.toFixed(3),
-    rowsSpanningL: +(L / eff).toFixed(1),
-    evals,
-    bracketed: true,
-  };
-}
+// `peirce()` now lives in app/js/cantilever.js, imported above. It was moved
+// there on 2026-10-18 because `test/run.mjs` had a SECOND cantilever of its
+// own, using the fixed-overhang method docs/18-validation.md 6.9 withdrew --
+// so the gate passed at 1.77 cm on a quantity that is not the bending length
+// while this tool read 0.93 cm for the same fabric (6.13). One measurement,
+// one implementation.
+const peirce = (fabric, opts = {}) => sharedPeirce(fabric, {
+  maxEvals: maxSettles, widthCm, substeps, bendSweeps, stretchSweeps,
+  ...(edgeGiven ? { edge: edgeCm } : {}),
+  ...opts,
+});
 
 function cantilever(fabric, { bend = null } = {}) {
   const clampCm = 6;
@@ -376,6 +307,7 @@ function cantilever(fabric, { bend = null } = {}) {
 
 if (args.includes('--beam')) {
   const names = only ? [only] : Object.keys(FABRICS);
+
   const rowSweep = (flag('--rowsweep', '12,18,24')).split(',').map(Number);
   const out = [];
   for (const name of names) {
@@ -408,8 +340,87 @@ if (scan) {
 }
 
 const names = only ? [only] : Object.keys(FABRICS);
+
+// ---- THE MESH LAW. docs/19-todo.md item 1 step 1.
+//
+// `peirce()` holds `edge = asked / 12` for every fabric, so the cantilever
+// always measures at ONE value of edge/c and BEND_SCALE is a calibration at
+// that single ratio. A garment uses a fixed triangle size whatever the cloth,
+// so poplin at 1.5 cm runs at edge/c = 0.88 -- ten times the ratio the
+// constant was fitted at, and it reads 3.93 cm instead of 1.7.
+//
+// If `c_measured / c_asked` is a clean function of `edge / c_asked`, the
+// compliance can be corrected by it analytically and BEND_SCALE deleted.
+// This sweep is what says whether that function exists. Each row is a full
+// Peirce bisection, so it is minutes per point; the per-row output is the
+// only reason it is watchable.
+if (args.includes('--mesh-law')) {
+  const sweep = String(flag('--mesh-law', '0.1,0.2,0.4,0.8,1.5,2.5')).split(',').map(Number);
+  say(`the mesh law: measured bending length against element size\n`);
+  say(`  edge/c is what peirce() holds at 1/12 = 0.083 and a garment does not\n\n`);
+  const rows2 = [];
+  for (const name of names) {
+    const ask = FABRICS[name].bendLengthCm;
+    say(`  ${name}  (asked ${ask} cm)\n`);
+    for (const e of sweep) {
+      const t0 = Date.now();
+      const q = peirce(name, { rows: specimenRows, edge: e });
+      const c = q.bendLengthCm;
+      const row = {
+        fabric: name,
+        'asked c': ask,
+        'edge cm': e,
+        'edge / c': +(e / ask).toFixed(3),
+        'measured c': c === null ? null : +c.toFixed(3),
+        'measured / asked': c === null ? null : +(c / ask).toFixed(3),
+        // the same excess expressed as rigidity, which is what the solver
+        // is actually given: B goes as c^3
+        'as rigidity': c === null ? null : +((c / ask) ** 3).toFixed(2),
+        bracketed: q.bracketed,
+      };
+      rows2.push(row);
+      say(`    edge ${String(e).padStart(5)} cm  edge/c ${String(row['edge / c']).padStart(6)}`
+        + `  c ${String(row['measured c'] ?? '--').padStart(7)}`
+        + `  ratio ${String(row['measured / asked'] ?? '--').padStart(6)}`
+        + `  rigidity ${String(row['as rigidity'] ?? '--').padStart(7)}x`
+        + `${q.bracketed ? '' : '  UNBRACKETED -- not a measurement'}`
+        + `   [${((Date.now() - t0) / 1000).toFixed(0)}s]\n`);
+    }
+    say('\n');
+  }
+  console.table(rows2);
+  say('\nIf "as rigidity" is a clean function of edge/c, BEND_SCALE can be\n'
+    + 'replaced by it. BEND_SCALE is 30, fitted at edge/c = 0.083.\n');
+  process.exit(0);
+}
+
+// STREAM A LINE PER FABRIC AS IT RESOLVES, before the table at the end.
+//
+// This run bisects an overhang and settles the cloth at every step, which is
+// minutes per fabric; building the whole table first meant the process
+// printed NOTHING for over half an hour. That is not slowness, it is a run
+// you cannot watch: no way to tell working from hung, no partial result if it
+// is interrupted, and the first attempt was abandoned at ten minutes on the
+// assumption that it had died.
+//
+// `fs.writeSync(1, ...)` AND NOT `console.log`, which is the part that is not
+// obvious and cost a second failed run to find. Node's stdout is
+// ASYNCHRONOUS when it is a pipe -- writes are buffered and flushed when the
+// event loop turns. This loop is synchronous and CPU-bound from the first
+// fabric to the last, so the event loop never turns, and every buffered line
+// arrives at once when the process exits. Printing as you go is therefore not
+// a matter of where the print statement is: it has to be a synchronous write
+// to the file descriptor, or the pipe sees nothing until it no longer
+// matters. Straight to a terminal it would have worked and the bug would
+// have been invisible.
+const started = Date.now();
+const since = () => `${((Date.now() - started) / 1000).toFixed(0)}s`;
+say(`measuring ${names.length} fabric(s): ${names.join(', ')}\n`);
+say('(a line per fabric as it resolves; the table follows at the end)\n\n');
+
 const rows = [];
 for (const name of names) {
+  say(`  ${name.padEnd(18)} ... `);
   const r = useFixed ? cantilever(name) : (() => {
     const q = peirce(name, { rows: specimenRows });
     // the same shape of record the table expects, plus what the bisection
@@ -425,6 +436,9 @@ for (const name of names) {
       : r.bendLengthCm < want[0] ? `${(want[0] / r.bendLengthCm).toFixed(1)}x too limp`
         : r.bendLengthCm > want[1] ? `${(r.bendLengthCm / want[1]).toFixed(1)}x too stiff`
           : 'in range';
+  say(`${r.bendLengthCm === null ? '--' : r.bendLengthCm.toFixed(2).padStart(5)} cm`
+    + `  (asked ${FABRICS[name].bendLengthCm}, published ${want[0]}-${want[1]})`
+    + `  ${verdict}   [${since()}]\n`);
   rows.push({
     fabric: name,
     gsm: FABRICS[name].gsm,

@@ -18,6 +18,8 @@ import { exportPatternJSON, importPatternJSON, sew, drape, fitField, fitReport,
   sewFlat } from './patternio.js';
 import { Cloth, BodyCollider, FABRICS, rigidityOf } from './cloth.js';
 import { annulusPattern, rectanglePattern } from './testpieces.js';
+import { setupCusick, measureCusick, verdictFor, PUBLISHED_DC } from './cusick.js';
+import { peirce, PUBLISHED_BEND } from './cantilever.js';
 import { neckFrame, floorOf, accordion, besideTheBody, dropOutcome } from './droptest.js';
 import { flaredSkirtPattern, placeSkirt, hemProfile, assemblyReport,
   waistRing } from './skirt.js';
@@ -30,6 +32,7 @@ import { WasmSewing } from './sewwasm.js';
 import { startTelemetry, tlog, flushTelemetry } from './telemetry.js';
 import { clearance } from './clearance.js';
 import { PatternTable } from './table.js';
+import { IMPLEMENTED, PLANNED, isPlanned, toolLabel, plannedMessage } from './patternedit.js';
 import { LIBRARY, byId } from './tiles.js';
 import { sub, add, mul, cross, norm, dist, DEG } from './geom.js';
 import { MenuBar } from './dockui.js';
@@ -112,6 +115,21 @@ function frameScene(reset = false) {
     camera.position.set(span * 0.62, mid + span * 0.26, span * 1.45);
     controls.update();
   }
+}
+
+/**
+ * Point the camera at a test piece standing away from the body.
+ *
+ * `frameScene(true)` frames the BODY, which is right for a garment and wrong
+ * for a specimen on a stand beside it: the Cusick disc was dropped correctly,
+ * measured correctly, and sat off the edge of the screen, which is a test you
+ * cannot watch. Anything placed with `besideTheBody` needs this.
+ */
+function frameOn(centre, radiusCm) {
+  const span = Math.max(30, radiusCm * 2.6);
+  controls.target.set(centre[0], centre[1], centre[2]);
+  camera.position.set(centre[0] + span * 0.55, centre[1] + span * 0.42, centre[2] + span * 1.1);
+  controls.update();
 }
 
 // ------------------------------------------------------------ app state
@@ -229,12 +247,34 @@ const params = {
   forceSeamsShut: false,
   // the cutting table
   tool: 'select', intakeDeg: 15, spreadDeg: 20,
+  mirrorMode: 'copy', joinToleranceCm: 0.5, grainDeg: 90,
+  hemAllowanceCm: 2.0,
   selfCollision: true, clothColour: 'stretch', slowMo: 1,
   // Collide edge midpoints as well as vertices while ARRANGING, so the body
   // does not bulge through the middle of a triangle while the cloth is still
   // bridging between a handful of contacts. Off for free drape, where it costs
   // the drop test its settle. See docs/15-manual-sewing.md.
   edgeCollision: true,
+
+  // The Cusick drape test. Standard geometry is a 30 cm specimen on an 18 cm
+  // support, which is what the published class bands are for, so these are the
+  // defaults and the readout says when they have been moved off them.
+  cusickSpecimenR: 15,
+  cusickSupportR: 9,
+  cusickEdge: 1.2,
+  // read-only readouts, filled by measureCusickNow()
+  cusickDC: 0,
+  cusickFolds: 0,
+  cusickVerdict: 'not measured yet',
+
+  // The Peirce cantilever. The element is 0.6 cm because that is where the
+  // measurement is both converged and cheap: 1.793 cm against an asked 1.7
+  // at 20 substeps, 1.815 at 160, and ten seconds rather than two hundred
+  // (docs/18-validation.md 6.12). The auto mesh is too fine to converge at
+  // the substep count the page runs.
+  bendEdge: 0.6,
+  bendMeasuredCm: 0,
+  bendVerdict: 'not measured yet',
 };
 
 // when a pattern has been sewn onto the body, this holds the fit result
@@ -661,6 +701,125 @@ function discPattern() {
 function accordionPattern() {
   return rectanglePattern({
     width: params.accWidthCm, height: params.accLengthCm, edge: params.accEdge,
+  });
+}
+
+/**
+ * The Cusick drape test, in the page.
+ *
+ * The specimen is laid flat BESIDE the body and draped in free air with no
+ * collider, because the standard apparatus is a disc on a stand and nothing
+ * else: a body in the way would be measuring the body. `besideTheBody` is the
+ * same placement the accordion test uses.
+ *
+ * It runs live rather than settling headlessly, because the point of having it
+ * here rather than only in `tools/drape_coefficient.mjs` is watching the cloth
+ * fall. The scoring is `measureCusick` from the shared module -- the same code
+ * the tool runs, not a second implementation of it.
+ */
+function startCusick() {
+  withBusy('cutting the specimen…', () => {
+    const centre = besideTheBody(surface, params.cusickSpecimenR * 2);
+    const rig = setupCusick({
+      specimenR: params.cusickSpecimenR,
+      supportR: params.cusickSupportR,
+      edge: params.cusickEdge,
+      y: 20, center: centre,
+    });
+    sim = new Cloth(rig.asm, null, {
+      fabric: params.fabric,
+      substeps: params.substeps,
+      internalDamping: params.internalDamping > 0 ? params.internalDamping : null,
+      terminalCmPerSec: params.terminalCmPerSec,
+      floorY: -1e5,
+    });
+    sim.pattern = rig.pattern;
+    sim.cusick = rig;
+    clearShell();
+    asm = rig.asm;
+    loadedPattern = null;
+    loadedName = `cusick-${params.cusickSpecimenR * 2}cm`;
+    buildClothMesh();
+    // Look at it. The specimen stands beside the body by construction, so the
+    // default framing shows the body and not the test.
+    frameOn([centre[0], 20 - params.cusickSpecimenR * 0.4, centre[1]], params.cusickSpecimenR);
+    playing = true;
+    params.cusickVerdict = 'draping -- measure when it stops moving';
+    refreshGUI();
+    console.log(`Cusick specimen: ${params.cusickSpecimenR * 2} cm disc on a `
+      + `${params.cusickSupportR * 2} cm support, ${rig.asm.verts.length} vertices, `
+      + `${rig.pinned} pinned. ${rig.specimenR === 15 && rig.supportR === 9
+        ? 'Standard geometry.' : 'NOT the standard geometry -- published bands do not apply.'}`);
+    updateHUD();
+  });
+}
+
+/**
+ * Score the specimen as it stands.
+ *
+ * Reports whether the cloth is still moving rather than refusing to measure:
+ * a number taken mid-fall is not a drape coefficient, and the one thing worse
+ * than no reading is a reading that does not say it is premature.
+ */
+function measureCusickNow() {
+  if (!sim || !sim.cusick) {
+    console.warn('no Cusick specimen on screen -- drop one first');
+    return;
+  }
+  const r = measureCusick(sim.cusick);
+  const moving = sim.rmsSpeed();
+  const still = moving < 0.6;
+  params.cusickDC = r.DC;
+  params.cusickFolds = r.folds;
+  params.cusickVerdict = !still
+    ? `STILL MOVING (${moving.toFixed(1)} cm/s) -- not a measurement yet`
+    : !r.starShaped
+      ? 'outline self-crosses -- the shadow is understated'
+      : verdictFor(params.fabric, r.DC);
+  refreshGUI();
+  const band = PUBLISHED_DC[params.fabric];
+  console.log(`Cusick DC ${r.DC}%  (${params.fabric}, published class `
+    + `${band ? `${band[0]}-${band[1]}` : 'n/a'})  folds ${r.folds}/${r.foldCeiling}`
+    + `  ${still ? 'settled' : `STILL MOVING at ${moving.toFixed(1)} cm/s`}`);
+  console.table([r]);
+}
+
+/**
+ * The Peirce cantilever, in the page.
+ *
+ * THE INSTRUMENT EXISTED AND NOTHING PRESSED IT. `tools/fabric.mjs` and the
+ * gate have measured bending length for weeks; the viewer, which is where
+ * someone looks at a fabric and forms an opinion about it, could not. That
+ * is the gap this project calls the house error, and it is why a fabric
+ * reading 2.8x its asked stiffness went unnoticed until a person said the
+ * cloth looked wrong.
+ *
+ * It draws nothing. A clamped strip drooping is not interesting to look at
+ * and the number is the whole point, so this reports and leaves the garment
+ * on screen alone.
+ */
+function measureBendingNow() {
+  withBusy('bending the strip…', () => {
+    const r = peirce(params.fabric, { edge: params.bendEdge });
+    const ask = FABRICS[params.fabric].bendLengthCm;
+    const band = PUBLISHED_BEND[params.fabric];
+    params.bendMeasuredCm = r.bendLengthCm ?? 0;
+    params.bendVerdict = !r.bracketed
+      ? 'no 41.5 deg crossing -- element too coarse for this cloth?'
+      : !r.converged ? `did not converge (bracket ${r.bracketCm} cm)`
+        : `${(r.bendLengthCm / ask).toFixed(2)}x the asked ${ask} cm`
+          + (band ? `, published ${band[0]}-${band[1]}` : '');
+    refreshGUI();
+    console.log(`Peirce cantilever, ${params.fabric}: ${r.bendLengthCm} cm`
+      + ` against an asked ${ask} (published ${band ? `${band[0]}-${band[1]}` : 'n/a'})`
+      + `; overhang ${r.overhangCm} cm, element ${r.rowCm} cm,`
+      + ` ${r.rowsSpanningL} rows, ${r.evals} settles`);
+    // rowsSpanningL is the guard: below about three rows the specimen is
+    // shorter than the mesh can resolve and the reading is meaningless.
+    if (r.rowsSpanningL !== undefined && r.rowsSpanningL < 4) {
+      console.warn(`only ${r.rowsSpanningL} rows across the specimen --`
+        + ' too coarse to trust. Lower the element size.');
+    }
   });
 }
 
@@ -2137,18 +2296,36 @@ function hudSnapshot(measure) {
   return hudStats;
 }
 
+/** The tool as the HUD says it: with its setting, or with its absence. */
+function toolDescription() {
+  if (params.tool === 'dart') return `dart, ${params.intakeDeg} deg intake`;
+  if (params.tool === 'spread') return `spread, ${params.spreadDeg} deg`;
+  if (params.tool === 'mirror') return `mirror, ${params.mirrorMode}`;
+  if (params.tool === 'join') return `join, refuse past ${params.joinToleranceCm} cm`;
+  if (isPlanned(params.tool)) return `${toolLabel(params.tool)} -- not built yet`;
+  // Not a default of 'select'. That is what this said, and it meant the HUD
+  // reported "select" while the turn tool was selected and turning things --
+  // the panel saying one thing and the pointer doing another.
+  return params.tool;
+}
+
 /** @param opts.measure  re-measure the cloth; a checkpoint, not a frame. */
 function updateHUD(opts = {}) {
   const el = document.getElementById('stats');
+  // The menubar's leftmost cell names the open document. It is set here, and
+  // only here, because `loadedName` is assigned at eight scattered places and
+  // a `setBrand` beside each of them is one more place to forget -- which is
+  // exactly how a label goes stale. Everything that changes what is in hand
+  // calls `updateHUD`, so the bar and the HUD's `pattern` row below cannot
+  // disagree: they are read from the same variable in the same paint.
+  bar.setBrand(loadedName || '(unsaved)');
   if (table && table.visible) {
     const r = table.report();
     const row = (k, v, c = '') => `<tr><td>${k}</td><td class="${c}">${v}</td></tr>`;
     el.innerHTML = '<table>'
       + row('on the table', `${r.pieces} pieces, ${r.seams} seams, ${r.darts} darts`)
       + row('cloth', `${(r.clothCm2 / 10000).toFixed(3)} m2`)
-      + row('tool', params.tool === 'dart'
-        ? `dart, ${params.intakeDeg} deg intake`
-        : (params.tool === 'spread' ? `spread, ${params.spreadDeg} deg` : 'select'))
+      + row('tool', toolDescription(), isPlanned(params.tool) ? 'warn' : '')
       + row('will it sew?', r.ok ? 'yes' : r.problems.join('; '), r.ok ? 'ok' : 'warn')
       + row('worst seam mismatch', `${r.worstSeamMismatchCm} cm`,
         r.worstSeamMismatchCm < 0.1 ? 'ok' : 'warn')
@@ -2569,7 +2746,8 @@ fFiles.add({ e: exportOBJ }, 'e').name('export the garment OBJ [E]');
 // test except that the test drops them.
 
 const clothDialog = dialogGUI({
-  id: 'cloth', label: 'cloth', title: 'the cloth itself -- shared by every test', width: 430,
+  id: 'cloth', label: 'cloth', title: 'cloth', width: 430,
+  hint: 'the fabric itself: every test draws on these, so a change here changes all of them',
 });
 const fCloth = clothDialog.gui;
 fCloth.add(params, 'fabric', Object.keys(FABRICS)).name('fabric')
@@ -2597,8 +2775,23 @@ fCloth.add({ s: () => { if (sim) { sim.step(1 / 60); updateClothMesh(); updateHU
 fCloth.add({ r: () => { if (sim) console.table(sim.report()); } }, 'r').name('report');
 fCloth.add({ x: clearDrop }, 'x').name('clear');
 
+// The tests share a menubar entry rather than taking one each: the bar is
+// flat, eleven sections are still waiting to move onto it, and fifteen
+// entries in one row is the single-panel problem again one level up. The
+// dialogs themselves are untouched -- same ids, same remembered positions,
+// and both can still be open side by side.
+//
+// `tests`, not `drop test`: dropping cloth is one experiment among several
+// and the name had already stopped covering what belongs here. The Cusick
+// drape coefficient and the Peirce cantilever both want a place in this menu
+// -- the standard tests that say whether a fabric behaves like linen or like
+// cardboard -- and neither of them drops anything.
+const dropMenu = bar.menu({ id: 'drop', label: 'tests' });
+
 const dropDialog = dialogGUI({
-  id: 'droptest', label: 'drop: disc', title: 'drop test -- the disc with a hole', width: 430,
+  id: 'droptest', label: 'disc', title: 'the disc with a hole', width: 430,
+  menu: dropMenu,
+  hint: 'drop a flat annulus and watch it fall: the dynamic test',
 });
 const fDrop = dropDialog.gui;
 fDrop.add(params, 'holeR', 3, 24, 0.5).name('hole radius cm');
@@ -2610,8 +2803,10 @@ fDrop.add({ t: () => putOnTable(discPattern(), `disc-${params.holeR}x${params.di
   .name('cut it as a pattern piece instead');
 
 const accDialog = dialogGUI({
-  id: 'accordion', label: 'drop: accordion', width: 430,
-  title: 'drop test -- the pleated strip, for thickness',
+  id: 'accordion', label: 'accordion', width: 430,
+  title: 'the pleated strip',
+  menu: dropMenu,
+  hint: 'fold a strip, drop it, measure the heap: does the cloth have thickness?',
 });
 const fAcc = accDialog.gui;
 fAcc.add(params, 'accWidthCm', 5, 60, 1).name('strip width cm');
@@ -2627,6 +2822,34 @@ fAcc.add({ m: () => { const r = stackReport(); if (r) console.table([r]); } }, '
 fAcc.add({ t: () => putOnTable(accordionPattern(),
   `strip-${params.accWidthCm}x${params.accLengthCm}`) }, 't')
   .name('cut it as a pattern piece instead');
+
+const cusickDialog = dialogGUI({
+  id: 'cusick', label: 'drape (Cusick)', width: 430,
+  title: 'the drape coefficient',
+  menu: dropMenu,
+  hint: 'BS 5058: a disc draped over a smaller one. 100 = a sheet of card, 0 = no stiffness at all',
+});
+const fCusick = cusickDialog.gui;
+fCusick.add(params, 'cusickSpecimenR', 5, 30, 0.5).name('specimen radius cm (standard 15)');
+fCusick.add(params, 'cusickSupportR', 3, 20, 0.5).name('support radius cm (standard 9)');
+fCusick.add(params, 'cusickEdge', 0.6, 3, 0.1).name('triangle edge cm');
+fCusick.add({ y: startCusick }, 'y').name('drape a specimen');
+fCusick.add({ m: measureCusickNow }, 'm').name('measure it');
+fCusick.add(params, 'cusickDC').name('drape coefficient %').listen().disable();
+fCusick.add(params, 'cusickFolds').name('folds').listen().disable();
+fCusick.add(params, 'cusickVerdict').name('against its class').listen().disable();
+
+const bendDialog = dialogGUI({
+  id: 'cantilever', label: 'cantilever (Peirce)', width: 430,
+  title: 'bending length',
+  menu: dropMenu,
+  hint: 'ASTM D1388: clamp a strip, slide it out until the tip droops 41.5 deg. Half that length is the bending length a textile lab quotes',
+});
+const fBend = bendDialog.gui;
+fBend.add(params, 'bendEdge', 0.2, 1.2, 0.05).name('triangle edge cm (0.6 is converged)');
+fBend.add({ m: measureBendingNow }, 'm').name('measure the current fabric');
+fBend.add(params, 'bendMeasuredCm').name('bending length cm').listen().disable();
+fBend.add(params, 'bendVerdict').name('against asked / published').listen().disable();
 
 const fSkirt = gui.addFolder('flare and gathers -- pattern pieces assembled');
 fSkirt.add(params, 'skirtPanels', 2, 8, 1).name('panels (2, 4, 6, 8)');
@@ -2759,10 +2982,55 @@ fSide.add(params, 'bodyInsetCm', 0, 0.2, 0.01)
   .name('draw the body inset by, cm (cloth half-thickness)')
   .onChange(buildBodyMesh);
 
+/**
+ * Say that a tool is in the menu but not built.
+ *
+ * The menu lists the planned tools on purpose. A tool nobody can find is a
+ * tool nobody can ask for, and the alternative -- documenting them in
+ * docs/14-editing.md and leaving the menu as it was -- is how this project
+ * ends up describing capabilities that the thing a person presses does not
+ * have (rule 9). So they are pressable, and pressing one says what it will do
+ * and what it is waiting on, in the words patternedit.js keeps so that the
+ * headless path and this dialog cannot drift apart.
+ */
+function sayPlanned(id) {
+  const msg = plannedMessage(id);
+  console.log(msg);
+  alert(msg);
+}
+
 const fTable = gui.addFolder('the cutting table -- edit the pieces');
 fTable.add({ t: openTable }, 't').name('put the pieces on the table [T]');
-fTable.add(params, 'tool', ['select', 'dart', 'spread']).name('tool')
-  .onChange((v) => { if (table) table.tool = v; });
+
+// What each gesture means, so the menu says it rather than naming a verb and
+// leaving the drag to be guessed at.
+const TOOL_GESTURE = {
+  select: 'select -- drag to orbit',
+  dart: 'dart -- drag from the apex outwards',
+  spread: 'spread -- drag from the pivot outwards',
+  turn: 'turn -- drag round the point you press',
+  move: 'move -- drag the piece where you want it',
+  mirror: 'mirror -- drag the line to reflect about',
+  split: 'cut in two -- drag the line to cut along',
+  join: 'join -- press one piece, release on another',
+};
+const toolOptions = {};
+for (const id of IMPLEMENTED) toolOptions[TOOL_GESTURE[id] || id] = id;
+for (const t of PLANNED) if (t.kind === 'gesture') toolOptions[`${t.label} (not built)`] = t.id;
+fTable.add(params, 'tool', toolOptions).name('tool')
+  .onChange((v) => {
+    if (table) table.tool = v;
+    if (isPlanned(v)) sayPlanned(v);
+    updateHUD();
+  });
+fTable.add(params, 'mirrorMode', {
+  'cut 2, one reversed': 'copy',
+  'open out on the fold': 'fold',
+  'flip this piece over': 'flip',
+}).name('what mirror does').onChange((v) => { if (table) table.mirrorMode = v; });
+fTable.add(params, 'joinToleranceCm', 0.05, 3, 0.05)
+  .name('join: refuse past, cm')
+  .onChange((v) => { if (table) table.joinToleranceCm = v; });
 fTable.add(params, 'intakeDeg', 2, 45, 1).name('dart intake, degrees')
   .onChange((v) => { if (table) table.intakeDeg = v; });
 fTable.add(params, 'spreadDeg', 2, 60, 1).name('spread, degrees')
@@ -2771,6 +3039,73 @@ fTable.add({ u: () => { if (table && table.undo()) updateHUD(); } }, 'u').name('
 fTable.add({ d: () => { if (table) table.topDown(); } }, 'd').name('look down at the table');
 fTable.add({ r: () => { if (table) console.table(table.report()); } }, 'r').name('measure the pattern');
 fTable.add({ x: () => { if (table) table.hide(); } }, 'x').name('clear the table');
+
+// The edits that are not a gesture. Each one goes through `table.command`,
+// which is the same machinery a drag goes through -- snapshot, operation,
+// `check()`, report -- so an undo undoes these too.
+fTable.add({ go: () => {
+  if (!table) return;
+  const r = table.command('true-darts');
+  if (!r) return;
+  console.log(`trued ${r.trued} of ${r.darts} darts: step `
+    + `${r.stepBeforeCm.worst} -> ${r.stepAfterCm.worst} cm, turn `
+    + `${r.turnBeforeDeg.worst} -> ${r.turnAfterDeg.worst} deg at the worst dart`);
+  if (r.failed.length) console.warn('could not true:', r.failed.join('; '));
+} }, 'go').name('true the darts');
+
+fTable.add({ go: () => {
+  if (!table) return;
+  const prof = table.command('dart-profile');
+  if (!prof) return;
+  console.table(prof.darts);
+  console.log(`folded shut: step worst ${prof.step.worst} cm, turn worst ${prof.turn.worst} deg`);
+} }, 'go').name('measure the darts folded shut');
+
+fTable.add({ go: () => {
+  if (!table) return;
+  const rows = table.command('edits');
+  if (!rows || !rows.length) { console.log('no edits recorded on this pattern yet'); return; }
+  console.table(rows);
+} }, 'go').name('list the edits');
+
+fTable.add({ go: () => {
+  if (!table) return;
+  // the fit test: the same edits, cut into a piece drafted for the body as it
+  // stands now. Change the body, press this, and the pattern follows.
+  const onto = currentSkirtPattern({ fresh: true });
+  const r = table.command('replay', { onto });
+  if (!r) return;
+  table.show(r.pattern, { origin: [55, 0, 0] });
+  loadedPattern = r.pattern;
+  console.log(`replayed ${r.applied} edits onto a freshly drafted skirt`
+    + `${r.skipped.length ? `, ${r.skipped.length} skipped: ${r.skipped.join(' | ')}` : ''}`);
+  updateHUD();
+} }, 'go').name('replay these edits onto this body');
+
+fTable.add(params, 'seamAllowanceCm', 0.5, 3, 0.1).name('allowance: seams, cm')
+  .onChange(() => applyAllowance());
+fTable.add(params, 'hemAllowanceCm', 0.5, 6, 0.1).name('allowance: hem, cm')
+  .onChange(() => applyAllowance());
+fTable.add(params, 'grainDeg', 0, 180, 1).name('grain on piece 1, degrees')
+  .onChange((v) => { if (table) table.command('grain', { panelIndex: 0, degrees: v }); });
+
+/**
+ * The allowance is a property of the pattern, not of the printer.
+ *
+ * It used to be an argument to `patternSVG` alone, so the sheet could be
+ * printed with 2 cm at the hem and the pattern itself did not know it -- and
+ * a pattern saved and reloaded came back with whatever the slider happened to
+ * say. Now it is set on the pattern, recorded as an edit, and the SVG reads
+ * it; the slider is how it gets there.
+ */
+function applyAllowance() {
+  if (!table || !table.pattern) return;
+  table.command('allowance', {
+    seam: params.seamAllowanceCm,
+    top: params.seamAllowanceCm,
+    bottom: params.hemAllowanceCm,
+  });
+}
 
 const fView = gui.addFolder('view');
 fView.add(params, 'colour', ['defect', 'strain', 'tile', 'gore', 'fit', 'plain']).name('colour by').onChange(buildTileMesh);
@@ -2803,6 +3138,11 @@ function openTable() {
   if (!table) {
     table = new PatternTable({
       scene, camera, controls, dom: renderer.domElement,
+      onPlanned: sayPlanned,
+      // An edit that cannot be done where it was asked for leaves the pattern
+      // alone; saying so only in the console would leave the person looking
+      // at an unchanged table with no idea why.
+      onRefused: (tool, err) => alert(`${tool}: ${err.message}`),
       onEdit: (pat, report) => {
         loadedPattern = pat;
         console.table(table.report());
@@ -2820,6 +3160,8 @@ function openTable() {
   table.intakeDeg = params.intakeDeg;
   table.spreadDeg = params.spreadDeg;
   table.tool = params.tool;
+  table.mirrorMode = params.mirrorMode;
+  table.joinToleranceCm = params.joinToleranceCm;
   table.show(pattern, { origin: [surface.yMax !== undefined ? 55 : 55, 0, 0] });
   table.topDown();
   loadedPattern = pattern;
@@ -2881,8 +3223,13 @@ function cutAsymmetricDarts() {
 }
 
 /** The pattern the table and the assembly share. */
-function currentSkirtPattern() {
-  if (loadedPattern && loadedPattern.meta && loadedPattern.meta.test === 'flared-skirt') {
+function currentSkirtPattern({ fresh = false } = {}) {
+  // `fresh` is for replaying an edit list: the point of a replay is to cut the
+  // same darts into a piece drafted for THIS body, and handing back the
+  // pattern already in hand -- which is what the shortcut below does, and
+  // rightly, everywhere else -- would replay the edits onto the pattern they
+  // came from and prove nothing.
+  if (!fresh && loadedPattern && loadedPattern.meta && loadedPattern.meta.test === 'flared-skirt') {
     return loadedPattern;
   }
   const waistV = surface.landmarkV('waist');

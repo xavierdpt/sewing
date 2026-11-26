@@ -190,7 +190,7 @@ If you implement one piece of published machinery, make it this one.
 | Tool | What it gives you | Licence |
 |---|---|---|
 | [FreeSewing](https://freesewing.dev/) | **Parametric sewing patterns as JavaScript.** Patterns adapt to measurements — explicitly "more inclusive of different body types" than grading. Auto-layout, **auto seam-allowance offsetting**, paperless patterns, SVG render, runs in browser and node. | MIT (code), CC (patterns) |
-| [Seamly2D](https://seamly2d.github.io/) | Qt pattern CAD, reusable scalable parametric patterns from custom measurements, PDF/SVG/PNG export, no fees | GPL |
+| [Seamly2D](https://seamly2d.github.io/) | Qt pattern CAD, reusable scalable parametric patterns from custom measurements, PDF/SVG/PNG export, no fees. Its source is unpacked in `src/seamly2d` and inventoried in §12 below | GPL |
 | Valentina | The project Seamly2D forked from in 2017; current builds are subscription | mixed |
 | GarmentCode | Programmatic parametric patterns + draping dataset | research |
 | Blender + **Export Paper Model** add-on | Unfolds any mesh to a flat net as PDF or SVG, with seam marks and thickness compensation | GPL |
@@ -200,3 +200,49 @@ If you implement one piece of published machinery, make it this one.
 FreeSewing deserves emphasis: it is JavaScript, it is MIT, it drafts from measurements
 rather than sizes, and **it already solves seam-allowance offsetting and pattern
 layout** — the two tedious parts of your export step.
+
+## 12. Seamly2D, read rather than cited
+
+The entry above lists it as a tool to stand on. It is also the only project in
+this list whose **source is on this machine** — `src/seamly2d`, cloned
+2026-10-17 at `44037bd`, GPL, outside this repo's tree like everything else in
+`src/` — so what it offers is a thing that can be looked up rather than
+inferred from its feature list (rule 8). The inventory was taken from
+`src/libs/vmisc/def.h`'s `Tool` enum, the one-class-per-tool tree under
+`src/libs/vtools/tools/`, and the `<action>` list in
+`src/app/seamly2d/mainwindow.ui` — the last of those because it is what a key
+actually presses (rule 9).
+
+**The shape of it first, because it decides everything else.** Every draft tool
+is a *construction*: it takes existing points and curves plus a formula over
+measurements, and emits one new point or curve into a dependency graph
+(`src/libs/vpatterndb`) that re-evaluates when a measurement changes. Nothing
+moves cloth. There is **no slash-and-spread, no wedge removal, and no "close
+this dart and see what happens" anywhere in the program** — that is not a gap
+in the reading, it is the model. Seamly2D drafts *outlines*, and the garment's
+shape is the draughtsman's responsibility, not the program's. This project
+works the other way round: the shape comes from a body
+([10-body.md](10-body.md)), the pieces are unfolded from it
+([09-pattern.md](09-pattern.md)), and the editor's two operations are about
+cloth rather than about lines ([14-editing.md](14-editing.md)).
+
+| what it offers | where | and here |
+|---|---|---|
+| **two dozen point constructions** — along a line, midpoint, bisector, normal, perpendicular foot, point on shoulder, triangle, distance+angle, nine kinds of intersection, four along-a-curve cuts | `tools/drawTools/toolpoint/` | not the tools; the **idea underneath** them, which is that an edit's location is a construction and not a mouse position. **Taken in the one form that was needed**: an apex is recorded as a fraction along a named edge plus an offset in from it, which is how a dart is actually placed |
+| **True darts** | `vtooltruedarts.cpp:102` | the one tool in the program that knows what a dart *does*. It rotates the legs about the apex by the dart's own angle and re-intersects, so the base line is continuous **once the dart is sewn shut**. **Taken, 2026-10-17**, together with the measurement it needed: the fixture's waistline had a 31.6° corner at a dart mouth and nothing in the repository would have said so |
+| **Rotation, mirror by line, mirror by axis, move** | `tools/drawTools/operation/` | ports directly, but at **piece** level. Rigid, so isometric for free, and mirror is how "cut 2, one reversed" and cut-on-fold get expressed. **Taken, 2026-10-17** |
+| **Union** (merge two pieces along a shared edge) | `tools/union_tool.cpp` | wanted, because `coarsenStrips` makes a bodice out of narrow strips. We get the hard half free: the shared edge is a `runs` entry with its `v3` list, so the correspondence is known and not asked for. Its missing inverse — split a piece along a path — is the half that moves a seam line. **Both taken, 2026-10-17**, the join refusing past a tolerance rather than stretching |
+| **History**, an editable list of the operations the pattern *is* | `src/app/seamly2d/dialogs/` | the real architecture, and the one place the parametric idea translates without importing measurements: store the edits, replay them over a re-unfolded base. We had a 50-deep JSON snapshot stack and no record of what was done. **Taken, 2026-10-17**: the edits are recorded, and a dart's apex with them, as a fraction along an edge and an offset in from it — which is what lets them replay onto a body they were not cut for |
+| **Piece properties**: per-node seam allowance, six corner modes (`PieceNodeAngle`, `def.h:172`), seven notch types × three subtypes (`def.h:237`), grainline, labels | `dialogs/tools/piece/` | **partly taken, 2026-10-17**: allowance is now per edge kind with a per-piece override, and grain a per-piece angle. Their six corner modes and seven notch shapes are not taken. One claim made here when this table was first written was wrong: the `.notch` class is **not** a stub — balance marks are drawn, and placed by `v3` identity, which Seamly2D has to ask the user for |
+| **Internal path, anchor point** | `tools/nodeDetails/` | annotation that is not a cut — fold lines, pocket placement — which for us is a `v3`-tagged polyline so it survives a re-unfold |
+| **Insert nodes** | `dialogs/tools/insert_nodes_dialog.cpp` | `splitEdgeAt`, already written, not exposed |
+
+**What must not come over.** The measurement and formula layer — SeamlyMe, the
+variables table, final measurements, the `qmuparser` expression engine — is a
+second source of truth for shape, competing with `body.js`. All of the curve
+tools (splines, Béziers, arcs, elliptical arcs, and the dozen curve and arc
+intersections, which is roughly half the tool count) resolve to outlines we
+would immediately sample back to mesh vertices; if smooth printed outlines are
+ever wanted that is a presentation change in `patternsvg.js`, not an editor
+tool. Layout mode, print layout and tiled printing are `nest()` plus the A4
+page guides, which is the same job already done.

@@ -105,9 +105,29 @@ solver it happens to have measured first as the truth.
 
 | backend | what it is | role |
 |---|---|---|
-| the side-car | **stock Blender**, triangle-against-triangle through a BVH | **the oracle.** Slow and right. Everything else is checked against it |
+| the side-car | **stock Blender**, triangle-against-triangle through a BVH | **the oracle.** Slow and right. Everything else is checked against it — **but only where it has converged**, see below |
 | sewcloth, in wasm | **derived from Blender's own solver** and improved on it — `src/sewcloth`, checked against `src/blender-fork` within a stated tolerance ([20-fork.md](20-fork.md) §8) | **the product.** What the page runs. Inherits Blender's springs and its backward-Euler solve; what it does *not* inherit is `collision.cc` |
 | `cloth.js` | this project's own, hand-rolled | **to be deleted.** Not the reference for anything a solver is asked: §3 above is why the drape left it — its contact is a point query per vertex and cannot bound what happens between them. It still runs the sewing, and only until that is ported |
+
+### The oracle is only an oracle where it has converged
+
+**Measured 2026-10-18** ([18-validation.md](18-validation.md) §6.16). On the
+four-panel skirt, halving the triangle edge from 3 cm to 1.5 cm moved **the
+side-car's own** mean fold depth from **1.32 cm to 3.91 cm — a factor of
+three** — on a solver nobody had touched. This project's moved 1.3x over the
+same refinement. Neither column had flattened.
+
+That does not unseat Blender as the arbiter. It does mean **arbitration
+requires a convergence check first**: a disagreement measured where the
+oracle itself is still moving with the mesh is a statement about the mesh,
+not about either solver. Every garment-versus-oracle figure recorded before
+that date was taken at 3 cm or 1.5 cm and is therefore not a converged
+comparison — including the 29x that opened the bending investigation.
+
+The clearance figures in the table below are a different matter: contact is
+not fold geometry, and `deepestPenetration` does not swing threefold under
+refinement. What needs the caveat is **fold depth and anything else read off
+the drape's shape**.
 
 **So when two of them disagree about a drape, `cloth.js` is not the side that
 is right by default — and neither is the one that was measured first.** The
