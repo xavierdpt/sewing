@@ -8,7 +8,7 @@
 // quadruples and the same compliance to `sc_set_hinges`. Deriving them twice
 // would be two chances to disagree about what a hinge is.
 //
-// This is also one of the pieces docs/19-todo.md item 1 step 6 moves out of
+// This is also one of the pieces todos/19-todo.md item 1 step 6 moves out of
 // cloth.js before that file is deleted; it moved early because the port needed
 // it.
 
@@ -89,7 +89,7 @@ export function bendingStencils(asm) {
  * constraints four orders stiffer.
  *
  * WAS 30.0, AND THAT WAS WRONG BY A FACTOR OF 16. Measured 2026-10-18
- * (docs/18-validation.md 6.12), on two rigs that share only the solver:
+ * (todos/18-validation.md 6.12), on two rigs that share only the solver:
  *
  *   - Peirce cantilever, cotton poplin at 160 substeps: ratio measured to
  *     asked is 1.07 / 1.02 / 1.09 at element sizes 0.15 / 0.30 / 0.60 cm.

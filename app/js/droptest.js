@@ -69,7 +69,7 @@ function landmarkHeights(surface) {
 /**
  * Drop a hollow disc on a body.
  *
- * @param surface  Torso or MeshSurface
+ * @param surface  Body
  * @param opts.innerR  cm; the number the whole test turns on
  * @param opts.outerR  cm
  * @param opts.edge    cm, target triangle edge

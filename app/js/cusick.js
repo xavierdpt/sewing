@@ -221,7 +221,7 @@ export function measureCusick({ pattern, asm, specimenR, supportR, edge, center 
   // The mesh cannot represent a fold narrower than a couple of its triangles,
   // so a fold count at the ceiling is a statement about the mesh and not about
   // the cloth. Printed beside the count rather than left to be inferred --
-  // docs/18-validation.md Step 2 asks for exactly this.
+  // todos/18-validation.md Step 2 asks for exactly this.
   const hemCircumferenceCm = 2 * Math.PI * specimenR;
   const foldCeiling = Math.floor(hemCircumferenceCm / (4 * edge));
 
@@ -259,7 +259,7 @@ export function measureCusick({ pattern, asm, specimenR, supportR, edge, center 
  * THE INSTRUMENT FOR A DEFECT NOTHING ELSE CAN SEE. Measured against Blender
  * on a skirt, this solver's folds get SHALLOWER the longer it runs -- mean
  * fold 1.56 cm at a 6 s budget, 0.64 cm at 30 s, while Blender holds its
- * folds indefinitely (docs/18-validation.md 6.11). A single reading at the
+ * folds indefinitely (todos/18-validation.md 6.11). A single reading at the
  * end cannot show that, and a reading taken before the cloth has settled is
  * not a measurement either, so the shape over time is the only honest way to
  * look at it: a drape that converges and a drape that is still flattening

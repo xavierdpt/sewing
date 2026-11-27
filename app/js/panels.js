@@ -18,6 +18,10 @@
 // rather than convenience.
 
 import { sub, add, mul, dot, cross, norm, len, dist, DEG, clamp } from './geom.js';
+// SUPERSEDED PREMISE (2026-11-26): the standard-triangle library is the project's
+// initial idea, which the project has deviated from. An issue here is probably old
+// code that no longer contributes -- but confirm that with the user before acting
+// on it. See CLAUDE.md rule 10 and `app/js/tiles.js`.
 import { byId } from './tiles.js';
 
 const ekey = (a, b) => (a < b ? `${a}_${b}` : `${b}_${a}`);

@@ -8,7 +8,6 @@ import GUI from 'lil-gui';
 
 import { Body, SIZE_CHART, BELLY, BUTTOCKS, POSTURE, POSES, SHOULDER_SLOPE, INCH,
   LENGTH_KEYS } from './body.js';
-import { MeshSurface } from './meshsurface.js';
 import { Assembly } from './assembly.js';
 import { buildGridShell, quantize, growOntoSurface } from './lattice.js';
 import { relax, settle, worstEdges, faceClearanceReport } from './relax.js';
@@ -97,9 +96,9 @@ scene.add(grid);
 /** Stand the body on the floor and frame it, whatever its height. */
 function frameScene(reset = false) {
   // the body's own yMin is the crotch now; the legs hang below it
-  const legFloor = (surface.heights && surface.heights.knee !== undefined)
-    ? surface.heights.knee : Infinity;
-  const base = Math.min(surface.yMin !== undefined ? surface.yMin : -24, legFloor);
+  const legFloor = (torso.heights && torso.heights.knee !== undefined)
+    ? torso.heights.knee : Infinity;
+  const base = Math.min(torso.yMin !== undefined ? torso.yMin : -24, legFloor);
   const floor = base - 2;
   ground.position.y = floor;
   grid.position.y = floor + 0.1;
@@ -108,7 +107,7 @@ function frameScene(reset = false) {
   });
   key.shadow.camera.updateProjectionMatrix();
   if (reset) {
-    const top = surface.yMax !== undefined ? surface.yMax : 40;
+    const top = torso.yMax !== undefined ? torso.yMax : 40;
     const mid = (floor + top) / 2;
     const span = Math.max(40, top - floor);
     controls.target.set(0, mid, 0);
@@ -135,7 +134,6 @@ function frameOn(centre, radiusCm) {
 // ------------------------------------------------------------ app state
 
 const params = {
-  source: 'parametric',       // 'parametric' | 'makehuman'
   formName: 'form',           // what a saved dress form is called
   module: 2.0,                // u, cm
   // Ease must clear the chord sag of a flat tile over a curved region --
@@ -194,7 +192,7 @@ const params = {
   // pretending to be a drafted dart. See app/js/skirtdarts.js.
   // W SEWS IN WASM. There is no second backend behind a switch any more:
   // src/sewcloth is the solver, cloth.js's sewing is on its way out
-  // (docs/19-todo.md item 1 step 6), and a switch between two implementations
+  // (todos/19-todo.md item 1 step 6), and a switch between two implementations
   // of the same algorithm is a thing that silently decides which one a bug
   // report is about.
   //
@@ -270,7 +268,7 @@ const params = {
   // The Peirce cantilever. The element is 0.6 cm because that is where the
   // measurement is both converged and cheap: 1.793 cm against an asked 1.7
   // at 20 substeps, 1.815 at 160, and ten seconds rather than two hundred
-  // (docs/18-validation.md 6.12). The auto mesh is too fine to converge at
+  // (todos/18-validation.md 6.12). The auto mesh is too fine to converge at
   // the substep count the page runs.
   bendEdge: 0.6,
   bendMeasuredCm: 0,
@@ -286,7 +284,6 @@ let fit = null;
 let loadedPattern = null;
 let loadedName = null;
 
-let surface = null;
 let asm = null;
 let sim = null;              // the running cloth simulation, if any
 // When a garment is being assembled from separate pieces, this holds what is
@@ -314,7 +311,6 @@ let legMesh = null;
 let armscyeLines = null;
 let tileMesh = null;
 let seamLines = null;
-let makehuman = null;      // cached MeshSurface
 
 const busy = document.getElementById('busy');
 /**
@@ -345,16 +341,6 @@ const withBusy = (label, fn) => {
 
 const torso = new Body();
 
-async function loadMakeHuman() {
-  if (makehuman) return makehuman;
-  const txt = await fetch('./models/bodice.obj').then((r) => {
-    if (!r.ok) throw new Error('bodice.obj not found - run tools/prep_bodice.py');
-    return r.text();
-  });
-  makehuman = new MeshSurface(txt);
-  return makehuman;
-}
-
 /**
  * The body, drawn inset by half the cloth's thickness.
  *
@@ -375,7 +361,7 @@ async function loadMakeHuman() {
  */
 function buildBodyMesh() {
   if (bodyMesh) { scene.remove(bodyMesh); bodyMesh.geometry.dispose(); }
-  const d = surface.mesh(params.source === 'parametric' ? { nu: 110, nv: 80 } : {});
+  const d = torso.mesh({ nu: 110, nv: 80 });
   const inset = Math.max(0, Math.min(params.bodyInsetCm, params.clothThicknessCm / 2));
   const pos = inset > 0
     ? d.positions.map((v, i) => v - d.normals[i] * inset)
@@ -386,7 +372,7 @@ function buildBodyMesh() {
   g.setIndex(d.indices);
   bodyMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
     color: 0x6b6256, roughness: 0.92, metalness: 0.0,
-    side: THREE.DoubleSide, flatShading: params.source === 'makehuman',
+    side: THREE.DoubleSide,
   }));
   bodyMesh.castShadow = true;
   bodyMesh.receiveShadow = true;
@@ -403,11 +389,10 @@ function buildArms() {
   }
   if (legMesh) { scene.remove(legMesh); legMesh.geometry.dispose(); legMesh = null; }
   armMesh = null; armscyeLines = null;
-  if (params.source !== 'parametric') return;
-  surface.includeArms = params.armsCollide;
-  surface.includeLegs = params.legsCollide;
+  torso.includeArms = params.armsCollide;
+  torso.includeLegs = params.legsCollide;
 
-  const ld = surface.legMesh();
+  const ld = torso.legMesh();
   const lg2 = new THREE.BufferGeometry();
   lg2.setAttribute('position', new THREE.Float32BufferAttribute(ld.positions, 3));
   lg2.setAttribute('normal', new THREE.Float32BufferAttribute(ld.normals, 3));
@@ -419,7 +404,7 @@ function buildArms() {
   legMesh.visible = params.showLegs;
   scene.add(legMesh);
 
-  const d = surface.armMesh();
+  const d = torso.armMesh();
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(d.positions, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(d.normals, 3));
@@ -433,7 +418,7 @@ function buildArms() {
 
   const pts = [];
   for (const side of [-1, 1]) {
-    const loop = surface.armscye(side);
+    const loop = torso.armscye(side);
     for (let i = 0; i < loop.length; i++) {
       const a = loop[i].p, b = loop[(i + 1) % loop.length].p;
       const push = (q) => pts.push(q[0] * 1.01, q[1], q[2] * 1.01);
@@ -459,6 +444,10 @@ const RAMP = (t) => {               // blue (negative K) -> grey -> orange (posi
 };
 const GORE_COLOURS = Array.from({ length: 24 }, (_, i) =>
   new THREE.Color().setHSL((i * 0.41) % 1, 0.45, 0.58));
+// SUPERSEDED PREMISE (2026-11-26): the standard-triangle library is the project's
+// initial idea, which the project has deviated from. An issue here is probably old
+// code that no longer contributes -- but confirm that with the user before acting
+// on it. See CLAUDE.md rule 10 and `app/js/tiles.js`.
 const TILE_COLOURS = Object.fromEntries(LIBRARY.map((t, i) => {
   const c = new THREE.Color().setHSL((i * 0.137) % 1, 0.42, 0.56);
   return [t.id, c];
@@ -488,7 +477,7 @@ function buildTileMesh() {
     // Orient against the body's own normal under the tile. The cheap
     // "point away from the y axis" test flips on the bust and the shoulders,
     // where the surface normal is nowhere near radial.
-    const bn = surface.closestPoint(c).normal;
+    const bn = torso.closestPoint(c).normal;
     const outward = (n[0] * bn[0] + n[1] * bn[1] + n[2] * bn[2]) < 0 ? mul(n, -1) : n;
     for (let k = 0; k < 3; k++) {
       const p = add(P[k], mul(sub(c, P[k]), inset));
@@ -561,14 +550,14 @@ function buildTileMesh() {
  */
 function startDrop() {
   withBusy('building the level set…', () => {
-    const neck = neckFrame(surface);
+    const neck = neckFrame(torso);
     const pattern = annulusPattern({
       innerR: params.holeR, outerR: params.discR, edge: params.discEdge,
     });
     const garmentAsm = sewFlat(pattern, {
       y: neck.yTop + params.dropCm, center: neck.center,
     });
-    sim = new Cloth(garmentAsm, surface, {
+    sim = new Cloth(garmentAsm, torso, {
       fabric: params.fabric,
       friction: params.friction,
       substeps: params.substeps,
@@ -576,7 +565,7 @@ function startDrop() {
       terminalCmPerSec: params.terminalCmPerSec,
       // 0 on the slider means "leave the fabric's own viscosity alone"
       internalDamping: params.internalDamping > 0 ? params.internalDamping : null,
-      floorY: floorOf(surface),
+      floorY: floorOf(torso),
     });
     sim.pattern = pattern;
     // What was dropped, kept on the sim so the settle can say what it was
@@ -628,7 +617,7 @@ function startDrop() {
  */
 function startAccordion() {
   withBusy('folding the strip…', () => {
-    const floorY = floorOf(surface);
+    const floorY = floorOf(torso);
     const pattern = rectanglePattern({
       width: params.accWidthCm, height: params.accLengthCm, edge: params.accEdge,
     });
@@ -638,9 +627,9 @@ function startAccordion() {
       pleatAngleDeg: params.accAngleDeg,
       y0: floorY + params.accDropCm,
       // on the floor beside the figure: this test is cloth against cloth
-      center: besideTheBody(surface, params.accWidthCm),
+      center: besideTheBody(torso, params.accWidthCm),
     });
-    sim = new Cloth(garmentAsm, surface, {
+    sim = new Cloth(garmentAsm, torso, {
       fabric: params.fabric,
       friction: params.friction,
       substeps: params.substeps,
@@ -719,7 +708,7 @@ function accordionPattern() {
  */
 function startCusick() {
   withBusy('cutting the specimen…', () => {
-    const centre = besideTheBody(surface, params.cusickSpecimenR * 2);
+    const centre = besideTheBody(torso, params.cusickSpecimenR * 2);
     const rig = setupCusick({
       specimenR: params.cusickSpecimenR,
       supportR: params.cusickSupportR,
@@ -833,7 +822,7 @@ function putOnTable(pattern, name) {
 /** How tall the heap on the floor is, which is what the accordion test asks. */
 function stackReport() {
   if (!sim || !asm) return null;
-  const floorY = floorOf(surface);
+  const floorY = floorOf(torso);
   const ys = asm.verts.map((p) => p[1]);
   const layers = Math.max(1, Math.round(params.accLengthCm / params.accPleatCm));
   return {
@@ -861,8 +850,8 @@ function startSkirt() {
     // The ring at a given ease is not the tape measurement plus anything
     // obvious -- 72 cm of waist is a 78 cm ring at 1 cm of ease -- and
     // drafting to the tape measure starts the skirt 8 % stretched.
-    const waistV = surface.landmarkV('waist');
-    const ring = waistRing(surface, { waistV, ease: params.skirtEaseCm });
+    const waistV = torso.landmarkV('waist');
+    const ring = waistRing(torso, { waistV, ease: params.skirtEaseCm });
     const pattern = flaredSkirtPattern({
       panels: params.skirtPanels,
       waistCm: ring.circumferenceCm,
@@ -872,15 +861,15 @@ function startSkirt() {
       edge: params.skirtEdge,
       waistV,
     });
-    const placed = placeSkirt(pattern, surface, { ease: params.skirtEaseCm, waistV });
-    sim = new Cloth(placed.asm, surface, {
+    const placed = placeSkirt(pattern, torso, { ease: params.skirtEaseCm, waistV });
+    sim = new Cloth(placed.asm, torso, {
       fabric: params.fabric,
       friction: params.friction,
       substeps: params.substeps,
       selfCollision: params.selfCollision,
       terminalCmPerSec: params.terminalCmPerSec,
       internalDamping: params.internalDamping > 0 ? params.internalDamping : null,
-      floorY: floorOf(surface),
+      floorY: floorOf(torso),
     });
     // Pin the waistband on over a third of a second. Without this the waist
     // vertices stay where the cone put them and the skirt hangs from a circle
@@ -924,8 +913,8 @@ function startAssembly() {
     // bodice by hand was not reachable at all.
     const pattern = currentArrangePattern();
     if (table) table.hide();
-    const laid = layOut(pattern, surface, { standoffCm: params.standoffCm });
-    sim = new Cloth(laid.asm, surface, {
+    const laid = layOut(pattern, torso, { standoffCm: params.standoffCm });
+    sim = new Cloth(laid.asm, torso, {
       fabric: params.fabric,
       friction: params.friction,
       substeps: params.substeps,
@@ -943,7 +932,7 @@ function startAssembly() {
       maxTensionGf: params.maxTensionGf,
       stitchSoftness: params.stitchSoftness,
       sewSpeedCmPerSec: params.sewSpeedCmPerSec,
-      floorY: floorOf(surface),
+      floorY: floorOf(torso),
     });
     sim.pattern = pattern;
     // Nothing is being sewn yet. Sewing is a choice of pieces, made below.
@@ -1158,7 +1147,7 @@ async function startWasmPass(todo) {
     wasmSew = new WasmSewing(mod, {
       asm,
       stitches: todo,
-      surface,
+      surface: torso,
       fabric: params.fabric,
       sewSpeedCmPerSec: params.sewSpeedCmPerSec,
       maxTensionGf: params.maxTensionGf,
@@ -1257,7 +1246,7 @@ function pauseSewing(why = 'stopped') {
 function waistPinReach(target, ids) {
   if (!ids || !ids.length) return { onBody: false, offCm: Infinity };
   const yRing = ids.reduce((a, i) => a + target.verts[i][1], 0) / ids.length;
-  const yWaist = surface.point(0, surface.landmarkV('waist'))[1];
+  const yWaist = torso.point(0, torso.landmarkV('waist'))[1];
   const offCm = Math.abs(yRing - yWaist);
   return { onBody: offCm <= params.waistPinReachCm, offCm };
 }
@@ -1306,7 +1295,7 @@ function finishAssembly() {
   if (isSkirt) welded.asm.meta.waistRingCm = pattern.meta.waistCm;
   const gap = sim.maxStitchGap();
   const report = sim.stitchReport({ closedCm: params.weldTolCm });
-  const next = new Cloth(welded.asm, surface, {
+  const next = new Cloth(welded.asm, torso, {
     fabric: params.fabric,
     friction: params.friction,
     substeps: params.substeps,
@@ -1320,7 +1309,7 @@ function finishAssembly() {
     stitches: welded.openStitches,
     maxTensionGf: params.maxTensionGf,
     stitchSoftness: params.stitchSoftness,
-    floorY: floorOf(surface),
+    floorY: floorOf(torso),
   });
   if (welded.openStitches.length) next.stitchStrength = 1;
   welded.velocities.forEach((v, i) => { next.vel[i] = v; });
@@ -1446,7 +1435,7 @@ async function sendToWasm() {
       count++;
     }
     const meanEdge = count ? total / count : 2;
-    const built = buildDrapeCloth(mod, target, surface, {
+    const built = buildDrapeCloth(mod, target, torso, {
       cell: 1.0,
       pinned,
       fabric: {
@@ -1762,7 +1751,6 @@ function refreshBody() {
   // so is any cloth that was resting on the old one
   BodyCollider.invalidate(torso);
   clearDrop();
-  if (params.source !== 'parametric') return;
   buildBodyMesh();
   loadedPattern = null;
   if (params.showShell) rebuildShell(); else clearShell();
@@ -1802,6 +1790,11 @@ function measureTable() {
   return rows;
 }
 
+// Superseded premise (2026-11-26): the tiled shell is the project's initial idea.
+// This function, the `shell (step two)` GUI folder and the `R` key are the only
+// path that presses it; the J/W/X workflow never calls it. An issue here is
+// probably old code that no longer contributes -- ask the user before repairing
+// or removing it. See CLAUDE.md rule 10 and `app/js/tiles.js`.
 function rebuildShell() {
   garment = null; fit = null;
   if (params.colour === 'fit') params.colour = 'defect';
@@ -1810,7 +1803,7 @@ function rebuildShell() {
     wrap: params.front ? false : params.wrap,
   };
   if (params.front) { o.uLo = -0.25; o.uHi = 0.25; }
-  asm = buildGridShell(surface, o);
+  asm = buildGridShell(torso, o);
   doRelax(params.iters);
 }
 
@@ -1825,7 +1818,7 @@ function relaxOpts() {
 
 function doRelax(n = params.iters) {
   if (!asm) return;
-  relax(asm, surface, { ...relaxOpts(), iters: n });
+  relax(asm, torso, { ...relaxOpts(), iters: n });
   buildTileMesh(); updateHUD();
 }
 
@@ -1837,7 +1830,7 @@ function doQuantize() {
 
 function doSettle() {
   withBusy('settling…', () => {
-    const r = settle(asm, surface, quantize, { rounds: 8, relaxOpts: relaxOpts() });
+    const r = settle(asm, torso, quantize, { rounds: 8, relaxOpts: relaxOpts() });
     asm = r.asm;
     console.table(r.log);
     buildTileMesh(); updateHUD();
@@ -1848,9 +1841,9 @@ function doGrow() {
   withBusy('growing…', () => {
     if (!asm || !asm.tiles.length) {
       asm = new Assembly({ u: params.module, weldTol: Math.min(0.5, 0.25 * params.module) });
-      asm.seedOnSurface(surface, 'R345', 0, (params.vLo + params.vHi) / 2, { ease: params.ease });
+      asm.seedOnSurface(torso, 'R345', 0, (params.vLo + params.vHi) / 2, { ease: params.ease });
     }
-    const r = growOntoSurface(asm, surface, { maxTiles: params.growMax, ease: params.ease });
+    const r = growOntoSurface(asm, torso, { maxTiles: params.growMax, ease: params.ease });
     console.log('grow:', r);
     doRelax(10);
   });
@@ -1893,15 +1886,15 @@ function download(text, type, filename) {
 }
 
 function patternJSON() {
-  const shell = buildGridShell(surface, {
+  const shell = buildGridShell(torso, {
     u: 1, cols: params.gores, rows: params.patternRows,
     vLo: params.vLo, vHi: params.vHi, ease: params.ease,
   });
-  const { panels } = makePattern(shell, { mode: 'strips', stripWidth: 1, surface });
+  const { panels } = makePattern(shell, { mode: 'strips', stripWidth: 1, surface: torso });
   return exportPatternJSON(panels, {
     gores: params.gores, rows: params.patternRows, ease: params.ease,
-    vLo: params.vLo, vHi: params.vHi, waistV: surface.landmarkV('waist'),
-    body: params.source,
+    vLo: params.vLo, vHi: params.vHi, waistV: torso.landmarkV('waist'),
+    body: 'parametric',
     drafted: new Date().toISOString().slice(0, 10),
   }, shell);
 }
@@ -1944,11 +1937,11 @@ function redraftForThisBody() {
 function drapePattern(pattern) {
   withBusy('sewing and draping…', () => {
     try {
-      garment = sew(pattern, surface, { ease: pattern.meta?.ease ?? params.ease });
-      const report = drape(garment, surface, {
+      garment = sew(pattern, torso, { ease: pattern.meta?.ease ?? params.ease });
+      const report = drape(garment, torso, {
         iters: params.drapeIters, gravity: params.gravity,
       });
-      fit = fitField(garment, surface);
+      fit = fitField(garment, torso);
       asm = garment;
       params.colour = 'fit';
       refreshGUI();
@@ -2025,9 +2018,6 @@ function loadForm() {
     applyForm(torso, loaded);
     params.formName = loaded.meta.name || name;
     if (loaded.pose && POSES[loaded.pose]) params.pose = loaded.pose;
-    // the parametric body is the one a form describes; a scanned mesh is not
-    // ours to reshape, so switch back to it rather than load into nothing
-    if (params.source !== 'parametric') { params.source = 'parametric'; surface = torso; }
     refreshBody();
     rebuildMeasurementGUI();
     refreshGUI();
@@ -2071,7 +2061,7 @@ function tryOnCurrent() {
 }
 
 function exportOBJ() {
-  const blob = new Blob([asm.toOBJ(`${params.source} u=${params.module}cm`)], { type: 'text/plain' });
+  const blob = new Blob([asm.toOBJ(`parametric u=${params.module}cm`)], { type: 'text/plain' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `bodice-shell-u${params.module}.obj`;
@@ -2095,7 +2085,7 @@ function exportOBJ() {
 function phaseMetrics(extra = {}) {
   if (!sim || !asm) return extra;
   try {
-    const c = clearance(asm, surface, {
+    const c = clearance(asm, torso, {
       collider: sim.collider,
       insetCm: Math.min(params.bodyInsetCm, params.clothThicknessCm / 2),
     });
@@ -2165,7 +2155,7 @@ function logDropSettled(outcome) {
   try {
     const extra = sim.drop.kind === 'accordion'
       ? { test: 'accordion', ...(stackReport() || {}), ...sim.selfOverlaps() }
-      : { test: 'disc', ...dropOutcome(sim, surface, sim.drop) };
+      : { test: 'disc', ...dropOutcome(sim, torso, sim.drop) };
     tlog(`${sim.drop.kind === 'accordion' ? 'accordion' : 'drop'}-${outcome}`,
       phaseMetrics({ ...extra, healthy: sim.healthy() }));
   } catch (e) {
@@ -2261,7 +2251,7 @@ function assemblyRows(row0, cls0) {
   return out;
 }
 
-const fitReportOf = () => fitReport(garment, surface);
+const fitReportOf = () => fitReport(garment, torso);
 
 /**
  * The expensive half of the HUD, measured at checkpoints rather than at 60 Hz.
@@ -2340,7 +2330,6 @@ function updateHUD(opts = {}) {
     const k = u === 'in' ? 1 / INCH : 1;
     const f2 = (v) => (v * k).toFixed(1);
     el.innerHTML = '<table>'
-      + `<tr><td>body</td><td>${params.source}</td></tr>`
       + `<tr><td>height</td><td>${f2(M.height)} ${u}</td></tr>`
       + `<tr><td>bust / underbust</td><td>${f2(M.bust)} / ${f2(M.underBust)} ${u}</td></tr>`
       + `<tr><td>waist / low hip</td><td>${f2(M.waist)} / ${f2(M.lowHip)} ${u}</td></tr>`
@@ -2413,8 +2402,8 @@ function updateHUD(opts = {}) {
       + 'red = stretched &middot; blue = slack, it will fold here</div>';
     return;
   }
-  const s = asm.stats(surface, params.ease);
-  const fc = faceClearanceReport(asm, surface, 0);   // against the real body
+  const s = asm.stats(torso, params.ease);
+  const fc = faceClearanceReport(asm, torso, 0);   // against the real body
   const hist = asm.tileHistogram();
   const top = Object.entries(hist).sort((a, b) => b[1] - a[1]).slice(0, 5)
     .map(([k, v]) => `${k}x${v}`).join(' ');
@@ -2423,7 +2412,6 @@ function updateHUD(opts = {}) {
   if (garment && asm === garment) {
     const r = fitReportOf();
     el.innerHTML = '<table>'
-      + row('source', params.source)
       + row('pattern', loadedName || '(drafted here)')
       + row('garment', `${garment.meta.panels} panels sewn`)
       + row('seams', (loadedPattern && loadedPattern.seams) ? loadedPattern.seams.length : '-')
@@ -2439,7 +2427,6 @@ function updateHUD(opts = {}) {
     return;
   }
   el.innerHTML = '<table>'
-    + row('source', params.source)
     + row('module u', `${params.module.toFixed(1)} cm`)
     + row('tiles', s.tiles)
     + row('vertices / edges', `${s.vertices} / ${s.edges}`)
@@ -2496,20 +2483,6 @@ const gui = new GUI({ title: 'bodice', width: 430 });
 gui.domElement.style.top = 'var(--bar-h)';
 gui.domElement.style.maxHeight = 'calc(100vh - var(--bar-h))';
 const fBody = gui.addFolder('body');
-fBody.add(params, 'source', ['parametric', 'makehuman']).onChange(async (v) => {
-  busy.textContent = 'loading body…'; busy.style.display = 'grid';
-  try {
-    surface = v === 'parametric' ? torso : await loadMakeHuman();
-    buildBodyMesh();
-    if (params.showShell) rebuildShell(); else clearShell();
-  } catch (err) {
-    alert(err.message);
-    params.source = 'parametric';
-    refreshGUI();
-  } finally {
-    busy.style.display = 'none';
-  }
-});
 fBody.add(params, 'showBody').onChange((v) => { if (bodyMesh) bodyMesh.visible = v; });
 
 const sizeNames = SIZE_CHART.labels.eu.map((eu, i) =>
@@ -2618,13 +2591,13 @@ fArms.add(params, 'showArmscye').name('show armscye').onChange((v) => {
   if (armscyeLines) armscyeLines.visible = v;
 });
 fArms.add(params, 'armsCollide').name('arms block the cloth').onChange(() => {
-  surface.includeArms = params.armsCollide;
+  torso.includeArms = params.armsCollide;
   if (params.showShell) rebuildShell();
 });
 fArms.add(params, 'showLegs').name('show legs (the body below the crotch)')
   .onChange((v) => { if (legMesh) legMesh.visible = v; });
 fArms.add(params, 'legsCollide').name('legs block the cloth').onChange(() => {
-  surface.includeLegs = params.legsCollide;
+  torso.includeLegs = params.legsCollide;
   if (params.showShell) rebuildShell();
 });
 fArms.add({ h: () => {
@@ -2658,6 +2631,7 @@ fArms.add({ a: () => {
 fBody.add({ m: () => console.table(measureTable()) }, 'm').name('measure the model');
 fBody.add({ f: () => frameScene(true) }, 'f').name('reframe the view');
 
+// Superseded premise: this whole folder drives the tiled shell. See `rebuildShell`.
 const fShell = gui.addFolder('shell (step two)');
 fShell.add(params, 'showShell').name('build a tiled shell').onChange((v) => {
   if (v) rebuildShell(); else clearShell();
@@ -2668,7 +2642,7 @@ fShell.add(params, 'garment', ['bodice', 'skirt', 'dress', 'torso', 'full'])
   .name('covers').onChange(() => {
     // bands are named landmarks, not numbers: adding the legs moved every
     // numeric v, so nothing should hold a literal
-    Object.assign(params, surface.band(params.garment));
+    Object.assign(params, torso.band(params.garment));
     refreshGUI();
     if (params.showShell) rebuildShell();
     if (loadedPattern) loadedPattern = null;
@@ -3162,7 +3136,7 @@ function openTable() {
   table.tool = params.tool;
   table.mirrorMode = params.mirrorMode;
   table.joinToleranceCm = params.joinToleranceCm;
-  table.show(pattern, { origin: [surface.yMax !== undefined ? 55 : 55, 0, 0] });
+  table.show(pattern, { origin: [torso.yMax !== undefined ? 55 : 55, 0, 0] });
   table.topDown();
   loadedPattern = pattern;
   clearDrop();
@@ -3203,14 +3177,14 @@ function cutAsymmetricDarts() {
   const fresh = flaredSkirtPattern({
     panels: params.skirtPanels,
     waistCm: (() => {
-      const waistV = surface.landmarkV('waist');
-      return waistRing(surface, { waistV, ease: params.skirtEaseCm }).circumferenceCm;
+      const waistV = torso.landmarkV('waist');
+      return waistRing(torso, { waistV, ease: params.skirtEaseCm }).circumferenceCm;
     })(),
     hemCm: Math.max(params.skirtHemCm, 1),
     lengthCm: params.skirtLengthCm,
     gather: params.skirtGather,
     edge: params.skirtEdge,
-    waistV: surface.landmarkV('waist'),
+    waistV: torso.landmarkV('waist'),
   });
   const cut = asymmetricDarts(fresh, { scale: params.dartScale });
   if (already) console.log('the darted skirt was redrafted, not darted twice.');
@@ -3232,8 +3206,8 @@ function currentSkirtPattern({ fresh = false } = {}) {
   if (!fresh && loadedPattern && loadedPattern.meta && loadedPattern.meta.test === 'flared-skirt') {
     return loadedPattern;
   }
-  const waistV = surface.landmarkV('waist');
-  const ring = waistRing(surface, { waistV, ease: params.skirtEaseCm });
+  const waistV = torso.landmarkV('waist');
+  const ring = waistRing(torso, { waistV, ease: params.skirtEaseCm });
   const pattern = flaredSkirtPattern({
     panels: params.skirtPanels,
     waistCm: ring.circumferenceCm,
@@ -3526,6 +3500,7 @@ addEventListener('keydown', (ev) => {
   if (ev.target.tagName === 'INPUT') return;
   if (arrangeKey(ev)) { ev.preventDefault(); return; }
   const k = ev.key.toLowerCase();
+  // R builds the tiled shell: the superseded premise. See `rebuildShell`.
   if (k === 'r') { params.showShell = true; rebuildShell();
     refreshGUI(); }
   else if (k === ' ') {
@@ -3560,8 +3535,7 @@ addEventListener('resize', () => {
 // ---------------------------------------------------------------- start
 
 // Step one is the body, on its own. Nothing is drawn on it until asked.
-surface = torso;
-Object.assign(params, surface.band(params.garment));
+Object.assign(params, torso.band(params.garment));
 buildBodyMesh();
 frameScene(true);
 rebuildMeasurementGUI();
@@ -3646,7 +3620,7 @@ function stepFrame() {
     // the asymmetric darts in, the worst gap parks at 1.72 cm and the feed
     // 0.56 cm short, measured from frame 100 to frame 600 without moving. W
     // then never stopped on its own and the page sewed at 2.3 fps
-    // indefinitely (docs/19-todo.md). A seam that will not close is the
+    // indefinitely (todos/19-todo.md). A seam that will not close is the
     // measurement -- the weld tolerance already leaves it open -- so the pass
     // ends and says so rather than feeding into a wall.
     //

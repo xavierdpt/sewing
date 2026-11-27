@@ -1,0 +1,36 @@
+# The RUN image for the garment viewer: python3 and the static page. No
+# compiler, no emscripten, no gcc.
+#
+# BUILD_IMAGE is the tag the build image was given, so the two stay separate
+# images built by separate commands rather than one multi-stage file.
+ARG BUILD_IMAGE=sewing-app-build:latest
+FROM ${BUILD_IMAGE} AS build
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+# python3 and nothing else. `python3 -m http.server` is what this project has
+# always served app/ with (README.md, docs/04-software.md section 8), and app/
+# is a static import-map directory with three.js vendored in and no build step
+# at all (docs/08-local-toolchain.md section 5) -- so there is nothing here for
+# a bundler or a node server to do.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/app
+# Build context is app/: index.html, js/, vendor/three, wasm/.
+COPY . .
+
+# The wasm comes from the BUILD image, not from the repository. app/wasm/ is
+# committed, but a committed artifact is one somebody built on a host; these
+# two lines are what make the page's solver reproducible from a checkout.
+COPY --from=build /opt/sewcloth/build/sewcloth.mjs /opt/app/wasm/sewcloth.mjs
+COPY --from=build /opt/sewcloth/build/sewcloth.wasm /opt/app/wasm/sewcloth.wasm
+
+# 0.0.0.0 is deliberate and is NOT the project's 127.0.0.1: a server bound to
+# the loopback INSIDE a container is reachable from nothing, published port or
+# not. What keeps the viewer off the network is the host side of the publish,
+# `-p 127.0.0.1:8777:8777` in appdocker.sh.
+EXPOSE 8777
+CMD ["python3", "-m", "http.server", "8777", "--bind", "0.0.0.0", "--directory", "/opt/app"]

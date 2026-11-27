@@ -7,6 +7,15 @@ The fitting literature already agrees with you, in one sentence: *draped slopers
 most straightforward way to fit an asymmetrical body, because you drape both sides.*
 Everything below is a way of making draping repeatable, measurable and reversible.
 
+> **Superseded, 2026-11-26.** This document describes the project's initial idea — a
+> garment assembled from a library of standard triangles — and **the project has
+> deviated from it**, per the user. It is kept as history, and as the reason the
+> repository is called a triangulated garment system; it is not a description of what
+> the software does. The current line is cloth pattern pieces drafted, edited on the
+> cutting table, sewn and draped: [13-assembly.md](13-assembly.md),
+> [14-editing.md](14-editing.md), [16-solvers.md](16-solvers.md). Nothing below has
+> been re-measured against the current code.
+
 ## 1. Why a triangle kit beats a toile for this
 
 A calico toile is a one-shot artefact. You cut it, pin it, mark it, unpick it, and the
@@ -122,15 +131,12 @@ because a triangulated shell will not drape ([01-geometry.md](01-geometry.md) §
 
 ## 4. Getting the result into the software
 
-Three routes, cheapest first:
+Two routes, cheapest first:
 
-1. **Type the measurements in.** The parametric torso in `app/js/torso.js` takes girths
+1. **Type the measurements in.** The parametric torso in `app/js/body.js` takes girths
    and heights plus `shoulderDrop`, `lateralShift`, `bustAsym` and `rotation`. For many
    bodies this is enough, and it takes ten minutes.
-2. **Photogrammetry of the duct-tape form** → OBJ → `MeshSurface`. See
-   [08-local-toolchain.md](08-local-toolchain.md); `colmap` is one `apt install` away.
-   Scale with a ruler in frame. This is the accurate route.
-3. **Reconstruct from the shell's own combinatorics** — you know every tile type and
+2. **Reconstruct from the shell's own combinatorics** — you know every tile type and
    every adjacency, so the shell's 3D shape is determined up to the fold angles. This
    is the elegant route and it is not built yet; see
    [06-open-questions.md](06-open-questions.md) §2.

@@ -8,7 +8,7 @@
 // This is the instrument for app/js/patternedit.js the way tools/trace.mjs is
 // the instrument for the sewing: every edit the viewer can make is applied
 // here, in the same order a person would, and the numbers it prints are the
-// ones the acceptance in docs/19-todo.md is written against. The viewer and
+// ones the acceptance in todos/19-todo.md is written against. The viewer and
 // this path call the SAME functions (rule 7) -- the only thing the viewer adds
 // is the drag that chooses the arguments.
 import { Body } from '../app/js/body.js';

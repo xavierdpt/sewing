@@ -9,12 +9,12 @@
 // and `test/run.mjs` had a SECOND cantilever of its own -- a different
 // measurement wearing the same name. The gate's version clamps a fixed 16 cm
 // overhang and reports the arclength at which the CHORD from the clamp
-// crosses 41.5 degrees, which docs/18-validation.md 6.9 withdrew on
+// crosses 41.5 degrees, which todos/18-validation.md 6.9 withdrew on
 // 2026-10-11 as not a material property: the strip's whole shape depends on
 // how much of it is hanging. `tools/fabric.mjs` was fixed that day; the gate
 // was not, and went on passing `a fabric bends by as much as it was asked to`
 // at 1.77 cm while the material property read 0.93 cm against an asked 1.7
-// (docs/18-validation.md 6.13). One measurement, one implementation, importable
+// (todos/18-validation.md 6.13). One measurement, one implementation, importable
 // by both -- the same rule that keeps the viewer and the headless path on the
 // same code.
 import { rectanglePattern } from './testpieces.js';
@@ -60,11 +60,11 @@ export const PEIRCE_DEG = 41.5;
  *
  * A 63 % change in a material property from a solver setting. 20 is what
  * `tools/fabric.mjs` has always used and therefore what every recorded
- * bending number in docs/18-validation.md was taken at, so it is the default
+ * bending number in todos/18-validation.md was taken at, so it is the default
  * here: a module whose default silently differed from the instrument's would
  * make the two disagree again, which is the exact fault this file was
  * extracted to end. It is NOT a claim that 20 is enough --
- * `--calibrated` uses 160, and docs/18-validation.md 8.5 accepts the
+ * `--calibrated` uses 160, and todos/18-validation.md 8.5 accepts the
  * non-convergence as a known deficit.
  */
 export const SUBSTEPS = 20;
@@ -121,13 +121,13 @@ export function tipAngle(fabric, L, {
  * @param {number} [opts.rows]  elements across the ASKED bending length. The
  *   mesh must not depend on the unknown: sizing it as `L / rows` makes the
  *   measurement chase its own tail, because a shorter trial gives a finer
- *   mesh, a finer mesh gives a limper cloth (docs/18-validation.md 6.8), and a
+ *   mesh, a finer mesh gives a limper cloth (todos/18-validation.md 6.8), and a
  *   limper cloth droops at a shorter length still. Silk habotai ran away to a
  *   0.45 cm overhang on 0.037 cm triangles.
  * @param {number} [opts.edge]  fixed element size, overriding `rows`. Note
  *   that `rows` holds `edge / c` CONSTANT across fabrics, which is why the
  *   cantilever never saw the mesh dependence it was calibrating against
- *   (docs/18-validation.md 6.12).
+ *   (todos/18-validation.md 6.12).
  * @param {number} [opts.maxEvals] settle budget, in trials
  */
 export function peirce(fabric, {

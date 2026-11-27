@@ -53,7 +53,6 @@ Annotated. Grouped by how useful I found them.
 - [Seamly2D](https://www.linuxlinks.com/seamly2d-pattern-making/) — open-source pattern CAD, forked from [Valentina](https://en.wikipedia.org/wiki/Valentina_(software)) in 2017.
 - [Export Paper Model (Blender add-on)](https://extensions.blender.org/add-ons/export-paper-model/) — mesh → flat net as PDF/SVG with seam marks and thickness compensation.
 - [3D to Flat](https://3dtoflat.com/) — browser unfolder, OBJ/STL in, PDF/SVG/DXF out with real-world sizing.
-- [MakeHuman base mesh](https://github.com/makehumancommunity/makehuman) — `makehuman/data/3dobjs/base.obj`, **CC0 since September 2020**. The body used in this project.
 - [COLMAP](https://colmap.github.io/) — packaged as `colmap` 3.9.1; see [08-local-toolchain.md](08-local-toolchain.md).
 - [BodyDigitizer](https://ar5iv.labs.arxiv.org/html/1710.01370) — open-source photogrammetry body scanner, up to 96 Raspberry Pi cameras, if you ever want the serious version.
 - [Validation of Smartphone-Based Photogrammetric 3D Body Scanning](https://arxiv.org/pdf/2608.12827) — how well phone photogrammetry actually matches a commercial depth scanner.

@@ -40,7 +40,7 @@ const withDarts = args.includes('--darts');
 // W, through sewcloth instead of cloth.js. The two sew the same garment with
 // the same algorithm -- the constant-rate feed -- in two implementations, so
 // this is the switch that holds them against each other on a real pattern
-// rather than on a two-vertex test (docs/19-todo.md item 1 step 4).
+// rather than on a two-vertex test (todos/19-todo.md item 1 step 4).
 const sewInWasm = args.includes('--sew-wasm');
 const jsonAt = args.includes('--json') ? args[args.indexOf('--json') + 1] : null;
 const objAt = args.includes('--obj') ? args[args.indexOf('--obj') + 1] : null;

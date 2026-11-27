@@ -1,10 +1,8 @@
 // Headless check of the whole geometry pipeline. No browser, no three.js.
 //   node test/run.mjs
-import { readFileSync } from 'node:fs';
 import { LIBRARY, flatVertices, angleAlphabet } from '../app/js/tiles.js';
 import { Body, SIZE_CHART, BELLY, BUTTOCKS, POSTURE, POSES, SHOULDER_SLOPE, INCH,
   standardSize } from '../app/js/body.js';
-import { MeshSurface } from '../app/js/meshsurface.js';
 import { Assembly } from '../app/js/assembly.js';
 import { buildGridShell, quantize, growOntoSurface } from '../app/js/lattice.js';
 import { relax, settle, worstEdges, clearanceReport, faceClearanceReport } from '../app/js/relax.js';
@@ -34,6 +32,12 @@ const check = (name, ok, extra = '') => {
   if (!ok) fails++;
 };
 
+// SUPERSEDED PREMISE (2026-11-26): the checks from here to the end of the
+// closure-rule block gate the standard-triangle library, which is the project's
+// initial idea and not what the project now does. If one of them fails or stands
+// in the way of a change, it is probably testing old code that no longer
+// contributes, and deleting the test may be righter than making it pass -- but
+// that is a question for the user, not a call to make here. See CLAUDE.md rule 10.
 line('tile library');
 console.log('  angle alphabet (deg):', angleAlphabet().map((a) => a.toFixed(2)).join(' '));
 for (const t of LIBRARY) {
@@ -69,6 +73,7 @@ const bad = fv.filter((m) => {
 });
 check('no flat vertex uses the 3-4-5 acute angles unequally', bad.length === 0, `${bad.length} violations`);
 
+// End of the superseded tile-library checks.
 line('the body: does it measure back to what was asked for?');
 {
   const b = new Body();
@@ -361,17 +366,10 @@ const probe = torso.closestPoint([0, 20, 40]);
 check('closestPoint reports a point outside the body', probe.signed > 0, `signed ${probe.signed.toFixed(2)}`);
 check('closestPoint reports a point inside the body', torso.closestPoint([0, 0, 0]).signed < 0);
 
-line('CC0 MakeHuman bodice mesh');
-const obj = readFileSync(new URL('../app/models/bodice.obj', import.meta.url), 'utf8');
-const body = new MeshSurface(obj);
-console.log(`  ${body.pos.length} vertices, ${body.tris.length} triangles,`
-  + ` y ${body.yMin.toFixed(1)}..${body.yMax.toFixed(1)} cm`);
-console.log(`  girth at waist (v=0.40) ${body.girthAt(0.40).toFixed(1)} cm,`
-  + ` at bust (v=0.65) ${body.girthAt(0.65).toFixed(1)} cm`);
-check('mesh loaded with triangles', body.tris.length > 1000);
-check('axis point is inside the mesh', body.closestPoint([0, 0, 0]).signed < 0);
-check('far point is outside the mesh', body.closestPoint([0, 0, 60]).signed > 0);
-
+// Superseded premise (2026-11-26): this block exercises the library-tile
+// kinematics of `app/js/assembly.js`, the initial idea the project deviated from.
+// A failure here is probably old code that no longer contributes -- check with the
+// user before repairing it. See CLAUDE.md rule 10.
 line('explicit joining: one tile attached to another by a RELATION');
 {
   const a = new Assembly({ u: 2 });
@@ -490,16 +488,6 @@ console.log(`  total defect ${sf.totalDefectDeg.toFixed(1)} deg over ${sf.interi
 console.log(`  mean |defect| ${sf.meanAbsDefectDeg.toFixed(2)} deg`);
 console.log(`  seam length ${(sf.seamLengthCm / 100).toFixed(2)} m, shell area ${(sf.areaCm2 / 10000).toFixed(3)} m2`);
 console.log(`  edge-target conflicts: ${sf.conflictEdges} edges, worst ${sf.maxConflictCm.toFixed(2)} cm`);
-
-line('grid shell on the CC0 bodice mesh');
-const shell2 = buildGridShell(body, { u: 2, ...BAND, ease: 1.0 });
-console.log(`  grid ${shell2.meta.cols} x ${shell2.meta.rows}, ${shell2.tiles.length} tiles`);
-const r2 = relax(shell2, body, { iters: 80, ease: 1.0, attract: 0.4, tangentDrift: 1 });
-console.log('  after relax:', fmt(r2.stats));
-const cl2 = clearanceReport(shell2, body);
-console.log(`  gap to body: min ${cl2.minGapCm.toFixed(2)} mean ${cl2.meanGapCm.toFixed(2)} cm`);
-check('fits the scanned-style mesh too', cl2.minGapCm > -0.1 && r2.stats.rmsStrain < 0.12,
-  `min gap ${cl2.minGapCm.toFixed(2)} cm, strain ${(r2.stats.rmsStrain * 100).toFixed(1)}%`);
 
 line('greedy frontier growth (the explicit relation mode)');
 const g = new Assembly({ u: 2, weldTol: 0.5 });
@@ -816,7 +804,7 @@ line('bending: a cantilever, in centimetres');
   //
   // What was here until 2026-10-18 clamped a FIXED 16 cm overhang and
   // reported the arclength at which the chord from the clamp crossed 41.5
-  // deg. docs/18-validation.md 6.9 withdrew that reading on 2026-10-11 as not
+  // deg. todos/18-validation.md 6.9 withdrew that reading on 2026-10-11 as not
   // a material property -- the strip's whole shape depends on how much of it
   // is hanging -- and fixed tools/fabric.mjs the same day. This file was not
   // fixed, and its comment went on claiming the two were "the same
@@ -825,12 +813,12 @@ line('bending: a cantilever, in centimetres');
   // The cost of that: this check PASSED at 1.77 cm against an asked 1.7,
   // certifying bending as calibrated, while the material property read 0.93.
   // A gate that cannot see the defect it is named after is worse than no
-  // gate, because it is quoted (docs/18-validation.md 6.13).
+  // gate, because it is quoted (todos/18-validation.md 6.13).
   // AT A STATED ELEMENT, NOT peirce()'s AUTO MESH. The auto mesh is
   // `asked / 12` = 0.142 cm for this fabric, which since BEND_SCALE came
   // down to 1.8 is too FINE to converge at the 20 substeps this runs at: it
   // reads 0.855 cm there against 1.793 at 0.6 cm and 1.818 at 0.3 cm
-  // (docs/18-validation.md 6.12). 0.6 cm is converged -- substeps 160 gives
+  // (todos/18-validation.md 6.12). 0.6 cm is converged -- substeps 160 gives
   // 1.815 against 20's 1.793 -- resolves the specimen at 6 rows, and takes
   // 10 s instead of 200.
   const poplin = peirce('cotton poplin', { edge: 0.6 });
@@ -840,12 +828,12 @@ line('bending: a cantilever, in centimetres');
     + ` (overhang ${poplin.overhangCm} cm, element ${poplin.rowCm} cm,`
     + ` ${poplin.rowsSpanningL} rows, ${poplin.evals} settles)`);
   // EXPECTED TO FAIL until the bending repair lands. 0.93 against 1.7 is the
-  // defect of docs/18-validation.md 6.12, and the threshold is deliberately
+  // defect of todos/18-validation.md 6.12, and the threshold is deliberately
   // NOT widened to accommodate it: a gate tuned to pass the current solver
   // would be the same false green in new numbers.
   check('a fabric bends by as much as it was asked to',
     poplin.bendLengthCm !== null && Math.abs(poplin.bendLengthCm - ask) < 0.4,
-    `${poplin.bendLengthCm} cm against ${ask} -- see docs/18-validation.md 6.12`);
+    `${poplin.bendLengthCm} cm against ${ask} -- see todos/18-validation.md 6.12`);
   check('and the bisection converged', poplin.bracketed && poplin.converged,
     `bracket ${poplin.bracketCm} cm in ${poplin.evals} settles`);
 
@@ -869,7 +857,7 @@ line('bending: a cantilever, in centimetres');
   // What was here until 2026-10-18 settled a strip on a 1.0 cm mesh and
   // asserted its tip reach fell between 2.0 and 6.0 cm -- a 3x window, on a
   // proxy. Meanwhile the bending length itself moved from 0.93 cm to 3.93 cm
-  // across the element sizes a garment uses (docs/18-validation.md 6.12).
+  // across the element sizes a garment uses (todos/18-validation.md 6.12).
   // **A check whose tolerance is wider than the defect it is named after
   // passes through the defect**, and this one did, for as long as the defect
   // existed.

@@ -288,7 +288,7 @@ costs no length, so nothing about the seam's measurements changes, and
 > reports `ok`, a worst seam mismatch of 0 cm and no problems, while the
 > garment quietly loses two stitches. `check()` compares the two sides of a
 > seam by LENGTH and never by which vertex ids they carry — queued in
-> [19-todo.md](19-todo.md).
+> [19-todo.md](../todos/19-todo.md).
 
 A separate number, and worth keeping apart from that one because it was first
 written up as the same fault: driving the page, `check()` reported *"seam S03
@@ -346,7 +346,7 @@ only its taxonomy of notch *shapes*, which is cosmetic.
   differently, a triangle wound against the rest and a degenerate one. It does
   **not** catch a seam whose two sides carry different vertices, which is a
   stitch that will not exist — see the measurement in §6 and the first item in
-  [19-todo.md](19-todo.md).
+  [19-todo.md](../todos/19-todo.md).
 - **The allowance and the grain reach the whole pattern, or piece 1.** The
   data model is per piece and per edge and the SVG honours it; the viewer has
   three numbers and a slider wired to the first piece, because a piece cannot

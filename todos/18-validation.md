@@ -11,12 +11,15 @@ It is deliberately written as a standing plan and not a retrospective. The
 measurements quoted are the ones taken on 2026-10-11 and are the baseline any
 of this work has to beat or preserve.
 
-The working queue lives in [19-todo.md](19-todo.md). Finished items are
-removed from there and referenced here, against whatever step, artifact or
-decision they settled.
+This document is the **spec** of the pair in `todos/`; its working queue is
+[19-todo.md](19-todo.md). Items are taken from here, added on top of the queue
+with an identifier, and once done are marked done there and referenced here,
+against whatever step, artifact or decision they settled. So an entry here that
+carries no "done" reference is work still to be queued, and that is how the
+next item is chosen.
 
 **Every section carries a `**State:**` line directly under its heading**, so
-finding the next candidate is `grep -A1 '^###' docs/18-validation.md` and not
+finding the next candidate is `grep -A1 '^###' todos/18-validation.md` and not
 a careful read. That line is the index; prose elsewhere in a section is not.
 It was informal at first and the audit of it gave both false positives and
 false negatives, which defeated the point.
@@ -1278,7 +1281,7 @@ Note that (2) is already written down as true. A preset cannot be judged by
 eye through a solver that is known to bend wrong, which is why the first move
 is the comparison and not an edit.
 
-**What settled it:** §3b of [16-solvers.md](16-solvers.md) makes the side-car
+**What settled it:** §3b of [16-solvers.md](../docs/16-solvers.md) makes the side-car
 the oracle. The same specimen and the same nominal cloth through both solvers
 gives a statement of the form *"we read N× too stiff and Blender reads the
 same"* (the data is wrong) or *"Blender reproduces the published band and we
@@ -1930,7 +1933,7 @@ taken at a setting nobody questioned turned out to be the thing that mattered**
 **0.93 cm against 1.7 asked**, published range 1.5-2.0. So `BEND_SCALE = 30`
 does not currently make this instrument correct for poplin — whatever it was
 fitted to produce, it does not produce it now. That also contradicts
-[11-cloth.md](11-cloth.md)'s "five of the seven presets now measure back in
+[11-cloth.md](../docs/11-cloth.md)'s "five of the seven presets now measure back in
 the published range", which should be re-measured before it is quoted again.
 
 The calibration mesh sits at edge/c = 0.083, just below the crossing at

@@ -1,5 +1,14 @@
 # 01 — The Geometry
 
+> **Superseded, 2026-11-26.** This document describes the project's initial idea — a
+> garment assembled from a library of standard triangles — and **the project has
+> deviated from it**, per the user. It is kept as history, and as the reason the
+> repository is called a triangulated garment system; it is not a description of what
+> the software does. The current line is cloth pattern pieces drafted, edited on the
+> cutting table, sewn and draped: [13-assembly.md](13-assembly.md),
+> [14-editing.md](14-editing.md), [16-solvers.md](16-solvers.md). Nothing below has
+> been re-measured against the current code.
+
 ## 1. The tile library
 
 Start from the 3-4-5 right triangle. Let
@@ -289,7 +298,7 @@ scales (`3u/4u/5u` and `6u/8u/10u`) and why `u = 1 cm` (fine) and `u = 2 cm` (co
 is the right pair of modules — the coarse tile is exactly four fine tiles in area, so
 regions can be refined by subdivision without leaving the library.
 
-Tile counts for a bodice shell. The parametric torso in `app/js/torso.js` measures
+Tile counts for a bodice shell. The parametric torso in `app/js/body.js` measures
 **0.60 m²** from hip to neck, and the tiled shell comes out at 0.62–0.67 m² depending
 on ease. The hand estimates below were made before the code existed; the **measured**
 column is what `tools/sweep.mjs` actually produces.

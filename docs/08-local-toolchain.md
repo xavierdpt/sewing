@@ -56,9 +56,11 @@ can mark it, and you can matte it.
 4. **Clean and scale** in MeshLab: Poisson surface reconstruction if you have a point
    cloud, remove the floor and background, fill holes, then scale so your ruler reads
    true. Decimate to ~20–50 k triangles.
-5. **Crop** to the bodice band and shift the waist to `y = 0` — `tools/prep_bodice.py`
-   does exactly this for the MakeHuman mesh and is easy to repoint at your scan.
-6. **Export OBJ** into `app/models/`, and `MeshSurface` takes it with no other changes.
+5. **Crop** to the bodice band and shift the waist to `y = 0`.
+6. **Export OBJ.** Note that **this project has nothing that reads it** — the body is
+   generated from measurements and there is no mesh-import path. The recipe is kept
+   because it is correct and the toolchain is installed; using it here would mean
+   writing the importer.
 
 The accuracy you need is about **±3 mm**, which is well inside what a phone camera and
 COLMAP give you on a textured, marked, ruler-referenced object at 1 m.
@@ -71,19 +73,13 @@ for human-shaped content returns: the **Atlas humanoid *robot*'s** torso STLs in
 glTF game avatars in `castle-game-engine-doc`, and the Stanford bunny in `glmark2-data`.
 Nothing usable.
 
-So the project uses two sources instead, both already set up:
+**The project does not need one.** The body is the parametric torso in
+`app/js/body.js`, driven by tape measurements — which the premise demands anyway,
+since the whole point is that standard bodies do not apply. So the absence above
+costs nothing.
 
-- **MakeHuman base mesh**, 19,158 vertices, **explicitly released CC0 in September
-  2020**, fetched directly from
-  `raw.githubusercontent.com/makehumancommunity/makehuman/master/makehuman/data/3dobjs/base.obj`
-  and cropped to a torso band by `tools/prep_bodice.py` → `app/models/bodice.obj`
-  (2,962 triangles, waist girth 66.2 cm, waist at `y = 0`).
-- **The parametric torso** in `app/js/torso.js`, driven by tape measurements, which is
-  the better default because the entire premise is that standard bodies do not apply.
-
-`makehuman` itself is **not** packaged for noble; if you want the full modelling app,
-use the MPFB2 add-on inside the packaged Blender, or MakeHuman Community's own build.
-Avoid SMPL/SMPL-X unless you have read their licence — it is research-only.
+If you ever do want a mesh body rather than a generated one, check the licence first:
+SMPL/SMPL-X is research-only.
 
 ## 3. Pattern output and fabrication
 

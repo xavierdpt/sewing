@@ -9,7 +9,7 @@
 // poplin, this tool reported hem, fold count and hang height agreeing with
 // Blender and fold depth disagreeing by 2.03x (3.48 cm against 7.07 cm) --
 // and could not say whether that gap is the same for a limp silk and a
-// stiffened twill. docs/18-validation.md 6.8 records the solver's bending as
+// stiffened twill. todos/18-validation.md 6.8 records the solver's bending as
 // miscalibrated AND MESH-DEPENDENT, so the gap is expected to vary with
 // stiffness; a comparison that cannot sweep the stiffness cannot test that.
 //
@@ -99,7 +99,7 @@ function buildGarment(edgeCm) {
   // already pinned here for that reason. `BEND_SCALE` escaped it by being a
   // module constant rather than an option, and when it went from 30 to 1.8
   // on 2026-10-18 Blender's own denim reading moved from 4.34 to 1.32 on a
-  // solver nobody had touched (docs/18-validation.md 6.15). Pinned
+  // solver nobody had touched (todos/18-validation.md 6.15). Pinned
   // explicitly now, so a change to the shipped constant leaves this fixture
   // and therefore Blender's column alone.
   //
@@ -160,7 +160,7 @@ function compare(fabric, edgeCm, { w, waistIds, restore }) {
   for (const i of waistIds) w.asm.pinned[i] = true;
   // --no-collider: OURS drapes in free air while Blender keeps the body.
   // NOT a fair comparison and not meant to be -- it is the discriminator for
-  // docs/18-validation.md 6.16, where the same repaired cloth UNDER-drapes on
+  // todos/18-validation.md 6.16, where the same repaired cloth UNDER-drapes on
   // the Cusick disc and OVER-folds on this skirt. The rigs differ in that the
   // disc has no collider; if removing it moves our fold depth toward the
   // oracle's, contact is implicated. Read our column against our own

@@ -90,7 +90,7 @@ export const FABRICS = {
   // old spread, because the old ordering (denim 2 %, poplin 4 %) was invented
   // too, and what the data gives is a RANGE and not per-fabric values. A flat
   // floor is the least this can be changed to and still be measured. Per-
-  // fabric limits await a tensile test; docs/18-validation.md Step 4.
+  // fabric limits await a tensile test; todos/18-validation.md Step 4.
   //
   // Cotton jersey stays at 25 %: it is a knit, outside that woven set, and
   // nothing here measures it.
@@ -212,7 +212,7 @@ export const DEFAULTS = {
   bendSweeps: 8,
   // Override `BEND_SCALE` from bending.js, which multiplies the bending
   // stiffness by 30. An INPUT since 2026-10-18 because it is the leading
-  // candidate for the over-stiffness of docs/18-validation.md 6.12 --
+  // candidate for the over-stiffness of todos/18-validation.md 6.12 --
   // converged, the solver reads ~2.5x too high a bending length on every
   // fabric at every mesh, which is ~15x in rigidity, and a constant factor
   // needs a constant to blame. null keeps the 30.
@@ -279,7 +279,7 @@ export const DEFAULTS = {
   // modulus runs two to three orders under its tensile, so 25 sits inside the
   // range; 100 measured barely different (shear strain 2.98 % against 2.73).
   // It should be settled against the Cusick drape coefficient
-  // (docs/18-validation.md Step 2), not against a lab.
+  // (todos/18-validation.md Step 2), not against a lab.
   //
   // THE EARLIER DECISION, kept because the reasoning was right at the time:
   // inert, because 25 and 6 were plausibility arguments and three
@@ -522,7 +522,7 @@ export const DEFAULTS = {
 // --------------------------------------------------------------- the collider
 
 /**
- * Wraps a Torso/MeshSurface for use in a time-stepped loop.
+ * Wraps a Body for use in a time-stepped loop.
  *
  * It is a thin wrapper on a signed distance field, plus the limb capsules.
  */
@@ -776,7 +776,7 @@ export { BEND_SCALE };
 export class Cloth {
   /**
    * @param asm      Assembly whose `verts` the solver integrates in place
-   * @param surface  Torso or MeshSurface, or null for free fall
+   * @param surface  Body, or null for free fall
    */
   constructor(asm, surface, opts = {}) {
     const o = { ...DEFAULTS, ...opts };

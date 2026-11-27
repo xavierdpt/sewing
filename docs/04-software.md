@@ -49,14 +49,10 @@ app/
   index.html            import map + HUD + key bindings
   package.json          only to declare { "type": "module" } for node
   vendor/three/         three.module.js, OrbitControls, lil-gui  (pinned 0.169.0)
-  models/
-    makehuman-base.obj  the full CC0 MakeHuman base mesh (19,158 verts)
-    bodice.obj          the extracted torso band, cm, waist at y = 0
   js/
     geom.js             vectors, Catmull-Rom, triangle trigonometry. No deps.
     tiles.js            the tile library; flat-vertex enumeration
-    body.js             parametric measurement-driven body
-    meshsurface.js      the same interface, backed by an arbitrary OBJ
+    body.js             parametric measurement-driven body, and the only one
     assembly.js         THE JOINING ENGINE: vertices, tiles, edges, attach(), welding
     lattice.js          grid tiling, library quantisation, greedy growth
     relax.js            static constraint projection ("let it fall")
@@ -64,7 +60,7 @@ app/
     cloth.js            XPBD: mass, gravity, friction, force-limited seams. BEING RETIRED
                         `bendScale` overrides bending.js's BEND_SCALE,
                         which is 1.8 since 2026-10-18, down from 30
-                        (docs/18-validation.md 6.12)
+                        (todos/18-validation.md 6.12)
     bending.js          the hinge stencils: a property of the mesh, not of a solver
     panels.js           shell -> flattenable panels
     patternio.js        the pattern file format, sew(), drape(), fitReport()
@@ -74,7 +70,7 @@ app/
     fabricio.js         making, saving and loading a cloth. PHYSICAL fields
                         (gsm, Peirce bending length, strain limit, trellis
                         angle) with Blender's set derived, not authored --
-                        the header says why, from docs/18-validation.md 6.12
+                        the header says why, from todos/18-validation.md 6.12
     skirt.js            flared and gathered skirts
     skirtdarts.js       asymmetric darts on purpose: a symmetric garment hides mistakes
     testpieces.js       flat shapes whose drape is known in advance (the hollow disc)
@@ -124,7 +120,7 @@ tools/
   drape_blender.mjs     this solver against Blender's, same metric. Its
                         fixture is sewn by OUR solver, so sewing changes move
                         Blender's column too; BEND_SCALE is pinned at that
-                        step, other terms are not (docs/18-validation.md 6.15)
+                        step, other terms are not (todos/18-validation.md 6.15)
                         --fabric <name> | --all   sweep the presets by stiffness
                         --edges 1.5,3,4.5         sweep the mesh resolution
                         --no-collider             diagnostic: OURS drapes in
@@ -136,7 +132,6 @@ tools/
                                                   measurement
   sew_blender.mjs       this project's sewing against Blender's
   to_blender.mjs        put the garment after W into Blender's own window
-  prep_bodice.py        extract the bodice band from the MakeHuman mesh
   make_pattern.mjs      draft a fitted bodice and write a printable SVG
   try_pattern.mjs       draft for one body, sew onto another, report the fit
   assemble.mjs          arrange, stitch, then drop the pieces
@@ -157,7 +152,7 @@ tools/
   sweep.mjs             module size vs seam length vs fit
   ease_sweep.mjs        how much ease the chord sag forces on you
   drape_coefficient.mjs the Cusick drape test, per preset, against published
-                        class bands (docs/18-validation.md Step 2)
+                        class bands (todos/18-validation.md Step 2)
                         --trace    DC against time, which is how the static
                                    equilibrium was found
                         --bend / --stretch / --sweeps   override one solver
@@ -187,7 +182,7 @@ three.js import, so the whole pipeline runs under node. That now includes the
 modules the side-car needs (`drapejob.js`, `clearance.js`), which is why they
 live in `app/js` rather than in `sim/`: the browser has to fetch them, and the
 headless checks have to exercise the same code the viewer does. `test/run.mjs` exercises the
-tile library, the closure rule, both body sources, explicit joining, grid tiling,
+tile library, the closure rule, the body, explicit joining, grid tiling,
 relaxation, the settle loop, greedy growth and the exporters — with no browser. That
 is what makes the geometry claims in [01-geometry.md](01-geometry.md) checkable rather
 than asserted.
@@ -203,16 +198,17 @@ node tools/ease_sweep.mjs
 ## 3. The body
 
 No human torso mesh exists in the Debian/Ubuntu archive (`apt-file` turns up only the
-**Atlas humanoid robot's** torso STLs). Two sources are therefore provided.
+**Atlas humanoid robot's** torso STLs), so the body is generated from measurements
+rather than imported.
 
-### Parametric (`torso.js`) — the default
+### Parametric (`body.js`) — the body
 
 A stack of horizontal rings — hip, high hip, waist, underbust, bust, chest, shoulder,
 neck — each a **superellipse** in the lateral/front-back plane, solved so its perimeter
 matches the measured girth, lofted with Catmull-Rom, plus Gaussian bust apices and
 asymmetry fields. Measured output: a 72 cm asked-for waist comes out at 72.2 cm.
 
-This is the right default because the project's premise is that standard sizes do not
+This is the right body because the project's premise is that standard sizes do not
 fit. It also carries the fields that matter for that premise and that no scan-driven
 pipeline will give you as knobs:
 
@@ -222,28 +218,6 @@ lateralShift  // lateral spine deviation
 bustAsym      // left/right cup difference
 rotation      // shoulder-girdle rotation about the vertical
 ```
-
-### Scanned (`meshsurface.js` + `models/bodice.obj`)
-
-The **MakeHuman base mesh**, explicitly released **CC0 in September 2020**, pulled from
-`makehumancommunity/makehuman` at `data/3dobjs/base.obj`. `tools/prep_bodice.py`:
-
-- keeps only the `body` group (the other ~138 groups are helper proxies — skirt,
-  tights, hair, teeth — and joint marker cubes sitting near the axis, which will wreck
-  any landmark detection if you leave them in; this bit me);
-- converts decimetres to centimetres;
-- finds the **waist** as the minimum convex-hull cross-sectional area between the hip
-  and the chest, and the **neck base** as the first slice above the bust narrowing past
-  9 cm half-width;
-- shifts the waist to `y = 0`, drops arms and head, writes 2,962 triangles.
-
-Measured: waist girth 66.2 cm, band 54 cm tall.
-
-`MeshSurface` exposes the *same* interface as `Torso` — `point(u,v)`, `normal`,
-`frame`, `closestPoint`, `closestOnOffset`, `girthAt`, `mesh` — so nothing downstream
-knows which it has. `point(u,v)` is a cylindrical ray cast from the central axis
-(outermost hit), `closestPoint` is exact point-triangle distance over a spatial hash.
-**A real body scan drops straight into this slot.**
 
 ## 4. The joining engine (`assembly.js`)
 
@@ -287,6 +261,13 @@ to 3·10⁻¹⁶ relative, at fold 0 and at fold 55°, and six flat equilaterals
 vertex are verified to give **exactly zero angle defect**.
 
 ## 5. Tiling and fitting
+
+> **Superseded, 2026-11-26.** The tile library this section snaps to was the project's
+> initial idea and the project has deviated from it (see [01-geometry.md](01-geometry.md)).
+> `buildGridShell()` itself is still live, but the pattern path calls it as a plain quad
+> grid (`u: 1, cols: gores, rows: patternRows`) and the library tile it assigns to each
+> triangle is incidental; the tile shell is reached only by the viewer's shell panel and
+> its `R` key, not by the `J`/`W`/`X` workflow.
 
 ### The lattice trick
 
@@ -412,8 +393,9 @@ edges, **DOF = 16** (a nearly rigid shell, as the theory demands), 0.67 m² of s
    into the cut file.
 7. **Quad regions for the skirt** — [01-geometry.md](01-geometry.md) §4/§5. Below the
    waist, build quads and let them shear.
-8. Load a real scan (`MeshSurface` already accepts any OBJ), symmetric-difference it
-   against the parametric body, and fit the measurements to the scan.
+8. ~~Load a real scan and fit the measurements to it.~~ **Withdrawn 2026-11-27** —
+   nobody is making scans, and the OBJ adapter is gone
+   ([../todos/body-source-spec.md](../todos/body-source-spec.md)).
 
 ## 8. Running it
 
@@ -422,9 +404,25 @@ cd app && python3 -m http.server 8777
 # then open http://127.0.0.1:8777/
 ```
 
+Or in docker, which needs docker and nothing else — no emscripten, no gcc, no Node,
+no Python. Two images, two commands: a build image that compiles `src/sewcloth` and
+runs its tests, and a run image with `python3` and the page.
+
+```bash
+./docker/app/appdocker.sh build    # the build image, then the run image
+./docker/app/appdocker.sh start    # the viewer on http://127.0.0.1:8777
+./docker/app/appdocker.sh stop     # or logs, or status
+```
+
+The page is baked into the run image rather than mounted, so editing `app/js/` and
+reloading wants the host server above. The wasm the image serves is compiled in the
+build image, not taken from the committed `app/wasm/` — measured byte-identical to it
+on 2026-11-26. `docker/knowledge-tree/` is a *different* pair of images, for the
+knowledge tree's own browser on `:3001`, and serves none of this.
+
 Keys, read off the handler at `app/js/main.js:3332` rather than off the help strip —
 which is wrong about `T`, recorded as an open item in
-[19-todo.md](19-todo.md):
+[19-todo.md](../todos/19-todo.md):
 
 `R` rebuild · `space` relax 20, or play/pause once a simulation exists ·
 `Q` requantise · `S` settle · `G` grow · `E` export OBJ · `P` print the pattern ·

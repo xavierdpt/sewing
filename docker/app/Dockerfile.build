@@ -1,0 +1,44 @@
+# The BUILD image for the garment viewer: everything needed to compile the
+# cloth solver to wasm, and nothing that has to be present to serve the page.
+#
+# Build context is src/sewcloth/ -- the solver's C source, its native tests and
+# build.sh. It is not the repository root on purpose: src/ also holds unpacked
+# upstream source (rule 8) and measures 6.5 GB, which is not something to hand
+# the docker daemon.
+#
+# Ubuntu 24.04 is not an arbitrary base. Its archive emscripten is
+# 3.1.6~dfsg-7 (noble/universe), which is the version build.sh is written
+# against: that emscripten's ES6 output references __dirname, absent from
+# Node's ESM scope, which is why build.sh emits TWO flavours -- ESM for the
+# page and CommonJS for the node smoke test. A newer emscripten from a version
+# manager or a third-party apt repository would quietly invalidate that
+# workaround.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# gcc and libc headers: build.sh compiles eight NATIVE test binaries from the
+# same sewcloth.c before it ever reaches emcc. nodejs runs the wasm smoke test.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates emscripten gcc libc6-dev nodejs \
+ && rm -rf /var/lib/apt/lists/*
+
+# MEASURED, so nobody re-adds it: setting EM_CACHE here FAILS the build.
+# Ubuntu's emscripten package ships a PREBUILT sysroot cache and sets
+# FROZEN_CACHE=1 (/usr/share/emscripten/.emscripten), so emcc refuses to
+# populate a cache rather than building one -- pointing EM_CACHE at an empty
+# /opt/emcache gives `Exception: FROZEN_CACHE is set, but cache file is
+# missing: "sysroot_install.stamp"`. The packaged cache is the right one; the
+# build touches neither variable.
+
+WORKDIR /opt/sewcloth
+COPY . .
+
+# THE GATE, inside the image that built it, exactly as the tree's build image
+# runs the tree's tests: build.sh compiles and RUNS test_kernels,
+# test_implicit, test_collide, test_sdf, test_self, test_hinge, test_stitch and
+# test_strain natively, then emits both wasm flavours, then runs
+# test/smoke.mjs against the CommonJS one. A non-zero exit anywhere in it means
+# no run image is produced.
+RUN bash build.sh

@@ -146,7 +146,7 @@ was born on the bar rather than migrated to it: `drape (Cusick)`, added
 in the panel.
 
 Everything a person uses to *make a garment* is still in the panel. The queue
-for the rest is in [19-todo.md](19-todo.md), which also records the thing to
+for the rest is in [19-todo.md](../todos/19-todo.md), which also records the thing to
 avoid repeating: `drape (Cusick)` was wired up, measured correctly, and
 dropped its specimen **off the edge of the screen**, because `frameScene(true)`
 frames the body and a test piece placed with `besideTheBody` is not the body.

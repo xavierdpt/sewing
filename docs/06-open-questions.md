@@ -58,7 +58,7 @@ at all for a plain cotton.
 diagonals go to `√(1 ± sin γ)`, so a 45° edge must be free to extend 12.2 % for a 15°
 trellis. Against this project's measured 6.1 % grain limit that makes
 `biasStrainFactor` ≈ **2.0**, not the 6 it was given when the mechanism was written
-(docs/18-validation.md §8.1). `biasCompliance` — how *soft* the bias is, rather than how
+(todos/18-validation.md §8.1). `biasCompliance` — how *soft* the bias is, rather than how
 far it may go — still needs force data.
 
 **And it makes the remaining experiment easier.** The protocol above needs a hemisphere
@@ -133,9 +133,6 @@ kirigami slit pattern in the flare region, and compare hang. The *Nature Communi
   from 22). These are vertices where no library assignment satisfies all neighbours.
   Properly this is an integer program; the current three-phase heuristic gets most of
   the way.
-- **`MeshSurface.point(u,v)` ray-casts over all triangles** — O(n) per call, fine for
-  3,000 triangles and occasional seeding, too slow for a dense scan. Needs the BVH it
-  does not have.
 - **Signed distance uses the nearest triangle's normal**, which is wrong near thin
   features and sharp concavities (the armpit). A proper generalised winding number
   would fix it.

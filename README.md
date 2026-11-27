@@ -1,9 +1,22 @@
 # Triangulated Garment System
 
-A design study and software plan for building garments out of a small library of
+A design study and software plan for building a garment on a real body and only then
+converting it into a conventional sewing pattern. It began as a small library of
 standard triangles (the 3-4-5 right triangle, isoceles and equilateral triangles)
-that are joined reversibly, fitted on a real body, and only then converted into a
-conventional sewing pattern.
+joined reversibly into a shell, which is where the name comes from.
+
+> **Superseded, 2026-11-26.** The standard-triangle library below was the project's
+> initial idea, and **the project has deviated from it**: it no longer builds garments
+> out of a kit of interchangeable 3-4-5, isoceles and equilateral tiles. What it does
+> now is draft cloth pattern pieces (circle-skirt gores and panels), edit them on the
+> cutting table, arrange them round the body, sew them and drape them as simulated
+> fabric — [docs/13-assembly.md](docs/13-assembly.md),
+> [docs/14-editing.md](docs/14-editing.md) and [docs/16-solvers.md](docs/16-solvers.md)
+> are the current line. The triangles that remain are a physics mesh, not a tile kit.
+> The tile library's mathematics ([docs/01-geometry.md](docs/01-geometry.md)) and its
+> physical kit ([docs/05-physical-kit.md](docs/05-physical-kit.md)) are kept as the
+> project's history. The code that still serves the old premise is listed in the
+> knowledge tree, under "The standard-triangle library is retired".
 
 The motivating problem: **commercial patterns encode an average body.** For a body
 that is asymmetric, differently proportioned, post-surgical, pregnant, wheelchair-
@@ -16,11 +29,11 @@ what you measured rather than from a table.
 
 | File | Contents |
 |---|---|
-| [docs/01-geometry.md](docs/01-geometry.md) | The mathematics. Why these triangles, the angle-closure result, Gaussian curvature and darts, why bodices want triangles and skirts want quads, resolution and seam-allowance economics, the hard limits. |
+| [docs/01-geometry.md](docs/01-geometry.md) | *(superseded — the initial idea)* The mathematics. Why these triangles, the angle-closure result, Gaussian curvature and darts, why bodices want triangles and skirts want quads, resolution and seam-allowance economics, the hard limits. |
 | [docs/02-joining.md](docs/02-joining.md) | Twenty joining techniques scored against eleven criteria. Why hook-and-loop is the wrong default, what to use instead at each stage, and the "elastic mesh" idea done properly. |
 | [docs/03-prior-art.md](docs/03-prior-art.md) | What has been attempted: Nervous System's Kinematics, Refashion (2025), Issey Miyake's 132 5. and A-POC, zero-waste cutting, kirigami shape-programming, embroidered Langer lines, computational pattern making, architectural panelization. |
 | [docs/04-software.md](docs/04-software.md) | Concrete architecture for the 3D test program. Stack recommendation, the five layers, the tile-snapping solver written out, XPBD seam model, export pipeline, 12-week build order. |
-| [docs/05-physical-kit.md](docs/05-physical-kit.md) | A buildable first kit: materials, tile sizes, counts, cost, the fitting session protocol, and the coarsening step that turns 200 triangles into 9 sewable panels. |
+| [docs/05-physical-kit.md](docs/05-physical-kit.md) | *(superseded — the initial idea)* A buildable first kit: materials, tile sizes, counts, cost, the fitting session protocol, and the coarsening step that turns 200 triangles into 9 sewable panels. |
 | [docs/06-open-questions.md](docs/06-open-questions.md) | What I am not sure about, the experiments that would settle it, and the failure modes to watch for. |
 | [docs/07-sources.md](docs/07-sources.md) | Annotated bibliography with links. |
 | [docs/09-pattern.md](docs/09-pattern.md) | **Shell to printable pattern**, **trying a pattern on**, and **the pattern file format**. Why blobby panels cannot be flattened and gores can; the exact unfold; sewing a pattern onto a body it was *not* drafted for, and reading the fit. |
@@ -35,13 +48,17 @@ what you measured rather than from a table.
 
 ## The code
 
-A working prototype is in [`app/`](app/) — a 3D viewer, a static, physics-free engine
-that joins library tiles by *relation* and settles the resulting shell onto a bodice,
-and an XPBD cloth simulation for the questions that a static solver cannot answer.
+A working prototype is in [`app/`](app/) — a 3D viewer, the cutting table, and the
+arrange → sew → drape path over simulated cloth. The static, physics-free engine that
+joins library tiles by *relation* and settles the resulting shell onto a bodice is
+still in the tree (`app/js/tiles.js`, `app/js/lattice.js`, the viewer's shell panel and
+its `R` key) and belongs to the superseded premise above.
 
 ```bash
 git submodule update --init --depth 1      # C-IPC, the reference solver (optional)
 cd app && python3 -m http.server 8777     # then open http://127.0.0.1:8777/
+./docker/app/appdocker.sh build          # ...or in docker: build image, then run image
+./docker/app/appdocker.sh start          # the same viewer on http://127.0.0.1:8777/
 python3 sim/server.py                      # the drape side-car (needs blender)
 node test/run.mjs                          # headless checks of the whole pipeline
 node tools/trace.mjs                       # arrange -> sew -> weld -> drape, as numbers
@@ -112,11 +129,10 @@ Arranging, sewing and welding all still happen here — the sewing in particular
 because it closes 76 of 76 seams to 0.024 cm where Blender's native sewing springs
 leave 9.2 cm. See [docs/16-solvers.md](docs/16-solvers.md).
 
-The bodice model is the **MakeHuman base mesh** (CC0, September 2020), cropped to a
-torso band by `tools/prep_bodice.py`; the default body is a **parametric torso driven
-by tape measurements**, including `shoulderDrop`, `lateralShift`, `bustAsym` and
-`rotation`, because the premise is that standard bodies do not apply. Nothing
-human-shaped exists in apt — only the Atlas *robot's* torso.
+The body is a **parametric torso driven by tape measurements**, including
+`shoulderDrop`, `lateralShift`, `bustAsym` and `rotation`, because the premise is that
+standard bodies do not apply. It is generated, not imported: nothing human-shaped
+exists in apt anyway — only the Atlas *robot's* torso.
 
 9. **A neckline that fits the neck is nowhere near the size that stays on it.** Dropped
    on a 36 cm neck, a hollow disc is held up by the shoulders until its hole passes

@@ -1066,7 +1066,7 @@ real threads and cache are in play). A change that reduced instructions in
 **Bending springs are the largest single solver cost**, at 8.3 % combined for
 `force_spring_angular` — which connects to this project's own finding that the
 bending model needs 16× the default budget to converge
-([18-validation.md](18-validation.md) §6.8).
+([18-validation.md](../todos/18-validation.md) §6.8).
 
 **A third correction to the same claim.** `perf` shows
 `mul_bfmatrix_lfvector ._omp_fn.0` and ~13 % of samples inside libgomp: the CG
@@ -1202,7 +1202,7 @@ against is exactly the position this project was in when
   `app/js/cloth.js`. As of 2026-10-17 `sc_capabilities()` carries two more
   fields, `bending` and `stitches`, both reading **0**, and the smoke test
   fails if either starts reporting 1 while the JS sewing is still the one
-  doing the work. The port is [19-todo.md](19-todo.md) item 1, with its design
+  doing the work. The port is [19-todo.md](../todos/19-todo.md) item 1, with its design
   recorded there: a constraint projection stage, not springs.
 
 `./build.sh` runs the native kernel tests, emits both wasm flavours and runs
@@ -1251,7 +1251,7 @@ frame, and that is precisely the case for 17b.
 
 ### It answered an item this project has carried open for weeks
 
-[19-todo.md](19-todo.md)'s one remaining queue entry is "validate the time
+[19-todo.md](../todos/19-todo.md)'s one remaining queue entry is "validate the time
 integration against two closed forms", unanswered because nothing here ever
 checked the integrator itself. For *this* integrator it is answered on day
 one — 1 s of free fall, stepped exactly as the solver steps:

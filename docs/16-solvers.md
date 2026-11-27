@@ -111,7 +111,7 @@ solver it happens to have measured first as the truth.
 
 ### The oracle is only an oracle where it has converged
 
-**Measured 2026-10-18** ([18-validation.md](18-validation.md) §6.16). On the
+**Measured 2026-10-18** ([18-validation.md](../todos/18-validation.md) §6.16). On the
 four-panel skirt, halving the triangle edge from 3 cm to 1.5 cm moved **the
 side-car's own** mean fold depth from **1.32 cm to 3.91 cm — a factor of
 three** — on a solver nobody had touched. This project's moved 1.3x over the
@@ -190,7 +190,7 @@ and what each one needs before the file can be deleted:
 
 | in `cloth.js` | used by | what has to happen |
 |---|---|---|
-| the sewing: constant-rate feed, force-limited stitches, hinge bending | **W** | `sc_set_hinges` + a bending solve and `sc_set_stitches` + `sc_feed_stitches` in `src/sewcloth`. sewcloth has springs, an implicit solve, SDF contact and vertex self-collision — it has **no bending and no stitches at all**, so W cannot move today. [19-todo.md](19-todo.md) item 2 |
+| the sewing: constant-rate feed, force-limited stitches, hinge bending | **W** | `sc_set_hinges` + a bending solve and `sc_set_stitches` + `sc_feed_stitches` in `src/sewcloth`. sewcloth has springs, an implicit solve, SDF contact and vertex self-collision — it has **no bending and no stitches at all**, so W cannot move today. [19-todo.md](../todos/19-todo.md) item 2 |
 | `BodyCollider` | `clearance.js`, the viewer, the tools, the gate | it is not solver code. It moves to its own module, unchanged |
 | `FABRICS`, `rigidityOf` | everything that names a fabric | likewise — a table, not a solver. And see the open item on mapping them onto sewcloth's mass/tension/damping |
 | `penetration()`, `report()`, `settle()` | the viewer's HUD and the gate | the parts worth keeping are instruments; they follow `BodyCollider` out |
@@ -202,7 +202,7 @@ project with no way to sew at all, which is why it is still here.
 **That is a statement about the *algorithm*, not about the file.** The
 constant-rate feed is what wins; `cloth.js` is merely where it currently
 lives. The direction of this project is that it stops living there: the feed
-and the hinge solve move into `src/sewcloth` ([19-todo.md](19-todo.md)), and
+and the hinge solve move into `src/sewcloth` ([19-todo.md](../todos/19-todo.md)), and
 `cloth.js` goes. Nothing new should be built in it.
 
 ## 4 — The transport

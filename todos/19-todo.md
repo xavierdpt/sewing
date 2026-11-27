@@ -1,17 +1,31 @@
 # 19 — TODO
 
-The working queue for [18-validation.md](18-validation.md).
+The working queue for its spec, [18-validation.md](18-validation.md). The two
+are a pair in `todos/`: the spec holds the requirements and the resolved
+questions, this document holds the work they imply.
 
-**How this document is maintained.** New items are added **on top**, so the
-newest candidate is always the first thing read. When an item is done it is
-removed from here and **referenced from its place in
-[18-validation.md](18-validation.md)** — against the step, artifact or decision
-it settled, with the numbers it produced. The consequence is the point: because
-finished work is recorded there and only unfinished work lives here,
-`18-validation.md` can be read directly to find the next simple candidate —
-anything it describes that carries no "done" reference is still open, and the
-short ones are the candidates. This document is the queue; that one is the
-record.
+**How this document is maintained.** The cycle is: read the spec, pick the next
+item from it, add it **on top** here with an identifier, do it, mark it done
+here, and reference it from the spec. Then read the spec again.
+
+- **New items are added on top**, so the newest candidate is always the first
+  thing read, and each one is **identified** — the identifier is what code
+  comments and the spec cite (`todos/19-todo.md item 1 step 5`), so it is not
+  reused or renumbered once it has been given.
+- **An item comes from the spec.** The spec is the source of work; this
+  document never invents an item that the spec does not imply.
+- **When an item is done it is marked done here**, in place, and
+  **referenced from its place in [18-validation.md](18-validation.md)** —
+  against the step, artifact or decision it settled, with the numbers it
+  produced.
+- **The next iteration starts from the spec again.** Because every settled
+  point there carries its "done" reference, what is left is what is not marked,
+  and the short ones among those are the next candidates. This is why the
+  reference back into the spec is not bookkeeping: it is what makes the spec
+  readable as a queue of remaining work.
+
+The cycle runs until every item is done. Work that is not this spec's gets its
+own **new spec + todo pair** in `todos/`, not an item here.
 
 ---
 
@@ -452,7 +466,7 @@ newest on top.
       small.
 
 And what is already done. The five pattern-editor items that stood here from 2026-10-17 are **done**,
-and are recorded in [14-editing.md](14-editing.md) §6 with the numbers they
+and are recorded in [14-editing.md](../docs/14-editing.md) §6 with the numbers they
 produced — truing the darts and the closed-dart profile, the rigid transforms
 and cut-on-fold, cutting a piece in two and joining two into one, the edit
 list and its replay onto another body, and the per-edge allowance and grain.
@@ -515,12 +529,12 @@ instrument, and the gate covers every one of them.
       the dart legs that were just merged -- not a fix.
 
 The next two came out of the recovery in
-[00-backtotrack.md](00-backtotrack.md) §7–§9 on 2026-10-16 and are ahead of the
+[00-backtotrack.md](../docs/00-backtotrack.md) §7–§9 on 2026-10-16 and are ahead of the
 validation work, which stays suspended while that document is open. A third —
 the sewing feeding for ever on a seam that would not close — was queued here
 and then closed on the same day: it was the dart legs being paired by index
 instead of by Thales, and with that fixed the garment sews in 88 frames
-([00-backtotrack.md](00-backtotrack.md) §8 and §9).
+([00-backtotrack.md](../docs/00-backtotrack.md) §8 and §9).
 
 - [ ] **Put the sewing in wasm.** X runs in the page at 8.8 ms a frame and W
       does not: **126 ms/frame (7.9 fps)** on the plain four-panel skirt, and
@@ -713,7 +727,7 @@ instead of by Thales, and with that fixed the garment sews in 88 frames
       `cloth.js` into their own modules — they are a collider and a table, not
       solver code, and `clearance.js`, the viewer, the tools and the gate all
       depend on them — and **`cloth.js` is deleted**
-      ([16-solvers.md](16-solvers.md) §3b has the inventory). Not before: it
+      ([16-solvers.md](../docs/16-solvers.md) §3b has the inventory). Not before: it
       is the only thing in this project that can sew, so deleting it first
       would leave no way to assemble a garment at all.
 
@@ -728,13 +742,13 @@ instead of by Thales, and with that fixed the garment sews in 88 frames
 - [ ] **Map the fabrics onto sewcloth, measured against the oracle.**
       **Every number in this item is void and has to be taken again:** it was
       measured while gravity pulled the cloth along the body's back
-      ([00-backtotrack.md](00-backtotrack.md) §7b), so the "6 % long hem" and
+      ([00-backtotrack.md](../docs/00-backtotrack.md) §7b), so the "6 % long hem" and
       "2 folds instead of 4" describe a garment being dragged sideways rather
       than a fabric. With down pointing down the same drape settles at
       160.04 cm against 160 cut, in 8 folds. Re-measure first; there may be
       nothing left to map. The wasm drape gets **contact** right — 0 % of the cloth inside the body,
       stock Blender's own clearance, in a sixtieth of its time
-      ([16-solvers.md](16-solvers.md) §3b) — and gets **stretch** wrong:
+      ([16-solvers.md](../docs/16-solvers.md) §3b) — and gets **stretch** wrong:
       169.68 cm of hem where the pattern was cut at 160 cm and both the oracle
       (160.07) and `cloth.js` (159.99) settle within 0.1 cm. About 6 % long,
       and 2 deep folds where the oracle throws 4, which is the same fact seen
@@ -812,9 +826,14 @@ file is the only place that has to be read to know what is next.
 
 ## Done
 
-Removed from the queue and recorded in [18-validation.md](18-validation.md),
-except where an item is interface rather than solver and its record is in
-[17-interface.md](17-interface.md):
+Items finished and recorded in [18-validation.md](18-validation.md), except
+where an item is interface rather than solver and its record is in
+[17-interface.md](../docs/17-interface.md).
+
+These were cut out of the **Open** list when they were finished, under the
+earlier practice of removing a done item rather than marking it. Items finished
+from here on are marked done where they stand in **Open** and are not moved
+into this section, which therefore only ever grows by the items already in it.
 
 - **A dialog title is a name, not a sentence** — done 2026-10-17. Three of
   the four titles were sentences, and `.dlg-title` clips with an ellipsis at
@@ -831,7 +850,7 @@ except where an item is interface rather than solver and its record is in
   scaffolding the bar had already replaced — `drop test -- ` repeated the menu the dialog sits under, and
   `the cloth **itself**` distinguished the fabric from the tests that use it,
   which a separate `cloth` entry says structurally. Recorded at
-  [17-interface.md](17-interface.md).
+  [17-interface.md](../docs/17-interface.md).
 
 - **Why the presets did not look like cloth: `BEND_SCALE` was 30 and should
   have been 1.8** — diagnosed and repaired 2026-10-17/18, recorded at
@@ -932,7 +951,7 @@ except where an item is interface rather than solver and its record is in
   itself. Popup placement is measured from `getBoundingClientRect()` because
   the bar scrolls sideways when narrow — verified `popLeft 253 = btnLeft
   253`, `popTop 35 = btnBottom 35`. Recorded at
-  [17-interface.md](17-interface.md).
+  [17-interface.md](../docs/17-interface.md).
 
 - **The menubar's leftmost cell names the open document** — done 2026-10-17.
   It held the constant `bodice`, hard-coded into `dockui.js`: an inert
@@ -953,7 +972,7 @@ except where an item is interface rather than solver and its record is in
   `text-overflow: ellipsis` has no effect on a flex container's anonymous
   item, so the first version clipped a long name mid-letter with no ellipsis
   (`scrollWidth 430 > clientWidth 253` after the fix). Recorded at
-  [17-interface.md](17-interface.md).
+  [17-interface.md](../docs/17-interface.md).
 
 - **Stop running two simulations of one fall; stream the side-car's frames** —
   done 2026-10-12, from the report that the garment "teleported back up" after

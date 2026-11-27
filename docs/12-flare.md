@@ -192,7 +192,7 @@ fast (docs/11-cloth.md section 4).
   a change of mesh, false against a change of cloth, and the figures above are
   all one fabric so nothing in them exposed it. Measured 2026-10-17 against
   Blender on the same garment
-  ([18-validation.md](18-validation.md) §6.11): Blender's fold depth varied by
+  ([18-validation.md](../todos/18-validation.md) §6.11): Blender's fold depth varied by
   1.6x across the seven presets, this solver's by **52x**, agreeing at silk
   and 29x flatter at interfaced twill. So depth is trustworthy for comparing
   two *cuts* in the same cloth — which is what the table above does — and not

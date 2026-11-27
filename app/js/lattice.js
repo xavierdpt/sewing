@@ -1,5 +1,15 @@
 // Building a tiled shell on a surface.
 //
+// SUPERSEDED IN PART (2026-11-26). The tile library this file snaps to is the
+// project's initial idea and the project has deviated from it, so `bestTile` and
+// the per-triangle tile registration below are probably old code that no longer
+// contributes. `buildGridShell` itself is NOT: the pattern path calls it as a
+// plain quad grid (`u: 1, cols: gores, rows: patternRows`) and ignores which tile
+// each triangle was assigned. So an issue in the tile half may be worth retiring
+// rather than repairing, and an issue in the grid half is live code -- which of
+// the two it is, and what to do about it, is checked with the user before any
+// change. See CLAUDE.md rule 10 and `app/js/tiles.js`.
+//
 // Key observation: a quad of 4u x 3u split on its diagonal is exactly two 3-4-5
 // triangles (sides 4u, 3u, 5u). So the natural lattice for this library is a
 // 4u x 3u grid, and "tile the bodice in 3-4-5 triangles" means "lay a 4u x 3u
@@ -10,6 +20,8 @@ import { Assembly } from './assembly.js';
 import { LIBRARY, byId, SIDE_LENGTHS } from './tiles.js';
 import { ekey } from './assembly.js';
 
+// Superseded premise: see the top of this file. `bestTile` serves the tile
+// library, not the pattern path.
 /**
  * Best library tile for a triangle with the given actual side lengths.
  * Returns { tileId, perm, err } where perm maps tile vertex slot -> input slot,
@@ -101,6 +113,9 @@ export function buildGridShell(surface, {
     if (new Set(tri).size < 3) continue;                 // degenerate after welding
     const P = tri.map((i) => asm.verts[i]);
     const sides = [dist(P[1], P[2]), dist(P[2], P[0]), dist(P[0], P[1])];
+    // The tile identity assigned here is the superseded premise (top of file);
+    // the pattern path uses the grid, not the tile. Do not repair this without
+    // asking the user whether it should be retired instead.
     const b = bestTile(sides, { allow, weight: { u } });
     errSum += b.err;
     // perm maps tile slot -> input slot

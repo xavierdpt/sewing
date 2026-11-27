@@ -26,7 +26,7 @@
 //
 // 2026-10-18 settled the argument on evidence rather than taste. The presets
 // looked wrong for days; the cause was `BEND_SCALE`, a solver constant, out
-// by a factor of 16 (docs/18-validation.md 6.12). It was findable because
+// by a factor of 16 (todos/18-validation.md 6.12). It was findable because
 // `bendLengthCm` has a published range to be wrong against: poplin read
 // 3.93 cm where the literature says 1.5-2.0. **There is no published band for
 // `tension_stiffness = 15`**, so the same defect expressed in Blender's

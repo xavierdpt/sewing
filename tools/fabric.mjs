@@ -193,7 +193,7 @@ function beam(fabric, { bend = null, rows = 12, Lcm = null } = {}) {
  */
 // `peirce()` now lives in app/js/cantilever.js, imported above. It was moved
 // there on 2026-10-18 because `test/run.mjs` had a SECOND cantilever of its
-// own, using the fixed-overhang method docs/18-validation.md 6.9 withdrew --
+// own, using the fixed-overhang method todos/18-validation.md 6.9 withdrew --
 // so the gate passed at 1.77 cm on a quantity that is not the bending length
 // while this tool read 0.93 cm for the same fabric (6.13). One measurement,
 // one implementation.
@@ -341,7 +341,7 @@ if (scan) {
 
 const names = only ? [only] : Object.keys(FABRICS);
 
-// ---- THE MESH LAW. docs/19-todo.md item 1 step 1.
+// ---- THE MESH LAW. todos/19-todo.md item 1 step 1.
 //
 // `peirce()` holds `edge = asked / 12` for every fabric, so the cantilever
 // always measures at ONE value of edge/c and BEND_SCALE is a calibration at

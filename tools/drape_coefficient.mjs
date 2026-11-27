@@ -1,4 +1,4 @@
-// The Cusick drape test, from the command line. docs/18-validation.md Step 2.
+// The Cusick drape test, from the command line. todos/18-validation.md Step 2.
 //
 //   node tools/drape_coefficient.mjs                    every preset
 //   node tools/drape_coefficient.mjs --fabric linen
@@ -35,7 +35,7 @@ const jitterCm = +flag('--jitter', 0);
 const every = +flag('--every', 2);
 
 // THE DISCRIMINATOR FOR A DRAPE THAT FLATTENS AS IT RUNS. The folds decay
-// (docs/18-validation.md 6.11); either energy is being taken out by the drag
+// (todos/18-validation.md 6.11); either energy is being taken out by the drag
 // and damping terms, or the bending constraint is not holding its rest angle.
 // Turning the first off answers which: if the folds persist with no drag and
 // no internal damping, it is a damping calibration; if they still decay, the
@@ -57,7 +57,7 @@ if (args.includes('--stretch')) clothOpts.stretch = +flag('--stretch', 2e-7);
 if (args.includes('--bend')) clothOpts.bend = +flag('--bend', 1.7);
 if (args.includes('--sweeps')) clothOpts.bendSweeps = +flag('--sweeps', 8);
 // THE REPAIR UNDER TEST. BEND_SCALE is 30; the cantilever reads its asked
-// bending length at ~1.8 (docs/18-validation.md 6.12). A constant fitted on
+// bending length at ~1.8 (todos/18-validation.md 6.12). A constant fitted on
 // the cantilever and not checked here is how this defect was introduced, so
 // the drape has to agree before anything is changed in bending.js.
 if (args.includes('--bend-scale')) clothOpts.bendScale = +flag('--bend-scale', 30);
@@ -138,5 +138,5 @@ const bad = rows.filter((r) => !r.settled || !r['outline ok']);
 if (bad.length) {
   console.log(`\n${bad.length} row(s) are not measurements: `
     + bad.map((r) => `${r.fabric} @ ${r['edge cm']} cm`).join(', '));
-  console.log('Raise --settle, or read docs/18-validation.md 6.11 before quoting them.');
+  console.log('Raise --settle, or read todos/18-validation.md 6.11 before quoting them.');
 }

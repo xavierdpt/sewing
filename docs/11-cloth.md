@@ -113,7 +113,7 @@ residual flailing where settled cloth reads 0.2.
 > `bending.js` for what the solver does; this passage is kept because the
 > reasoning about why the cross-spring failed is still correct, and because
 > the discarded model's failure is worth knowing. It cost a wrong diagnosis
-> on 2026-10-17 ([18-validation.md](18-validation.md) §6.12), which was
+> on 2026-10-17 ([18-validation.md](../todos/18-validation.md) §6.12), which was
 > written from this passage rather than from the code.
 
 What works is the **quadratic (isometric) bending model** (Bergou et al.
@@ -145,7 +145,7 @@ Three things came out of making it work, each measured:
   cantilever reads its asked bending length to 2 % across a 4x range of
   element size, and the Cusick drape coefficients spread across their
   published class bands instead of every preset reading 87-98
-  ([18-validation.md](18-validation.md) §6.12). The theoretical 1 overshoots
+  ([18-validation.md](../todos/18-validation.md) §6.12). The theoretical 1 overshoots
   (ratio 0.71), so a real solver deficit survives — but a factor of 1.8, not
   30. So "measurable property" held only on the experiment the constant was
   fitted to. Five of

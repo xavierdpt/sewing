@@ -13,7 +13,8 @@ question.
    vocabulary, then `kt_find_nodes_by_tags` (also with `partial: true`) and
    `kt_search_text`, then `kt_get_node` to read what they return. Answer from
    the tree if the tree answers.
-2. **The documents** in `docs/` and this file, when the tree is silent or
+2. **The documents** in `docs/`, the spec and todo pairs in `todos/`, and this
+   file, when the tree is silent or
    thin. What is found there and was missing from the tree **goes into the
    tree before the answer is given**, as a node that states the fact and names
    its source document and section. Reading a document and not writing it down
@@ -83,10 +84,12 @@ repository that already exists.
   retyped into `kt_update_node`. Take a `kt_snapshot` before any
   restructuring, and run `kt_check` after a large change.
 - Report every node created or changed by its full path from the root and its
-  id, so it can be found in the viewer.
+  id, so it can be found in the tree's browser.
 - The tree is at `docs/knowledge.db` and **is committed**: it is knowledge, not
   a cache. Its `-wal` and `-shm` side-files are not.
-- The read-only viewer runs **in docker**, so a machine needs docker and
+- The tree's own read-only browser — **not** the garment viewer `app/`, which
+  has its own pair of images in `docker/app/` — runs **in docker**, so a
+  machine needs docker and
   nothing else: `./docker/knowledge-tree/ktdocker.sh build`, then `start`, on
   `http://127.0.0.1:3001`. The database is mounted, never baked into the
   image. `npm start` in `kt/` still works for a machine
@@ -224,6 +227,55 @@ opinion.
 > twice before it was written down. Specifying capabilities and omitting the
 > wiring is the house error: rule 7's lesson, one level up.
 
+## 10. A document that is out of date is corrected on the spot, and code that
+no longer fits is named.
+
+Two standing obligations, from the user, 2026-11-26:
+
+- **When a conflict with existing documentation is detected, that documentation is
+  updated** — in the same turn, not noted for later. A document that describes the
+  project as it was is read as the project as it is, which is how a retired idea keeps
+  being built on. Where the conflict is between sources rather than against a known
+  fact, rule 0 decides it first: the user resolves it, and then every source is
+  corrected together.
+- **Code that no longer fits the project is identified whenever it raises a concern**
+  for a new feature or a change to an existing one. Identified, in writing, with the
+  files and the entry points — not deleted, and not quietly worked around. Deleting it
+  is a change to the project, so it is proposed, not performed (rule 3's shape).
+
+> **Cost:** the premise at the top of `README.md` — a garment built from a library of
+> 3-4-5, isoceles and equilateral tiles — was the project's initial idea, and the
+> project had long since deviated to drafting cloth pattern pieces and draping them.
+> It was still stated as current in `README.md`, in `docs/01-geometry.md`,
+> `docs/04-software.md` §5 and `docs/05-physical-kit.md`, and it had just been copied
+> into the knowledge tree's root node as the description of the project, because the
+> node was written from `README.md` on the day the tree was installed. The user had to
+> say it. Every one of those is now marked, and the code that serves the old premise is
+> listed in the tree, under "The standard-triangle library is retired".
+
+## 11. Work runs in a cycle between a spec and its todo, and both live in
+`todos/`.
+
+Every piece of work belongs to a **pair of documents in `todos/`**: a spec,
+which captures the requirements and resolves the open questions, and a todo,
+which is its queue. The cycle is read the spec, pick the next item from it, add
+it on top of the todo with an identifier, do it, mark it done in the todo, and
+reference it from the spec — then read the spec again. Because every settled
+point in the spec carries its "done" reference, what is not marked is what is
+left, so the spec stays readable as the list of remaining work and the next
+item is chosen from it rather than invented. An item is never renumbered once
+identified, since code comments and the spec cite it by identifier. **Something
+new gets a new spec + todo pair in `todos/`**, not an item on an existing
+queue. The first pair is `todos/18-validation.md` with
+`todos/19-todo.md`; a new one is named for its subject, as
+`<subject>-spec.md` and `<subject>-todo.md`.
+
+> **Cost:** stated by the user, 2026-11-27, after I described the process from
+> the documents as a queue whose done items are deleted and whose record is
+> elsewhere — which is what `19-todo.md` said, and which loses the thing that
+> makes the cycle work: a done item that is marked rather than removed is what
+> lets the spec be read again for the next one.
+
 ## Commands
 
 ```bash
@@ -240,13 +292,16 @@ node tools/edits.mjs --darts      # every dart folded shut: the step and the tur
 python3 sim/server.py             # the drape side-car the viewer talks to
 node test/run.mjs                 # the gate. 310 pass / 0 fail
 python3 tools/viewshot.py out.png --eval 'JS'   # the viewer, headless, as a PNG
-cd app && python3 -m http.server 8777
+cd app && python3 -m http.server 8777     # the viewer, on the host
+./docker/app/appdocker.sh build                    # ...or its build image, then its run image
+./docker/app/appdocker.sh start                    # the viewer on :8777, out of the run image
+./docker/app/appdocker.sh stop | logs | status
 mkdir -p src && cd src && apt-get source blender   # read a dependency's source
 
 export KT_DB=docs/knowledge.db                     # the knowledge tree (rule 0)
 node kt/bin/kt.js get_tree    # the whole tree as an outline
 node kt/bin/kt.js help        # every tree operation
 ./docker/knowledge-tree/ktdocker.sh build          # the build image, then the run image
-./docker/knowledge-tree/ktdocker.sh start          # the read-only viewer on :3001
+./docker/knowledge-tree/ktdocker.sh start          # the tree's browser on :3001
 ./docker/knowledge-tree/ktdocker.sh stop | logs | status
 ```

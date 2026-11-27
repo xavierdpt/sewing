@@ -1,5 +1,16 @@
 // The tile library from docs/01-geometry.md.
 //
+// SUPERSEDED PREMISE (2026-11-26). The standard-triangle library -- 3-4-5 right,
+// isoceles, equilateral -- was the project's initial idea, and the project has
+// deviated from it: garments are now drafted as cloth pattern pieces, edited on
+// the cutting table, sewn and draped. If a bug, a failing test or an obstacle to
+// a new feature points at this code, the first hypothesis is that it is old code
+// no longer contributing to the project, and the fix may be to retire it rather
+// than to repair it. ALWAYS CHECK THAT WITH THE USER FIRST: this is a hypothesis
+// about the project's direction, not a fact about the code, and nobody has
+// measured what still depends on it. See CLAUDE.md rule 10 and the knowledge-tree
+// node "The standard-triangle library is retired".
+//
 // Sides are given in MODULE units; multiply by `u` (cm) for real lengths.
 // Side i is the side OPPOSITE vertex i, which is the convention used
 // throughout assembly.js.

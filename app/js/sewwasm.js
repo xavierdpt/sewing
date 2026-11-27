@@ -16,7 +16,7 @@
 // seams to 0.024 cm where Blender's own sewing springs leave 9.2 cm. What
 // moves is where it runs.
 //
-// NOT WIRED TO W YET. docs/19-todo.md item 1 step 5 is that step, and until
+// NOT WIRED TO W YET. todos/19-todo.md item 1 step 5 is that step, and until
 // it lands this module is a capability with no caller -- which is rule 9, and
 // the reason this comment says so rather than implying otherwise.
 
@@ -31,7 +31,7 @@ import { sewclothModule, fieldFor } from './drapewasm.js';
  * STATED AS AN OPEN QUESTION RATHER THAN AS A FACT. `FABRICS` carries a
  * weight, a bending length and a measured strain limit; sewcloth takes a
  * mass, a spring tension and a damping. Mapping one onto the other by
- * measurement against the oracle is docs/19-todo.md item 2 -- the drape
+ * measurement against the oracle is todos/19-todo.md item 2 -- the drape
  * already settles 6 % longer in the hem than Blender does, which is the same
  * mapping showing up as a number. These are the values that make the sewing
  * phase behave; they are not claimed to be the fabric.

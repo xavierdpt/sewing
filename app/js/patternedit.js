@@ -1437,7 +1437,7 @@ export function replayEdits(pattern, edits, { stopOnError = false } = {}) {
 //
 // The inventory these came out of is docs/03-prior-art.md section 12,
 // docs/14-editing.md section 6 says which of them the mesh and the vertex ids
-// allow, and docs/19-todo.md is the queue.
+// allow, and todos/19-todo.md is the queue.
 
 /** The tools that do something. Everything else is in PLANNED. */
 export const IMPLEMENTED = ['select', 'dart', 'spread', 'turn', 'move', 'mirror', 'split', 'join'];
@@ -1469,7 +1469,7 @@ export function plannedMessage(id) {
   if (!t) return `${id}: no such tool.`;
   return `${t.label.toUpperCase()} -- not built yet.\n\n`
     + `${t.what}\n\n${t.waiting}\n\n`
-    + 'Queued in docs/19-todo.md. The inventory it came from is '
+    + 'Queued in todos/19-todo.md. The inventory it came from is '
     + 'docs/03-prior-art.md section 12; docs/14-editing.md section 6 says what '
     + 'the mesh and the vertex ids allow.';
 }

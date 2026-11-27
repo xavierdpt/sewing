@@ -18,7 +18,7 @@ sector is developable, so the cloth is unstrained before anything is solved.
 WHAT THIS IS NOT. It cuts one seamless cone. The main program's reason for
 existing is the part left out -- panels cut flat, laid out, sewn edge to edge
 at a constant feed rate, and welded (app/js/assemble.js) -- and the seam
-closure numbers in docs/18-validation.md are about that, not this. This is the
+closure numbers in todos/18-validation.md are about that, not this. This is the
 shape those panels are trying to become, which makes it a useful control:
 anything the solver does to this is the fabric and the body talking, with no
 sewing in between.

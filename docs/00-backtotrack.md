@@ -1,8 +1,8 @@
 # 00 — Back on track
 
 This document exists because the project was moving and then stopped. The
-work before the stall is recorded in [18-validation.md](18-validation.md) and
-its queue in [19-todo.md](19-todo.md); neither of them records the stall, because
+work before the stall is recorded in [18-validation.md](../todos/18-validation.md) and
+its queue in [19-todo.md](../todos/19-todo.md); neither of them records the stall, because
 the stall is not a finding about cloth. It is a finding about how the work was
 being done.
 
@@ -131,7 +131,7 @@ doing and not Blender's.
 **Solve rate, and a question already answered.** Timed off the capture stamps:
 the three drops ran at **~5 frames/sec** of simulated time — 7,803 cloth
 vertices in total, factory quality, 12-triangle colliders. That is the same
-order as the real drape, which [18-validation.md](18-validation.md) §6.10
+order as the real drape, which [18-validation.md](../todos/18-validation.md) §6.10
 measured at 20.7 s for 180 frames (~8.6 frames/sec) on 1,872 cloth vertices
 against a 6,144-triangle collider. **Per frame the real drape is the faster of
 the two.** So a drape that feels slow is not a slower solver; it is 180 frames
@@ -206,7 +206,7 @@ broken once, and a stall is the predictable result of breaking them again:
 
 *Open:* which of these actually happened in the sessions before the stall, and
 whether the stall has a sixth cause not in that list — for instance a queue
-([19-todo.md](19-todo.md)) whose only remaining item is too large to finish in
+([19-todo.md](../todos/19-todo.md)) whose only remaining item is too large to finish in
 one sitting, so that every session starts it and none lands it.
 
 ## 6. Recovery
@@ -226,7 +226,7 @@ to re-derive it.
    a workable state, not a better one. Nothing from §19's queue is picked up
    until §2 is empty.
 6. **Record it where it belongs.** The outcome goes to
-   [18-validation.md](18-validation.md) against what it settles; anything that
+   [18-validation.md](../todos/18-validation.md) against what it settles; anything that
    must not happen again becomes a rule in [CLAUDE.md](../CLAUDE.md) with its
    cost next to it, and this document is then closed.
 
@@ -332,7 +332,7 @@ oracle's time. What genuinely remains is **stretch**: 169.68 cm of hem where
 the pattern was cut at 160 cm, and 2 deep folds where the oracle throws 4.
 That is a parameter question — sewcloth takes mass, tension and damping; the
 fabrics here carry a measured strain limit, and nothing maps one onto the
-other yet — and it is queued in [19-todo.md](19-todo.md).
+other yet — and it is queued in [19-todo.md](../todos/19-todo.md).
 
 > **Cost:** I wrote the open item as "why does the wasm drape differ from
 > `cloth.js`", with `cloth.js` as the implicit reference, and had to be told
@@ -391,7 +391,7 @@ transform.
 > whichever way the cloth is pulled — but every fold count, every hem length
 > and every "this settles differently from `cloth.js`" in between was measuring
 > a garment being dragged backwards. Two of them are corrected above; the
-> fabric-mapping item in [19-todo.md](19-todo.md) has to be re-measured from
+> fabric-mapping item in [19-todo.md](../todos/19-todo.md) has to be re-measured from
 > scratch. **The rule it breaks is rule 1, in the one place nobody thought to
 > look: a solver's defaults are an assumption, and an assumption that nothing
 > ever states is an assumption nobody ever checks.** `sewcloth`'s default is
@@ -582,7 +582,7 @@ between a dart that closes and a dart that happens to close.
 
 The ledger, so a session can start here and know what is left without
 re-reading the rest. Finished work is named with the file that holds it;
-unfinished work is in [19-todo.md](19-todo.md), because this document is not a
+unfinished work is in [19-todo.md](../todos/19-todo.md), because this document is not a
 queue (§11).
 
 **Done, 2026-10-16 and 17.** In the order the sections tell it:
@@ -603,7 +603,7 @@ queue (§11).
 | §9 | and one that is **on the path a person walks**: the test darts are in the skirt J and K draft, where a fresh page used to lay out 0 darts | `currentSkirtPattern` in [`app/js/main.js`](../app/js/main.js), *cut the test darts in* |
 | §9 | **the dart legs pair by Thales**, not by index: worst fraction error 0.161 → **0**, four points sewn to nothing → none, worst stitch offset 2.49 cm → 0.001 | `harmoniseLegs` in [`app/js/patternedit.js`](../app/js/patternedit.js), measured by `node tools/darts.mjs [--pairs]` |
 | §8 | **sewcloth now says what it cannot do.** `sc_capabilities` gained `bending` and `stitches`, both **0**, the header opens with *IT DOES NOT SEW* and why the name misleads, and the smoke test throws if either ever reports 1 while the JS sewing is still doing the work | `src/sewcloth/include/sewcloth.h`, `src/sewcloth/src/sewcloth.c`, `src/sewcloth/test/smoke.mjs`, and [20-fork.md](20-fork.md) §8, whose "complete" is now "complete for a drape" |
-| §8 | **the port is specified in W's own terms**, not the solver's: what pressing W calls, a stage-by-stage inventory of `_substep` against what sewcloth has, and six steps ending in *wire W to it* and *delete the JS sewing* | [19-todo.md](19-todo.md) item 1 |
+| §8 | **the port is specified in W's own terms**, not the solver's: what pressing W calls, a stage-by-stage inventory of `_substep` against what sewcloth has, and six steps ending in *wire W to it* and *delete the JS sewing* | [19-todo.md](../todos/19-todo.md) item 1 |
 | — | **rule 9**, written because it was broken three times in one session: a capability is not a feature; follow the path the person presses | [CLAUDE.md](../CLAUDE.md) §9 |
 | §8 | **steps 3 and 4: the garment sews in wasm, and both sewings are in one table.** `app/js/sewwasm.js` (`WasmSewing` lives across frames, because W is watched where X is one solve), the hinge topology moved out to `app/js/bending.js`, and `node tools/trace.mjs --sew-wasm`. On the four-panel skirt: seams closed to **0.084 cm** with the feed spent, 145 frames at **24.1 ms/frame against cloth.js's 126** — the 5× the port was for | [`app/js/sewwasm.js`](../app/js/sewwasm.js), [`app/js/bending.js`](../app/js/bending.js), `tools/trace.mjs --sew-wasm` |
 | §8 | **and the comparison immediately earned itself**: the wasm sewing left **34.5 % peak strain** where `cloth.js` leaves 1.9 %. The missing stage was `_clampStrain`, already the suspect for item 2's 6 %-long hem | found by `tools/trace.mjs --sew-wasm` the hour it existed |
@@ -641,13 +641,13 @@ could not be answered, and each then answered it in one run — the limbs, the
 pairing, and where W's time goes.
 
 **Open, in the order it should be taken.** Both are queued in
-[19-todo.md](19-todo.md) with acceptance criteria, item 1 in six steps of
+[19-todo.md](../todos/19-todo.md) with acceptance criteria, item 1 in six steps of
 which the last two are *wire W to it* and *delete the JS sewing*. What they serve is one
 sentence: **everything runs on `src/sewcloth` in the page, and `cloth.js` is
 deleted.**
 
 1. **The sewing in wasm, and then `cloth.js` goes.** Six steps,
-   [19-todo.md](19-todo.md) item 1 for the detail of each:
+   [19-todo.md](../todos/19-todo.md) item 1 for the detail of each:
 
    | | step | state |
    |---|---|---|
@@ -734,7 +734,7 @@ deleted.**
   `patternedit.js`, both of `app/wasm/sewcloth.{mjs,wasm}` (rebuilt with
   bending in them), `tools/trace.mjs`, `tools/profile.mjs`, `CLAUDE.md`, and
   the documents [00](00-backtotrack.md), [16](16-solvers.md),
-  [19](19-todo.md), [20](20-fork.md). **And in `src/sewcloth`, which is its own
+  [19](../todos/19-todo.md), [20](20-fork.md). **And in `src/sewcloth`, which is its own
   git repository and is excluded from this one by `.gitignore`:** one new file
   (`test/test_hinge.c`) and four changed (`include/sewcloth.h`,
   `src/sewcloth.c`, `test/smoke.mjs`, `build.sh`). A session that commits here
@@ -743,7 +743,7 @@ deleted.**
 
 ## 11. What this document is not
 
-Not a second queue. [19-todo.md](19-todo.md) remains the queue for validation
+Not a second queue. [19-todo.md](../todos/19-todo.md) remains the queue for validation
 work and is suspended, not replaced, while this is open. Not a place for
 findings about cloth. When §2 and §10's open list are empty and §6.6 is done, this file is deleted
 and the one durable thing it produced is the rule in
