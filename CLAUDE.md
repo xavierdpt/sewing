@@ -213,7 +213,10 @@ Reading the code tells you what exists. It does not tell you what the program
 *does*, because that is decided by default values and by which call the button
 is wired to. Press the key and read what it calls — `tools/viewshot.py` drives
 the real page headlessly, so this is a thirty-second measurement, not an
-opinion.
+opinion. **Which copy of the page is itself one of these questions:** by
+default that tool serves `app/` from the repository, and `--url` points it at
+what is actually being served, which is not the same file when a container is
+running (`todos/served-page-spec.md`).
 
 > **Cost:** three in one session, all the same shape. I said "X drapes in
 > wasm" having seen `sendToWasm` in `finishAssembly` and not having read
@@ -292,6 +295,7 @@ node tools/edits.mjs --darts      # every dart folded shut: the step and the tur
 python3 sim/server.py             # the drape side-car the viewer talks to
 node test/run.mjs                 # the gate. 310 pass / 0 fail
 python3 tools/viewshot.py out.png --eval 'JS'   # the viewer, headless, as a PNG
+python3 tools/viewshot.py out.png --url http://127.0.0.1:8777   # ...the SERVED page, not app/
 cd app && python3 -m http.server 8777     # the viewer, on the host
 ./docker/app/appdocker.sh build                    # ...or its build image, then its run image
 ./docker/app/appdocker.sh start                    # the viewer on :8777, out of the run image

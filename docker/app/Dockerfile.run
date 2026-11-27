@@ -32,5 +32,12 @@ COPY --from=build /opt/sewcloth/build/sewcloth.wasm /opt/app/wasm/sewcloth.wasm
 # the loopback INSIDE a container is reachable from nothing, published port or
 # not. What keeps the viewer off the network is the host side of the publish,
 # `-p 127.0.0.1:8777:8777` in appdocker.sh.
+# The fingerprint of app/ as it was COPYed in, so `appdocker.sh start` can tell
+# whether this image's page is still the repository's page. It is a LABEL and it
+# is LAST, so changing it invalidates nothing above it. appdocker.sh computes it;
+# see app_hash() there for why it is content and not a timestamp.
+ARG APP_HASH=unknown
+LABEL app_hash=$APP_HASH
+
 EXPOSE 8777
 CMD ["python3", "-m", "http.server", "8777", "--bind", "0.0.0.0", "--directory", "/opt/app"]

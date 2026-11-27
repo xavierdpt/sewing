@@ -11,11 +11,21 @@ render loop is requestAnimationFrame, which headless does not fire -- see
     python3 tools/viewshot.py out.png
     python3 tools/viewshot.py out.png --eval "document.querySelectorAll('.menubar-item')[0].click()"
     python3 tools/viewshot.py out.png --size 1600x1000 --frames 60
+    python3 tools/viewshot.py out.png --url http://127.0.0.1:8777   # the container
+
+**By default this measures the REPOSITORY**, not whatever is deployed: it
+starts its own `http.server` over `app/` and navigates to that. `--url` points
+it at an already-running server instead, which is the only way to check the
+page a person is actually looking at -- the run image bakes `app/` in with
+`COPY . .` rather than mounting it, so a container serves the `app/` of
+whenever it was built. A removed control once survived on `:8777` for 26 hours
+while four runs of this tool correctly reported it gone from the working tree
+(`todos/served-page-spec.md`).
 
 Exits non-zero if the page logged an error, so a broken viewer fails loudly
 instead of producing a plausible picture.
 """
-import argparse, asyncio, base64, json, os, pathlib, shutil, socket, subprocess, sys, tempfile, time, urllib.request
+import argparse, asyncio, base64, json, os, pathlib, shutil, socket, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 
 import websockets
 
@@ -115,9 +125,17 @@ class CDP:
 
 
 async def run(args):
-    port = free_port()
-    server = subprocess.Popen([sys.executable, '-m', 'http.server', str(port), '--directory', str(APP)],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # The server is started ONLY when no --url was given, so the two paths
+    # cannot both happen: pointing at a container while also serving the
+    # repository on another port is the confusion this flag exists to end.
+    server = None
+    if args.url:
+        target = args.url if urllib.parse.urlparse(args.url).path else args.url + '/'
+    else:
+        port = free_port()
+        server = subprocess.Popen([sys.executable, '-m', 'http.server', str(port), '--directory', str(APP)],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        target = f'http://127.0.0.1:{port}/index.html'
     dbg = free_port()
     profile = tempfile.mkdtemp(prefix='viewshot-')
     w, h = (int(v) for v in args.size.split('x'))
@@ -138,7 +156,8 @@ async def run(args):
             cdp = CDP(ws, args.settle)
             await cdp.send('Runtime.enable')
             await cdp.send('Page.enable')
-            await cdp.js(f'location.href = "http://127.0.0.1:{port}/index.html"')
+            print(f'driving {target}')
+            await cdp.js(f'location.href = "{target}"')
             await cdp.booted(args.settle)
             if args.clear_ui_state:
                 await cdp.js('localStorage.removeItem("sewing.dockui.v1")')
@@ -156,7 +175,8 @@ async def run(args):
             return 1 if bad else 0
     finally:
         chrome.terminate()
-        server.terminate()
+        if server:
+            server.terminate()
         shutil.rmtree(profile, ignore_errors=True)
 
 
@@ -168,6 +188,8 @@ def main():
     ap.add_argument('--settle', type=float, default=4.0, help='seconds to wait for the page to boot')
     ap.add_argument('--eval', action='append', help='JS to run before the shot; repeatable')
     ap.add_argument('--clear-ui-state', action='store_true', help='forget remembered dialog positions first')
+    ap.add_argument('--url', help='drive an already-running server (e.g. the container on '
+                                 'http://127.0.0.1:8777) instead of serving app/ from the repository')
     args = ap.parse_args()
     sys.exit(asyncio.run(run(args)))
 

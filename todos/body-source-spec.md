@@ -320,6 +320,28 @@ Criteria 1-5 all met; 1 and 2 as amended below.
    drafting `4 panels, waist ring 78.3 cm, hem 160 cm (flare 2.044x, gather
    1x)` with a 988-vertex skirt added to the scene — the same numbers before
    and after the collapse.
+
+   > **Amended 2026-11-27, and this criterion as first written could not have
+   > caught what went wrong.** It names `tools/viewshot.py`, which at the time
+   > started its own server over `app/` and took no URL — so **what every one
+   > of those runs measured was the working tree, never a deployed page.** The
+   > user then loaded `localhost:8777` and saw the removed `source` dropdown:
+   > the container had been up 26 hours, and `Dockerfile.run` bakes the page in
+   > with `COPY . .` rather than mounting it, so it was serving the pre-change
+   > `app/`. `curl … | grep -c makehuman` returned **7** on `:8777` while the
+   > same grep over `app/js/main.js` returned 0. Nothing here was wrong; the
+   > verification simply pointed at a different artifact than the complaint.
+   >
+   > **The served page is now verified too**, after a rebuild: the page on
+   > `:8777` is byte-identical to `app/js/main.js` (`curl … | cmp -`),
+   > `grep -c 'makehuman\|params.source'` over it returns 0,
+   > `models/bodice.obj` returns 404, and it has been driven headlessly —
+   > `python3 tools/viewshot.py out.png --url http://127.0.0.1:8777` reports no
+   > `source` control, `'source' in params` false, exit 0.
+   >
+   > The tool now takes `--url`, and `appdocker.sh start` warns when the image's
+   > page is not `app/`'s. Both are [served-page-spec.md](served-page-spec.md),
+   > which also records the cost of this.
 5. No document in `docs/` or `README.md` describes a mesh or scanned body
    source as available. **Met**, and after §5's reversal they do not describe
    it as having existed either.
