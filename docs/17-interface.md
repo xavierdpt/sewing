@@ -111,14 +111,34 @@ person at the screen can see.
 
 ## What is on the bar so far
 
-Three entries over five dialogs, read off the running page rather than off
-the source:
+Four entries over ten dialogs, read off the running page rather than off
+the source — `(unsaved) · body ▾ · files · cloth · tests ▾`:
 
 | entry | dialog title | what it holds |
 |---|---|---|
+| **body ▾** | *a menu* | → **size and units** (the size chart, the unit, `reframe the view`), **measurements** (titled `measurements (cm)`, 17 sliders + the nested breadth-and-depth 4), **shape**, **asymmetry**, **arms, legs and poses** |
 | **files** | save and load | the dress form and the pattern, the SVG, the OBJ (docs/14-editing.md §5) |
 | **cloth** | cloth | the fabric parameters every test draws on |
 | **tests ▾** | *a menu* | → **disc** (the disc with a hole), **accordion** (the pleated strip), **drape (Cusick)** (the drape coefficient), **cantilever (Peirce)** (bending length) |
+
+`body` sits first because the body is step one, and because the code that
+builds it is where the folder was. It is the first section of the eleven to
+move, 2026-11-27, and the first whose *subfolders* became the entries —
+[body-dialog-spec.md](../todos/body-dialog-spec.md), which also records the
+one thing a dialog could not do until then: **rename itself.** The
+measurement form is destroyed and rebuilt on every unit change, and carries
+the unit in its name, so `Dialog.setTitle` exists now beside
+`MenuBar.setBrand`, and `measurements (cm)` → `measurements (in)` was driven
+in the page (bust `92` → `36.22`, 21 rows either way). The entry's own label
+stays `measurements`: the label names the section, the title reports its
+state.
+
+`size and units` holds three rows, not the four it moved with: the `measure
+the model` button was removed the same day
+([measure-button-spec.md](../todos/measure-button-spec.md)), because it
+answered into `console.table` — a control whose effect is invisible to the
+person pressing it, which is the fault this document keeps finding one layer
+at a time.
 
 `tests`, not `drop test`: the menu was named after the only two experiments it
 had, and the Cusick drape test drops nothing. A container named after its
@@ -131,18 +151,21 @@ python3 tools/viewshot.py bar.png --clear-ui-state \
 
 ## Migrating the rest
 
-**Eleven sections are still in the single panel** — the shape this document
+**Ten sections are still in the single panel** — the shape this document
 opens by calling the problem. Measured the same way, reading
-`.lil-gui.root > .children > .lil-gui > .title`:
+`.lil-gui.autoPlace > .children > .lil-gui > .title` (the `.root` selector
+also catches the folders *inside* the dialogs, which is how the first reading
+of this counted one too many):
 
-> body · shell (step two) · fit (static, no physics) · explicit joining ·
+> shell (step two) · fit (static, no physics) · explicit joining ·
 > pattern · try a pattern on · flare and gathers · sewing by hand ·
 > the drape -- in this page, in wasm · the cutting table · view
 
-So **4 of the 15 original sections have moved** — the two drop tests, the
-cloth they share, and save/load, which is the testing corner — and one dialog
+So **5 of the 15 original sections have moved** — the two drop tests, the
+cloth they share, save/load, which is the testing corner, and `body`, the
+first of the garment-making ones, 2026-11-27 — and one dialog
 was born on the bar rather than migrated to it: `drape (Cusick)`, added
-2026-10-17 with the instrument behind it. Five dialogs, eleven sections still
+2026-10-17 with the instrument behind it. Ten dialogs, ten sections still
 in the panel.
 
 Everything a person uses to *make a garment* is still in the panel. The queue
@@ -167,11 +190,15 @@ inside it. The two drop tests were the first case, 2026-10-17 — they had one
 bar entry each, reading `drop: disc` and `drop: accordion`, which is a prefix
 doing a container's job.
 
-The reason is not tidiness. The bar is flat and **eleven sections are still
+The reason is not tidiness. The bar is flat and **ten sections are still
 waiting to move onto it**: fifteen entries in one scrolling row is this
 document's opening complaint one level up — the one you want is off the edge.
 A menu groups without taking anything away, because **the menu holds no state
-of its own**. Its entries are the same `Dialog`s, with the same ids, the same
+of its own**. That is also the reason the user gave for `body ▾`, asked
+whether it wanted one dialog or five: *"do submenus, that's more
+extendible"* — and it is why a section with subfolders becomes a menu of
+dialogs rather than one dialog with its subfolders intact, which would be
+this document's opening complaint one level down. Its entries are the same `Dialog`s, with the same ids, the same
 remembered positions and the same toggle, so moving an entry under a menu
 does not move the window it opens; and both can still be open side by side,
 which is what the dialogs exist for.

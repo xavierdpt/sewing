@@ -242,6 +242,7 @@ class Dialog {
     // hint, which is a tooltip on the title and on the entry that opens it.
     this.hint = hint;
     if (hint) titleEl.title = hint;
+    this.titleEl = titleEl;
     this.body = this.el.querySelector('.dlg-body');
     this.foldBtn = this.el.querySelector('.dlg-fold');
 
@@ -316,6 +317,24 @@ class Dialog {
       handle.addEventListener('pointermove', move);
       handle.addEventListener('pointerup', up);
     });
+  }
+
+  /**
+   * Rename the dialog. Still a NAME, not a sentence -- the constructor's note
+   * about what gets clipped applies to whatever is set here.
+   *
+   * It exists because a section can rename itself: the body measurements are
+   * `measurements (cm)` or `measurements (in)` and the form is destroyed and
+   * rebuilt on every unit change, so the unit is in the title the same way
+   * `setBrand` puts the document's name on the bar rather than a constant.
+   * The entry that opens the dialog keeps its own label, which is the name of
+   * the section and does not move.
+   */
+  setTitle(text) {
+    const s = text == null ? '' : String(text);
+    if (this.titleEl.textContent === s) return;
+    this.titleEl.textContent = s;
+    if (!this.hint) this.titleEl.title = s;   // ...so a clipped name is readable
   }
 
   setCollapsed(v) { this.collapsed = !!v; this._applyFold(); this._remember(); }

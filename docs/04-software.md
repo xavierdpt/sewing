@@ -439,9 +439,21 @@ one thing on the table and another off it.
 
 The controls live in a menubar of floating dialogs and, still, one lil-gui panel —
 [17-interface.md](17-interface.md), which also carries how much of that migration is
-done. The panel exposes body measurements, the asymmetry fields, module size, ease,
-and every solver weight. `asm`, `torso`, `relax`, `quantize`, `settle` and `LIBRARY`
+done. The body left the panel on 2026-11-27: the measurements, the shape and
+asymmetry fields, the poses and the limbs are five dialogs under a `body ▾` menu
+([body-dialog-spec.md](../todos/body-dialog-spec.md)). The panel still exposes module
+size, ease, and every solver weight. `asm`, `torso`, `relax`, `quantize`, `settle` and `LIBRARY`
 are on `globalThis` for console work.
+
+**No control in the page answers into the console any more.** Thirteen did — ten of
+them rows whose whole effect was a `console.table`, plus the body's three — and all
+thirteen were removed on 2026-11-27 at the user's instruction
+([console-readouts-spec.md](../todos/console-readouts-spec.md) and
+[measure-button-spec.md](../todos/measure-button-spec.md)). The measurements behind
+them all remain and are reached from `tools/` or from the console directly; what went
+is the button that looked like it did nothing. A handler that does real work and
+logs what it did — `true the darts`, `replay these edits onto this body`, the weld
+report — is not one of these and stayed.
 
 Colour-by-defect is the view to live in: orange is positive Gaussian curvature (domes —
 bust, shoulder), blue is negative (saddles — waist, underarm), grey is flat. It is a

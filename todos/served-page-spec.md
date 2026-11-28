@@ -151,6 +151,20 @@ one-line note rather than a warning, since it cannot be checked either way.
 content change; warns on a real content change; and **silent again after
 `build`**, which is the case the first version could not pass.
 
+**Amended 2026-11-27 (rule 10), after this section's warning failed to prevent
+a second occurrence of §0.** The warning fires inside `start`, and **a
+container that is already running while `app/` changes underneath it is never
+re-checked** -- so in the case that actually recurred it had no place to speak.
+The user saw a removed control on `:8777` from a container 29 minutes old and
+had to ask three times before it was rebuilt. Adding the comparison to
+`appdocker.sh status` was proposed and **not** adopted; the user's answer was
+an obligation rather than an instrument, now **CLAUDE.md rule 12**: a change
+under `app/` is not done until the container is rebuilt, restarted and the
+served page driven with `--url`. This section's acceptance is unchanged and
+still holds -- the warning is simply not the thing that covers an already
+running container, and this spec no longer implies that it is.
+See [show-body-todo.md](show-body-todo.md) item 3.
+
 ## 4. The acceptance criterion that could not catch this
 
 **State:** **done** 2026-11-27 — item 3.

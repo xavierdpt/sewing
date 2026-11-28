@@ -86,7 +86,15 @@ repository that already exists.
 - Report every node created or changed by its full path from the root and its
   id, so it can be found in the tree's browser.
 - The tree is at `docs/knowledge.db` and **is committed**: it is knowledge, not
-  a cache. Its `-wal` and `-shm` side-files are not.
+  a cache. Its `-wal` and `-shm` side-files are not. **So checkpoint before
+  committing it**, or the commit carries the tree as it was: the MCP server
+  holds its connection open all session, SQLite leaves the new pages in the
+  `-wal`, and `git status` says the database is unmodified while two new nodes
+  exist. `sqlite3 docs/knowledge.db 'PRAGMA wal_checkpoint(TRUNCATE);'` — it
+  writes no content, so it is not the raw SQL the rule above forbids — and
+  then prove it: copy the `.db` **alone** somewhere and read it with
+  `KT_DB=<copy> node kt/bin/kt.js get_tree`, which is what a clone sees.
+  `todos/tree-commit-spec.md`.
 - The tree's own read-only browser — **not** the garment viewer `app/`, which
   has its own pair of images in `docker/app/` — runs **in docker**, so a
   machine needs docker and
@@ -279,6 +287,29 @@ queue. The first pair is `todos/18-validation.md` with
 > makes the cycle work: a done item that is marked rather than removed is what
 > lets the spec be read again for the next one.
 
+## 12. When the served copy changes, rebuild and restart the container. Yourself.
+
+The run images **bake the page in**, so a running container serves the page of
+whenever it was built. A change under `app/` or `kt/` is done when the
+**served** page has been driven, not the repository's copy:
+
+```bash
+./docker/app/appdocker.sh build && ./docker/app/appdocker.sh stop && ./docker/app/appdocker.sh start
+python3 tools/viewshot.py out.png --url http://127.0.0.1:8777
+```
+
+Rebuild rather than reason about whether you need to; it is cheaper. Judge
+staleness by content, never by the clock. The `start` warning will not save
+you: it cannot fire for a container already running while `app/` changes
+underneath it.
+
+> **Cost:** stated by the user, 2026-11-27, after asking three times in one
+> session — `:8777` served a removed control from a 29-minute-old container
+> while I reported it gone, having measured the repository three times and the
+> served page never. The full account is `todos/show-body-todo.md` item 3 and
+> `todos/served-page-spec.md`, which is an entire pair about this same failure,
+> and which I had read that session.
+
 ## Commands
 
 ```bash
@@ -293,7 +324,7 @@ node tools/fabric.mjs --mesh-law  # measured bending length against element size
 node tools/edits.mjs              # every cutting-table edit, and what each costs
 node tools/edits.mjs --darts      # every dart folded shut: the step and the turn
 python3 sim/server.py             # the drape side-car the viewer talks to
-node test/run.mjs                 # the gate. 310 pass / 0 fail
+node test/run.mjs                 # the gate. 306 pass / 0 fail
 python3 tools/viewshot.py out.png --eval 'JS'   # the viewer, headless, as a PNG
 python3 tools/viewshot.py out.png --url http://127.0.0.1:8777   # ...the SERVED page, not app/
 cd app && python3 -m http.server 8777     # the viewer, on the host

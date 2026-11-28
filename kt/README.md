@@ -52,7 +52,17 @@ node bin/kt.js help       # the command-line tool: the same operations as the MC
 | seed | one Markdown file per node, YAML front matter (`yaml`) | `seed/`, `scripts/seed.js`, `server/seed-files.js` (see `seed.md`) |
 | tests | `node --test` | `test/tree.test.js`, `test/seed.test.js` |
 
-The code runs on Node 18: keep `better-sqlite3@11` (v12+ needs Node 20/22) and `vite@5`.
+The code runs on the current Node LTS. `package.json` asks for `>=22`, which is what
+`better-sqlite3@13` requires; `vite@8` wants `^20.19.0 || >=22.12.0`.
+
+It said "runs on Node 18: keep `better-sqlite3@11` (v12+ needs Node 20/22) and
+`vite@5`" until 2026-11-28. That pin existed to match Ubuntu 24.04's archive node,
+and Node 18 went end of life in April 2025 — so two dependencies were being held
+back to preserve an unsupported runtime. The docker image installs the LTS from
+nodejs.org now (`NODE_VERSION` in `docker/knowledge-tree/Dockerfile.build`,
+v26.13.1 at the time), and the pins came off: `better-sqlite3@11.10.0` does not
+compile on Node 26 at all — `node-gyp` fails in `make` — which is what the old pin
+was protecting and is now the reason to drop it.
 
 Environment variables: `KT_DB` (database file), `KT_EDIT_DIR` (editing-session folder),
 `KT_SNAPSHOT_DIR` (snapshot folder), `HOST` and `PORT` (web server).

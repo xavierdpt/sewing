@@ -116,12 +116,21 @@ The tools. Every one of them is a drag, and the drag is the argument:
 | **join** | press one piece, release on another | one piece, with the seam between them gone |
 | **undo** | **U** | the pattern is snapshotted before every operation, fifty deep — commands included |
 
-And the four that are not a gesture, as buttons: **true the darts**, **measure
-the darts folded shut**, **list the edits**, **replay these edits onto this
-body**; plus the allowance and grain fields, which are edits like any other.
-All of them go through `table.command`, which is the same machinery a drag
-goes through — snapshot, operation, `check()`, report — so **U** undoes them
-too.
+And the two that are not a gesture, as buttons: **true the darts** and
+**replay these edits onto this body**; plus the allowance and grain fields,
+which are edits like any other. All of them go through `table.command`, which
+is the same machinery a drag goes through — snapshot, operation, `check()`,
+report — so **U** undoes them too.
+
+Two more buttons stood here until 2026-11-27 — **measure the darts folded
+shut** and **list the edits** — and they were removed, with eight others like
+them, because their entire output was a `console.table` nobody at the viewer
+sees ([console-readouts-spec.md](../todos/console-readouts-spec.md)). Neither
+was an edit: `command('dart-profile')` and `command('edits')` are pure
+queries (`table.js:417-418`), which is why they could go while the two above
+stay. Both questions are still asked, in the instrument that was always the
+better place for them: `node tools/edits.mjs` lists every edit and what it
+cost, and `node tools/edits.mjs --darts` measures every dart folded shut.
 
 The tool menu also lists the five gestures that are **planned and not built**
 — turn, move, mirror, join, cut — and the folder lists the four planned

@@ -1,6 +1,10 @@
 # The RUN image: node, the built tree and nothing else. No compiler, no npm,
 # no git -- what came out of the build image is copied in whole.
 #
+# Ubuntu 24.04 is the base for its libc and ca-certificates, NOT for its node:
+# the archive's 18.19 went end of life in April 2025. The node binary is the
+# LTS one the build image fetched from nodejs.org.
+#
 # BUILD_IMAGE is the tag the build image was given, so the two stay separate
 # images built by separate commands, rather than one multi-stage file.
 ARG BUILD_IMAGE=knowledge-tree-build:latest
@@ -9,9 +13,23 @@ FROM ${BUILD_IMAGE} AS build
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates nodejs \
+ && apt-get install -y --no-install-recommends ca-certificates libatomic1 \
  && rm -rf /var/lib/apt/lists/*
 
+# libatomic1 is NOT optional and NOT obvious: `ldd` on the upstream node binary
+# names libatomic.so.1, and a bare ubuntu:24.04 does not have it -- the archive
+# `nodejs` package used to pull it in, and copying the binary instead left it
+# behind. The container then crash-looped with
+# `node: error while loading shared libraries: libatomic.so.1`, which says
+# nothing about node being a copy. Everything else node links -- libstdc++,
+# libgcc_s, libm, libc, libdl, libpthread -- is already in the base; that was
+# checked with `ldconfig -p` rather than assumed.
+
+# Node comes from the build image, which installed the LTS release from
+# nodejs.org -- so the two images cannot drift onto different runtimes, and
+# this one needs no download of its own. The single binary, not the tarball:
+# npm and its tree stay behind, which is what "no npm" above means.
+COPY --from=build /usr/local/bin/node /usr/local/bin/node
 COPY --from=build /opt/knowledge-tree /opt/knowledge-tree
 WORKDIR /opt/knowledge-tree
 

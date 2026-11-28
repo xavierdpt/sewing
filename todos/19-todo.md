@@ -314,6 +314,15 @@ they are on top because this document puts the newest there, not because they
 outrank the pattern-editor six below.
 
 - [ ] **Eleven of the fifteen sections are still in the single panel.**
+      **Ten, since 2026-11-27**: `body` moved, as a `body ▾` menu over five
+      dialogs — its four subfolders plus a `size and units` dialog for what
+      was loose in it. That work has its own pair,
+      [body-dialog-spec.md](body-dialog-spec.md) /
+      [body-dialog-todo.md](body-dialog-todo.md), because it came from the
+      user rather than from [18-validation.md](18-validation.md) (rule 11);
+      this item keeps its identity and loses one section. It is also the
+      first section to be grouped **as it moved** rather than in a second
+      pass, which is what this item asks for below.
       `17-interface.md` opens by naming that panel as the problem — the folder
       you want is scrolled off, and two you want to watch at once cannot both
       be open — and four sections have moved to the bar since: `files`,

@@ -1,9 +1,14 @@
 # 08 — What You Can Install Locally
 
-Checked against this machine: **Linux Mint 22.3** (Ubuntu 24.04 "noble" base), node
-v18.19.1, `npm` **not** installed, `inkscape`, `python3-numpy`, `python3-scipy` and
-`libsdl2-dev` already present. Everything below is `apt-cache policy` output, not
-guesswork.
+Checked against this machine: **Linux Mint 22.3** (Ubuntu 24.04 "noble" base),
+`inkscape`, `python3-numpy`, `python3-scipy` and `libsdl2-dev` already present.
+Everything below is `apt-cache policy` output, not guesswork.
+
+**Node, re-measured 2026-11-28:** `node -v` is **v24.15.0** and `npm -v` is
+**11.12.1**, both from `~/.nvm/versions/node/v24.15.0/bin`. Apt's `nodejs` is still
+18.19.1 and is no longer what runs. This document said "node v18.19.1, `npm` **not**
+installed" until that measurement; nvm has been installed since, and §5 below is
+corrected with it.
 
 ## 1. Photogrammetry: pictures → 3D mesh
 
@@ -114,9 +119,21 @@ them to 0 or prove it impossible. That is a good weekend project and a satisfyin
 
 ## 5. Node
 
-Node 18 with no `npm` is why `app/` is built as a **static import-map directory with
-three.js vendored in** — no build step, no `node_modules`, nothing to rot. It runs from
-`python3 -m http.server` and the geometry modules run directly under `node`.
+`app/` is built as a **static import-map directory with three.js vendored in** — no
+build step, no `node_modules`, nothing to rot. It runs from `python3 -m http.server`
+and the geometry modules run directly under `node`.
+
+That started as a constraint: the machine had Node 18 from apt and no `npm` at all.
+The constraint is gone — there is nvm-managed **Node 24.15.0 and npm 11.12.1** here
+since 2026-11-28 — and **the decision stands anyway**, on the reasons that outlived
+it: nothing to install before the page runs, nothing to rebuild after an edit, and no
+dependency tree to go stale between sessions. It is a choice now rather than a
+limitation, which is worth knowing before someone "fixes" it by adding a bundler.
+
+The one place a toolchain *is* required is `kt/`, which is a real npm project with a
+native module. It does not borrow the host's: its docker image installs the current
+LTS from nodejs.org (v26.13.1 as of 2026-11-28, checksum-verified), so the tree builds
+the same way on a machine that has no Node at all.
 
 If you later want a bundler, install node 22 via `nvm` rather than apt; do not fight
 the distro node.

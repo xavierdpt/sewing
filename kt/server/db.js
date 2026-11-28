@@ -178,9 +178,37 @@ export class KnowledgeTree {
     if (ok !== 'ok') throw new Error(`schema migration of the content limit: quick_check says ${ok}`);
   }
 
-  close() { this.db.close(); }
+  close() { this._checkpoint(); this.db.close(); }
 
-  tx(fn) { return this.db.transaction(fn)(); }
+  tx(fn) {
+    const result = this.db.transaction(fn)();
+    this._checkpoint();
+    return result;
+  }
+
+  /**
+   * Fold the write-ahead log back into the database file, after every write.
+   *
+   * The database is a COMMITTED artifact in this repository, not a cache, and
+   * its `-wal` and `-shm` side-files are gitignored. In WAL mode a write lands
+   * in the `-wal` and reaches the main file only at a checkpoint -- normally
+   * when the last connection closes, which for the MCP server means the end of
+   * a session. So `git status` reported the database unmodified while two new
+   * nodes existed in it, and a commit at that moment would have carried
+   * documents referencing nodes its own database did not contain.
+   *
+   * Hence here, where every write already passes: the file on disk is whole
+   * after each one. `TRUNCATE` empties the log rather than only copying it,
+   * and it cannot run while another connection is reading, in which case the
+   * pragma reports busy and the next write tries again -- the data is in the
+   * `-wal` either way, never lost. `CLAUDE.md` rule 0 keeps the manual
+   * command for that case, and for a database written by anything older than
+   * this code.
+   */
+  _checkpoint() {
+    if (this.dbPath === ':memory:') return;
+    try { this.db.pragma('wal_checkpoint(TRUNCATE)'); } catch { /* a reader holds it; the next write retries */ }
+  }
 
   /** Run fn in a transaction; with dryRun, return its result and roll everything back. */
   _txMaybeDry(fn, dryRun) {
