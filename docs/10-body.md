@@ -31,6 +31,35 @@ centre back neck point and infers prominence from them. That is the classic
 patternmaking trick, and it is why this parametrisation is better than the one it
 replaced.
 
+### The bounds, and the relations between them
+
+The minimum and maximum of every field in the measurement form are **derived**, by
+`measurementRanges()` in `app/js/body.js`, not written by hand:
+
+| group | rule |
+|---|---|
+| girths and breadths in `SIZE_CHART` | the chart's span, widened by a quarter of that span at each end |
+| lengths in the chart | the chart's extremes carried across the stature range, because lengths grow with height and not with size |
+| lengths not in the chart | the default body carried across the same stature range |
+| `thighGirth`, `kneeGirth` | half the default to nearly twice it — the weakest rule here |
+| breadth and depth | 0 to half the largest girth that field's ring can take, since a closed loop of girth G cannot be wider than G/2 |
+| `neckHeight` | 0 to 20 cm: a modelling choice rather than a measurement of a person |
+
+They were invented numbers until 2026-11-28 — bust 45 to 170, low hip 30 to 200 — with no
+relation to each other, so the form offered combinations that are not bodies and the
+generator built them. The chart also carries the relations that make a set of numbers a
+body: the bust is 16 cm over the underbust in every row, the low hip 6 cm over the bust,
+the waist 18 to 20 cm under it. Editing the bust now **carries the other girths with it**
+by the same difference, preserving whatever deviation from the chart the person has
+already typed, and a body more than two grading steps away from a relation says so in the
+HUD as an advisory — `unusual for a size chart`, which is not the same voice as a
+measurement the solver could not reach. `todos/body-measurements-spec.md` is the account.
+
+**`build()` is a function of its measurements and nothing else.** The girth scales are
+reset on every build and the calibration iterates to a tolerance rather than a fixed three
+rounds; before 2026-11-28 they were carried between builds, and the same numbers gave a
+different body depending on what had been built before.
+
 ## 2. What comes out
 
 Every measurement is reproduced to **under a tenth of a millimetre**:
@@ -48,7 +77,17 @@ apex to waist, front     24.0 -> model   24.00   err  0.000 cm
 
 That is the only honest test of a body generator: **measure the model the way a tape
 would, and check it against what you typed.** `measure()` does exactly that, and the
-viewer has a *measure the model* button that prints the table.
+**gate** is what runs it: `test/run.mjs` calls it at lines 80, 121, 130, 160, 170 and
+223, including the unit round-trip and the belly and shape variants.
+
+The viewer had a *measure the model* button beside it until 2026-11-27, printing this
+table with `console.table`. It was removed on the user's call
+([measure-button-spec.md](../todos/measure-button-spec.md)): its answer only ever
+reached a browser console, where nobody holding a tape measure is looking, and the
+question it asked was already the gate's. What the page still shows is `torso.M`, in
+the HUD — the measurements that were *asked for*, not the ones the surface came out
+at. Putting the `error` column in the HUD is the open proposal for the live body; no
+control replaces the button.
 
 Derived, not measured: bust projection **5.38 cm** and the apex at **21.9 cm above the
 waist**. Both fall out of the solves.
@@ -160,6 +199,12 @@ itself, so to be unambiguous:
 | `hipWidth` | low hip, side to side | *bitrochanteric breadth* (the bony version), *across hip* |
 | `hipThickness` | low hip, front to back | *buttock depth*, *abdominal depth* |
 | `waistToHip` | the **vertical** drop, waist to low hip | several drafting books call this one *hip depth* — which is exactly why the front-to-back measurement above is called thickness |
+
+**One half of a pair is enough.** A breadth on its own fixes the aspect just as well as a
+pair does, because the girth has already fixed the size: `ratioOf` solves for the ratio
+whose ring is that wide at that girth. Until 2026-11-28 it took both halves and a single
+measurement was inert — measured at 3 changed pixels in three sweeps, and now at 12 000
+(`todos/body-measurements-spec.md` §4 question 5).
 
 Giving a girth *and* a breadth *and* a depth over-determines the ellipse, so **girth wins
 and sets the size, breadth and depth set the aspect ratio**, and `measure()` reports what

@@ -2218,6 +2218,92 @@ check('OBJ export has the right vertex count',
   objOut.split('\n').filter((l) => l.startsWith('v ')).length === settled.verts.length);
 check('JSON round-trips', Assembly.fromJSON(settled.toJSON()).tiles.length === settled.tiles.length);
 
+line('the body answers its measurements, whatever was built before');
+{
+  // A generator that is not a function of its inputs makes every other
+  // measurement in this file a measurement of its history too. `girthScale`
+  // used to be carried between builds and three calibration rounds were not
+  // enough to forget it: the same numbers gave a bust apex at 22.1 cm or at
+  // 4.9 cm depending on what came first (`todos/body-measurements-spec.md`
+  // section 2). Item 7 of its todo.
+  const keysOf = (m) => Object.keys(m).sort();
+  const same = (a, b, tol) => keysOf(a).every((k) =>
+    (typeof a[k] === 'number' ? Math.abs(a[k] - b[k]) <= tol : a[k] === b[k]));
+
+  const fresh = new Body();
+  fresh.build();
+  const want = fresh.measure();
+
+  const abused = new Body();
+  abused.build();
+  for (const [k, v] of Object.entries({ bust: 140, underBust: 52, waist: 122 })) {
+    abused.m[k] = v;
+  }
+  abused.build();
+  for (const k of ['bust', 'underBust', 'waist']) abused.m[k] = new Body().m[k];
+  abused.build();
+  const got = abused.measure();
+  const worst = Math.max(...keysOf(want)
+    .filter((k) => typeof want[k] === 'number')
+    .map((k) => Math.abs(want[k] - got[k])));
+  check('the same measurements give the same body, after an extreme one',
+    same(want, got, 1e-9), `worst difference ${worst.toExponential(1)} cm`);
+
+  // Order independence: B after A is the same body as B after C.
+  const mk = (over) => {
+    const b = new Body();
+    Object.assign(b.m, over);
+    b.build();
+    return b;
+  };
+  const viaA = mk({ bust: 100 });
+  Object.assign(viaA.m, { bust: 88, lowHip: 94 });
+  viaA.build();
+  const viaC = mk({ bust: 68, lowHip: 146 });
+  Object.assign(viaC.m, { bust: 88, lowHip: 94 });
+  viaC.build();
+  check('the order the bodies were built in does not change the last one',
+    same(viaA.measure(), viaC.measure(), 1e-9));
+}
+
+line('every standard size is a body the generator can actually build');
+{
+  // The round trip: generate from the measurements, re-measure the mesh,
+  // compare. The chart is the one set of measurements in this repository
+  // that is known to describe bodies, so nothing in it may come out `unmet`.
+  let worstResidual = 0, unmetRows = 0;
+  for (let i = 0; i < SIZE_CHART.rows.length; i++) {
+    const b = new Body();
+    Object.assign(b.m, standardSize(i));
+    b.build();
+    if (b.unmet.length) unmetRows++;
+    const a = b.measure();
+    for (const k of ['bust', 'underBust', 'waist', 'lowHip', 'backLength']) {
+      worstResidual = Math.max(worstResidual, Math.abs(a[k] - b.M[k]));
+    }
+  }
+  check('no standard size reports a measurement it could not reach',
+    unmetRows === 0, `${unmetRows} of ${SIZE_CHART.rows.length} rows`);
+  check('every standard size re-measures as what it was asked for',
+    worstResidual < 0.5, `worst ${worstResidual.toFixed(3)} cm over 11 sizes`);
+}
+
+line('the rings of a body stay a loft');
+{
+  // The slab-above-a-body failures all look the same from here: a ring stack
+  // that stopped ascending, or an axis that went non-positive.
+  let bad = 0, nonFinite = 0;
+  for (let i = 0; i < SIZE_CHART.rows.length; i++) {
+    const b = new Body();
+    Object.assign(b.m, standardSize(i));
+    b.build();
+    for (let j = 1; j < b.ys.length; j++) if (!(b.ys[j] > b.ys[j - 1])) bad++;
+    for (const v of [...b.as, ...b.bs]) if (!Number.isFinite(v) || v <= 0) nonFinite++;
+  }
+  check('every ring sits above the one below it', bad === 0, `${bad} inversions`);
+  check('every ring has a positive, finite pair of axes', nonFinite === 0);
+}
+
 function fmt(s) {
   return `tiles ${s.tiles} verts ${s.vertices} edges ${s.edges} dof ${s.dof}`
     + ` | strain rms ${(s.rmsStrain * 100).toFixed(2)}% max ${(s.maxStrain * 100).toFixed(1)}%`

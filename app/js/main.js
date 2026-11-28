@@ -6,11 +6,11 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import GUI from 'lil-gui';
 
-import { Body, SIZE_CHART, BELLY, BUTTOCKS, POSTURE, POSES, SHOULDER_SLOPE, INCH,
+import { Body, SIZE_CHART, measurementRanges, coupledEdit, BELLY, BUTTOCKS, POSTURE, POSES, SHOULDER_SLOPE, INCH,
   LENGTH_KEYS } from './body.js';
 import { Assembly } from './assembly.js';
 import { buildGridShell, quantize, growOntoSurface } from './lattice.js';
-import { relax, settle, worstEdges, faceClearanceReport } from './relax.js';
+import { relax, settle, faceClearanceReport } from './relax.js';
 import { makePattern } from './panels.js';
 import { patternSVG } from './patternsvg.js';
 import { exportPatternJSON, importPatternJSON, sew, drape, fitField, fitReport,
@@ -145,7 +145,6 @@ const params = {
   wrap: true,
   front: false,               // build only the front half
   colour: 'defect',           // 'defect' | 'strain' | 'tile' | 'gore' | 'fit' | 'plain'
-  showBody: true,
   showTiles: true,
   showSeams: true,
   showShell: false,            // step one is the body on its own
@@ -340,6 +339,15 @@ const withBusy = (label, fn) => {
 // --------------------------------------------------------------- surfaces
 
 const torso = new Body();
+// The measurements as they stood before the edit in progress, for the
+// coupling in the measurement form: lil-gui has already written the new value
+// into `torso.m` by the time the handler runs, so the delta has to come from
+// somewhere else. Kept in step by refreshBody(). It is the whole set and not
+// one field, because the first version kept only the bust and then used it as
+// the previous value of whatever had been edited -- a back length moved to
+// 35.5 was read as a change of -56.5 cm and dragged its partners to their
+// floors.
+let lastM = { ...torso.m };
 
 /**
  * The body, drawn inset by half the cloth's thickness.
@@ -376,7 +384,6 @@ function buildBodyMesh() {
   }));
   bodyMesh.castShadow = true;
   bodyMesh.receiveShadow = true;
-  bodyMesh.visible = params.showBody;
   scene.add(bodyMesh);
   frameScene();
   buildArms();
@@ -1746,6 +1753,7 @@ function clearDrop() {
 
 /** Rebuild the body and whatever is shown on it. */
 function refreshBody() {
+  lastM = { ...torso.m };
   torso.build();
   // the level set is built from the body's geometry, so it is stale now, and
   // so is any cloth that was resting on the old one
@@ -1762,32 +1770,6 @@ function clearShell() {
   if (tileMesh) { scene.remove(tileMesh); tileMesh.geometry.dispose(); tileMesh = null; }
   if (seamLines) { scene.remove(seamLines); seamLines.geometry.dispose(); seamLines = null; }
   updateHUD();
-}
-
-/** What a tape would read off the model, against what was asked for. */
-function measureTable() {
-  const got = torso.measure();
-  const k = torso.m.units === 'in' ? 1 / INCH : 1;
-  const rows = [];
-  for (const key of ['bust', 'underBust', 'waist', 'lowHip', 'neckCircumference',
-    'backLength', 'apexToApex', 'thighGirth', 'kneeGirth']) {
-    rows.push({ measurement: key, asked: +torso.m[key].toFixed(2),
-      model: +(got[key] * k).toFixed(2), error: +((got[key] * k) - torso.m[key]).toFixed(2) });
-  }
-  const apexToWaist = torso.m.frontLengthFromCBNP - torso.m.bustHeightFromCBNP;
-  rows.push({ measurement: 'apex to waist (front)', asked: +apexToWaist.toFixed(2),
-    model: +(got.apexToWaistFront * k).toFixed(2),
-    error: +((got.apexToWaistFront * k) - apexToWaist).toFixed(2) });
-  rows.push({ measurement: 'bust projection (derived)', asked: '-',
-    model: +(torso.bustProjection * k).toFixed(2), error: '-' });
-  for (const key of ['hipWidth', 'hipThickness', 'waistWidth', 'waistThickness']) {
-    rows.push({ measurement: key, asked: torso.m[key] || '(default)',
-      model: +(got[key] * k).toFixed(2),
-      error: torso.m[key] ? +((got[key] * k) - torso.m[key]).toFixed(2) : '-' });
-  }
-  rows.push({ measurement: 'across the knees', asked: '-',
-    model: +(got.acrossKnees * k).toFixed(2), error: '-' });
-  return rows;
 }
 
 // Superseded premise (2026-11-26): the tiled shell is the project's initial idea.
@@ -2329,12 +2311,26 @@ function updateHUD(opts = {}) {
     const M = torso.M, u = torso.m.units;
     const k = u === 'in' ? 1 / INCH : 1;
     const f2 = (v) => (v * k).toFixed(1);
+    // What the finished body MEASURES, beside what was asked for. A generator
+    // that silently misses the number it was given is the worst failure it
+    // has, because everything downstream still runs and the figures merely
+    // stop being true (`todos/body-measurements-spec.md` section 3 item 3).
+    // `MET_TOL` is the solver's own tolerance, so a value shown plainly is
+    // one the solve reached.
+    const A = torso.measure();
+    const MET_TOL = 0.15;
+    const got = (asked, achieved) => (achieved === undefined
+      || Math.abs(achieved - asked) <= MET_TOL
+      ? `${f2(asked)} ${u}`
+      : `<span class="warn">${f2(asked)} → ${f2(achieved)} ${u}</span>`);
     el.innerHTML = '<table>'
       + `<tr><td>height</td><td>${f2(M.height)} ${u}</td></tr>`
-      + `<tr><td>bust / underbust</td><td>${f2(M.bust)} / ${f2(M.underBust)} ${u}</td></tr>`
-      + `<tr><td>waist / low hip</td><td>${f2(M.waist)} / ${f2(M.lowHip)} ${u}</td></tr>`
-      + `<tr><td>back length</td><td>${f2(M.backLength)} ${u}</td></tr>`
-      + `<tr><td>apex to apex</td><td>${f2(M.apexToApex)} ${u}</td></tr>`
+      + `<tr><td>bust / underbust</td><td>${got(M.bust, A.bust)} / `
+        + `${got(M.underBust, A.underBust)}</td></tr>`
+      + `<tr><td>waist / low hip</td><td>${got(M.waist, A.waist)} / `
+        + `${got(M.lowHip, A.lowHip)}</td></tr>`
+      + `<tr><td>back length</td><td>${got(M.backLength, A.backLength)}</td></tr>`
+      + `<tr><td>apex to apex</td><td>${got(M.apexToApex, A.apexToApex)}</td></tr>`
       + `<tr><td>posture</td><td>${M.posture}</td></tr>`
       + `<tr><td>belly / seat</td><td>${M.bellyProtuberance} / ${M.buttocksShape}</td></tr>`
       + `<tr><td>shoulder slope</td><td>${M.shoulderSlope}</td></tr>`
@@ -2342,6 +2338,13 @@ function updateHUD(opts = {}) {
       + `<tr><td>bust projection</td><td>${f2(torso.bustProjection)} ${u} (derived)</td></tr>`
       + `<tr><td>surface area</td><td>${(torso.surfaceArea() / 10000).toFixed(3)} m2</td></tr>`
       + '</table>'
+      // The generator composes this sentence and, until now, nobody read it.
+      + (torso.warning
+        ? `<div class="warn" style="margin-top:6px;font-size:11px">${torso.warning}</div>`
+        : '')
+      + (torso.advisory
+        ? `<div style="margin-top:6px;color:#c9a227;font-size:11px">${torso.advisory}</div>`
+        : '')
       + '<div style="margin-top:6px;color:#9aa0aa;font-size:11px">'
       + 'step one: the body. turn on <b>shell</b> or press <b>T</b> to try a pattern on.</div>';
     return;
@@ -2459,10 +2462,25 @@ const bar = new MenuBar({ reserveRight: 450 });
 /** A dialog with a lil-gui inside it, so a section reads the same as a folder. */
 function dialogGUI(opts) {
   const dlg = bar.dialog(opts);
-  const g = new GUI({ container: dlg.body, width: opts.width ?? 430 });
+  fillDialogGUI(dlg, opts.width ?? 430);
+  return dlg;
+}
+
+/**
+ * Put a fresh lil-gui root in a dialog, replacing whatever was there.
+ *
+ * Most sections are built once. The measurement form is not: it is destroyed
+ * and rebuilt whenever the unit or the standard size changes, which as a
+ * folder was `fMeas.destroy()` and `addFolder` again. A dialog's contents are
+ * a lil-gui ROOT rather than a folder, so the same gesture is this -- and it
+ * reassigns `dlg.gui`, which is what `refreshGUI` iterates.
+ */
+function fillDialogGUI(dlg, width = 430) {
+  if (dlg.gui) dlg.gui.destroy();
+  const g = new GUI({ container: dlg.body, width });
   g.domElement.style.setProperty('--width', '100%');
   dlg.gui = g;
-  return dlg;
+  return g;
 }
 
 /**
@@ -2482,8 +2500,51 @@ const gui = new GUI({ title: 'bodice', width: 430 });
 // clear of the menubar
 gui.domElement.style.top = 'var(--bar-h)';
 gui.domElement.style.maxHeight = 'calc(100vh - var(--bar-h))';
-const fBody = gui.addFolder('body');
-fBody.add(params, 'showBody').onChange((v) => { if (bodyMesh) bodyMesh.visible = v; });
+// ------------------------------------------------------------ the body
+//
+// The body was one folder with five subfolders in it, which is the panel's
+// own fault one level down: the subfolder you want is scrolled off inside the
+// window. It is a MENU now (17-interface.md), one dialog per subsection, so
+// the measurement form and the pose can be open beside each other and each
+// remembers where it was put. The menu holds no state of its own.
+//
+// Five entries, not four: what was loose in the folder -- the size chart, the
+// unit, the two readouts -- cannot sit on a menu, which lists dialogs, so it
+// has a dialog of its own. todos/body-dialog-spec.md §2.
+const bodyMenu = bar.menu({ id: 'body', label: 'body' });
+
+const formDialog = dialogGUI({
+  id: 'body-form', label: 'size and units', title: 'size and units',
+  menu: bodyMenu,
+  hint: 'start from a standard size, choose the unit, and read the model back',
+});
+const fBody = formDialog.gui;
+
+const measDialog = dialogGUI({
+  id: 'body-measurements', label: 'measurements',
+  title: `measurements (${torso.m.units})`,
+  menu: bodyMenu,
+  hint: 'what a made-to-measure service asks for, plus the breadth and depth '
+      + 'pairs: a girth alone does not say what shape a cross section is',
+});
+
+const shapeDialog = dialogGUI({
+  id: 'body-shape', label: 'shape', title: 'shape', menu: bodyMenu,
+  hint: 'belly, buttocks, posture and shoulder slope: the named shapes a '
+      + 'size chart implies and does not let you choose',
+});
+
+const asymDialog = dialogGUI({
+  id: 'body-asymmetry', label: 'asymmetry', title: 'asymmetry', menu: bodyMenu,
+  hint: 'what no size chart offers: one shoulder lower, a shifted or rotated torso',
+});
+
+const armsDialog = dialogGUI({
+  id: 'body-arms', label: 'arms, legs and poses', title: 'arms, legs and poses',
+  menu: bodyMenu,
+  hint: 'the limbs: their size, where they are put, whether they are drawn, '
+      + 'and whether the cloth collides with them',
+});
 
 const sizeNames = SIZE_CHART.labels.eu.map((eu, i) =>
   `EU ${eu} / US ${SIZE_CHART.labels.us[i]} / UK ${SIZE_CHART.labels.uk[i]}`);
@@ -2496,55 +2557,82 @@ fBody.add(params, 'sizePreset', sizeNames).name('standard size').onChange((v) =>
 /**
  * The measurement form, mirroring what a made-to-measure service asks for.
  * Rebuilt on a unit change because the ranges and the stored values both move.
+ *
+ * The bounds are NOT written here. They are derived from `SIZE_CHART` and the
+ * default body by `measurementRanges()` in `app/js/body.js`, because the
+ * hand-written ones this table used to carry came from nowhere and let the
+ * form ask for combinations that are not bodies
+ * (`todos/body-measurements-spec.md` section 3 item 2).
  */
+const RANGES = measurementRanges();
 const MEASUREMENTS = [
-  ['height', 120, 215, 'total stature'],
-  ['bust', 45, 170, 'fullest part'],
-  ['underBust', 45, 160, 'directly under the bust'],
-  ['waist', 30, 160, 'natural waist'],
-  ['lowHip', 30, 200, 'fullest part of the seat'],
-  ['neckCircumference', 22, 60, 'base of the neck'],
-  ['neckHeight', 0, 20, 'how much neck to carry above the nape'],
-  ['backLength', 25, 65, 'nape to waist, down the back'],
-  ['bustHeightFromCBNP', 15, 60, 'nape over the shoulder to the apex'],
-  ['frontLengthFromCBNP', 30, 95, 'nape over the shoulder and apex to the waist'],
-  ['backWidth', 20, 65, 'across the back between the armholes'],
-  ['apexToApex', 8, 40, 'bust point to bust point'],
-  ['waistToHip', 10, 35, 'waist down to the low hip'],
-  ['crotchDepth', 15, 45, 'waist down to the crotch (the rise)'],
-  ['waistToKnee', 35, 90, 'waist down to the knee'],
-  ['thighGirth', 25, 100, 'fullest part of the upper thigh'],
-  ['kneeGirth', 20, 70, 'around the knee'],
+  ['height', 'total stature'],
+  ['bust', 'fullest part'],
+  ['underBust', 'directly under the bust'],
+  ['waist', 'natural waist'],
+  ['lowHip', 'fullest part of the seat'],
+  ['neckCircumference', 'base of the neck'],
+  ['neckHeight', 'how much neck to carry above the nape'],
+  ['backLength', 'nape to waist, down the back'],
+  ['bustHeightFromCBNP', 'nape over the shoulder to the apex'],
+  ['frontLengthFromCBNP', 'nape over the shoulder and apex to the waist'],
+  ['backWidth', 'across the back between the armholes'],
+  ['apexToApex', 'bust point to bust point'],
+  ['waistToHip', 'waist down to the low hip'],
+  ['crotchDepth', 'waist down to the crotch (the rise)'],
+  ['waistToKnee', 'waist down to the knee'],
+  ['thighGirth', 'fullest part of the upper thigh'],
+  ['kneeGirth', 'around the knee'],
 ];
 
 /**
  * Breadth and depth. A girth alone does not say what SHAPE a cross section is:
  * 98 cm of hip can be wide and flat or narrow and deep, and those need
- * different patterns. Zero means "use the default proportion".
+ * different patterns. Zero means "use the default proportion"; one half of a
+ * pair on its own is enough, and sets the aspect against the girth.
  */
 const SHAPE_PAIRS = [
-  ['hipWidth', 0, 60, 'low hip, side to side (bitrochanteric breadth)'],
-  ['hipThickness', 0, 50, 'low hip, front to back (buttock depth)'],
-  ['waistWidth', 0, 60, 'waist, side to side'],
-  ['waistThickness', 0, 50, 'waist, front to back'],
+  ['hipWidth', 'low hip, side to side (bitrochanteric breadth)'],
+  ['hipThickness', 'low hip, front to back (buttock depth)'],
+  ['waistWidth', 'waist, side to side'],
+  ['waistThickness', 'waist, front to back'],
 ];
-let fMeas = null;
+/**
+ * The measurement form is rebuilt rather than updated, because a unit change
+ * moves the ranges and the stored values both. It is its own dialog now, so
+ * the rebuild replaces that dialog's lil-gui root and renames the dialog --
+ * the unit is in the title, where it was in the folder's name.
+ */
 function rebuildMeasurementGUI() {
-  if (fMeas) fMeas.destroy();
-  fMeas = fBody.addFolder(`measurements (${torso.m.units})`);
+  const fMeas = fillDialogGUI(measDialog);
+  measDialog.setTitle(`measurements (${torso.m.units})`);
   const k = torso.m.units === 'in' ? 1 / INCH : 1;
-  for (const [key, lo, hi, hint] of MEASUREMENTS) {
+  // The hints in the table are not shown anywhere; see the spec's section 3.
+  for (const [key] of MEASUREMENTS) {
+    const [lo, hi] = RANGES[key];
     fMeas.add(torso.m, key, +(lo * k).toFixed(1), +(hi * k).toFixed(1), k < 1 ? 0.1 : 0.5)
       .name(key.replace(/([A-Z])/g, ' $1').toLowerCase())
-      .onFinishChange(refreshBody);
+      .onFinishChange((v) => {
+        // Soft coupling: the girths a graded chart moves together move
+        // together here too, carrying the person's own deviation with them,
+        // and anything carried can simply be edited afterwards
+        // (`todos/body-measurements-spec.md` section 4 question 2).
+        const also = coupledEdit(torso.m, key, v, lastM[key]);
+        for (const [key2, v2] of Object.entries(also)) {
+          const [lo2, hi2] = RANGES[key2];
+          torso.m[key2] = Math.min(Math.max(v2, lo2), hi2);
+        }
+        if (Object.keys(also).length) fMeas.controllers.forEach((c) => c.updateDisplay());
+        refreshBody();
+      });
   }
   const fPairs = fMeas.addFolder('breadth and depth (0 = default shape)').close();
-  for (const [key, lo, hi] of SHAPE_PAIRS) {
+  for (const [key] of SHAPE_PAIRS) {
+    const [lo, hi] = RANGES[key];
     fPairs.add(torso.m, key, +(lo * k).toFixed(1), +(hi * k).toFixed(1), k < 1 ? 0.1 : 0.5)
       .name(key.replace(/([A-Z])/g, ' $1').toLowerCase())
       .onFinishChange(refreshBody);
   }
-  fMeas.open();
 }
 
 fBody.add(torso.m, 'units', ['cm', 'in']).name('units').onChange((u) => {
@@ -2558,7 +2646,7 @@ fBody.add(torso.m, 'units', ['cm', 'in']).name('units').onChange((u) => {
   rebuildMeasurementGUI();
 });
 
-const fShape = fBody.addFolder('shape');
+const fShape = shapeDialog.gui;
 fShape.add(torso.m, 'bellyProtuberance', Object.keys(BELLY)).name('belly protuberance')
   .onChange(refreshBody);
 fShape.add(torso.m, 'buttocksShape', Object.keys(BUTTOCKS)).name('buttocks shape')
@@ -2567,13 +2655,13 @@ fShape.add(torso.m, 'posture', Object.keys(POSTURE)).name('posture').onChange(re
 fShape.add(torso.m, 'shoulderSlope', Object.keys(SHOULDER_SLOPE)).name('shoulder slope')
   .onChange(refreshBody);
 
-const fa = fBody.addFolder('asymmetry -- what no size chart offers').close();
+const fa = asymDialog.gui;
 for (const [k2, lo, hi] of [['shoulderDrop', 0, 8], ['lateralShift', -8, 8],
   ['bustAsym', -5, 5], ['rotation', -20, 20]]) {
   fa.add(torso.m, k2, lo, hi, 0.1).onFinishChange(refreshBody);
 }
 
-const fArms = fBody.addFolder('arms, legs and poses');
+const fArms = armsDialog.gui;
 fArms.add(params, 'pose', Object.keys(POSES)).name('pose').onChange((v) => {
   torso.applyPose(v);
   refreshBody();
@@ -2600,35 +2688,7 @@ fArms.add(params, 'legsCollide').name('legs block the cloth').onChange(() => {
   torso.includeLegs = params.legsCollide;
   if (params.showShell) rebuildShell();
 });
-fArms.add({ h: () => {
-  // what a hem has to clear, at every height, in this pose
-  const rows = [];
-  for (const name of ['knee', 'midThigh', 'crotch', 'lowHip']) {
-    const y = torso.heights[name];
-    const sp = torso.legSpanAt(y);
-    rows.push({ level: name, 'y cm': +y.toFixed(1),
-      'hem needed cm': +sp.perimeterCm.toFixed(1),
-      'width cm': +sp.widthCm.toFixed(1), 'depth cm': +sp.depthCm.toFixed(1) });
-  }
-  console.table(rows);
-} }, 'h').name('hem clearance in this pose');
-fArms.add({ a: () => {
-  const r = [];
-  for (const side of [-1, 1]) {
-    const loop = torso.armscye(side);
-    let per = 0;
-    for (let i = 0; i < loop.length; i++) {
-      const a = loop[i].p, b = loop[(i + 1) % loop.length].p;
-      per += Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-    }
-    const ys = loop.map((q) => q.p[1]);
-    r.push({ side: side < 0 ? 'left' : 'right', 'circumference cm': +per.toFixed(1),
-      'top y': +Math.max(...ys).toFixed(1), 'bottom y': +Math.min(...ys).toFixed(1) });
-  }
-  console.table(r);
-} }, 'a').name('measure the armscye');
 
-fBody.add({ m: () => console.table(measureTable()) }, 'm').name('measure the model');
 fBody.add({ f: () => frameScene(true) }, 'f').name('reframe the view');
 
 // Superseded premise: this whole folder drives the tiled shell. See `rebuildShell`.
@@ -2746,7 +2806,6 @@ fCloth.add(params, 'clothColour', ['stretch', 'panel', 'selection', 'contact', '
 fCloth.add({ p: () => { playing = !playing; } }, 'p').name('pause / resume [space]');
 fCloth.add({ s: () => { if (sim) { sim.step(1 / 60); updateClothMesh(); updateHUD(); } } }, 's')
   .name('one frame');
-fCloth.add({ r: () => { if (sim) console.table(sim.report()); } }, 'r').name('report');
 fCloth.add({ x: clearDrop }, 'x').name('clear');
 
 // The tests share a menubar entry rather than taking one each: the bar is
@@ -2791,8 +2850,6 @@ fAcc.add(params, 'accAngleDeg', 0, 80, 5).name('pleat opens at this angle, deg')
 fAcc.add(params, 'accEdge', 1.0, 4, 0.1).name('triangle edge cm');
 fAcc.add(params, 'accDropCm', 0, 40, 1).name('release height cm');
 fAcc.add({ a: startAccordion }, 'a').name('fold it and drop it [A]');
-fAcc.add({ m: () => { const r = stackReport(); if (r) console.table([r]); } }, 'm')
-  .name('measure the heap');
 fAcc.add({ t: () => putOnTable(accordionPattern(),
   `strip-${params.accWidthCm}x${params.accLengthCm}`) }, 't')
   .name('cut it as a pattern piece instead');
@@ -2840,10 +2897,6 @@ fSkirt.add(params, 'stitchSeconds', 0.5, 6, 0.5).name('seconds to sew the seams'
 fSkirt.add(params, 'pinWaist').name('waistband (off = it slides off)');
 fSkirt.add(params, 'waistPinReachCm', 2, 40, 1)
   .name('waistband reaches this far, cm');
-fSkirt.add({ f: () => { if (sim && asm.meta && asm.meta.skirt) console.table(hemProfile(asm)); } },
-  'f').name('count the folds');
-fSkirt.add({ a: () => { if (loadedPattern) console.table(assemblyReport(loadedPattern)); } },
-  'a').name('how it assembles');
 fSkirt.add({ p: exportPattern }, 'p').name('print the pattern [P]');
 // A deliberately lopsided fixture, because a symmetric garment hides
 // left-right mistakes: a mirrored piece and a correct one look the same.
@@ -2927,8 +2980,6 @@ fSew.add(params, 'stitchSoftness', 1, 400, 1)
 fSew.add(params, 'weldTolCm', 0.05, 2, 0.05).name('count a seam closed within, cm');
 fSew.add(params, 'forceSeamsShut').name('force open seams shut (the old way)');
 fSew.add(params, 'stitchColour', ['tension', 'seam']).name('colour the stitches by');
-fSew.add({ r: () => { if (sim && sim.stitches.length) console.table(sim.stitchReport({ closedCm: params.weldTolCm })); } },
-  'r').name('seam report: tension and gaps');
 
 const telemetrySessionId = startTelemetry({
   url: params.serverUrl, enabled: params.telemetry,
@@ -2950,8 +3001,6 @@ const telemetrySessionId = startTelemetry({
 const fSide = gui.addFolder('the drape -- in this page, in wasm');
 fSide.add(params, 'drapeSeconds', 1, 20, 1).name('seconds of drape to solve');
 fSide.add({ d: () => sendToWasm() }, 'd').name('re-drape what is on screen now');
-fSide.add({ p: () => { if (sim) console.table(sim.penetration()); } }, 'p')
-  .name('how much of the body is through the cloth?');
 fSide.add(params, 'bodyInsetCm', 0, 0.2, 0.01)
   .name('draw the body inset by, cm (cloth half-thickness)')
   .onChange(buildBodyMesh);
@@ -3011,7 +3060,6 @@ fTable.add(params, 'spreadDeg', 2, 60, 1).name('spread, degrees')
   .onChange((v) => { if (table) table.spreadDeg = v; });
 fTable.add({ u: () => { if (table && table.undo()) updateHUD(); } }, 'u').name('undo [U]');
 fTable.add({ d: () => { if (table) table.topDown(); } }, 'd').name('look down at the table');
-fTable.add({ r: () => { if (table) console.table(table.report()); } }, 'r').name('measure the pattern');
 fTable.add({ x: () => { if (table) table.hide(); } }, 'x').name('clear the table');
 
 // The edits that are not a gesture. Each one goes through `table.command`,
@@ -3026,21 +3074,6 @@ fTable.add({ go: () => {
     + `${r.turnBeforeDeg.worst} -> ${r.turnAfterDeg.worst} deg at the worst dart`);
   if (r.failed.length) console.warn('could not true:', r.failed.join('; '));
 } }, 'go').name('true the darts');
-
-fTable.add({ go: () => {
-  if (!table) return;
-  const prof = table.command('dart-profile');
-  if (!prof) return;
-  console.table(prof.darts);
-  console.log(`folded shut: step worst ${prof.step.worst} cm, turn worst ${prof.turn.worst} deg`);
-} }, 'go').name('measure the darts folded shut');
-
-fTable.add({ go: () => {
-  if (!table) return;
-  const rows = table.command('edits');
-  if (!rows || !rows.length) { console.log('no edits recorded on this pattern yet'); return; }
-  console.table(rows);
-} }, 'go').name('list the edits');
 
 fTable.add({ go: () => {
   if (!table) return;
@@ -3089,7 +3122,6 @@ fView.add(params, 'showTiles').onChange((v) => {
 });
 fView.add(params, 'showSeams').onChange((v) => { if (seamLines) seamLines.visible = v; });
 fView.add({ e: exportOBJ }, 'e').name('export OBJ [E]');
-fView.add({ w: () => console.table(worstEdges(asm, 15)) }, 'w').name('log worst seams');
 
 // ------------------------------------------------- the cutting table
 
@@ -3730,3 +3762,7 @@ globalThis.__flushTelemetry = flushTelemetry;
  * ask for the wasm path without clicking through a menu that does not exist.
  * Returns the backend in force, so a caller can check rather than assume. */
 globalThis.__sel = (ids) => setSelection(ids);
+// An instrument should ask the page what the form offers, not parse this
+// file for it: the bounds are derived now, not literals (rule 9).
+globalThis.__ranges = () => ({ measurements: MEASUREMENTS.map(([k]) => k),
+  pairs: SHAPE_PAIRS.map(([k]) => k), ranges: RANGES });

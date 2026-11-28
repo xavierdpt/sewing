@@ -144,6 +144,12 @@ export const DEFAULT_BODY = {
  * published charts disagree by several centimetres, so treat these as a starting
  * point to edit, which is the whole premise of the project anyway.
  */
+// How closely the calibrated rings must read what the tape asked for, in cm,
+// and how many rounds may be spent getting there. Both are measured against
+// the gate: `todos/body-measurements-todo.md` item 7.
+const CALIBRATION_TOL = 0.05;
+const CALIBRATION_ROUNDS = 12;
+
 export const SIZE_CHART = {
   labels: { eu: [32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52],
             us: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22],
@@ -175,6 +181,137 @@ export const SIZE_CHART = {
 };
 
 /** Measurements for a standard size, in cm. */
+/**
+ * The bounds the measurement form offers, DERIVED rather than invented.
+ *
+ * The first version of the form carried a hand-written minimum and maximum per
+ * field -- bust 45 to 170, low hip 30 to 200 -- which came from nowhere and
+ * bore no relation to each other, so the form offered combinations that are
+ * not bodies and the generator built them (`todos/body-measurements-spec.md`
+ * section 3 item 2). These come from `SIZE_CHART`, which is in this file and
+ * is graded, and from `DEFAULT_BODY` where the chart is silent. Each rule says
+ * which, because a bound whose provenance is unknown is the thing being
+ * replaced here.
+ */
+export const STATURE_RANGE = [120, 215];
+const CHART_MARGIN = 0.25;          // of the chart's own span, at each end
+// Lengths grow with stature rather than with size (the chart's own comment:
+// "a larger size is wider, not taller"), so they are bounded by the chart's
+// extremes carried across the stature range instead.
+const CHART_LENGTHS = ['backLength', 'bustHeightFromCBNP', 'frontLengthFromCBNP'];
+// Not in the chart, and bodies, so the default body carried across the stature
+// range is the honest bound.
+const SCALED_LENGTHS = ['waistToHip', 'crotchDepth', 'waistToKnee'];
+// Not in the chart and not stature-driven: half the default to nearly twice
+// it. The weakest rule here, and marked as such.
+const SPREAD_GIRTHS = { thighGirth: [0.5, 1.8], kneeGirth: [0.5, 1.8] };
+
+/**
+ * The relations the size chart holds across every one of its rows: the bust is
+ * 16 cm more than the underbust, the low hip 6 cm more than the bust, the
+ * waist 18 to 20 cm less. They are what makes a set of measurements a body
+ * rather than a set of numbers, and the form used to represent none of them.
+ *
+ * The tolerance is the chart's own grading step -- girths grade 4 to 6 cm per
+ * size -- taken twice over: a body two sizes away from the relation is a real
+ * body, one further out is worth saying out loud. It is advisory. Whether the
+ * generator can actually BUILD the measurements is a separate question, and
+ * `unmet` answers that one.
+ */
+const CHART_RELATIONS = [
+  { of: 'bust', from: 'underBust', by: 16, tol: 8, label: 'bust over underbust' },
+  { of: 'lowHip', from: 'bust', by: 6, tol: 8, label: 'low hip over bust' },
+  { of: 'bust', from: 'waist', by: 20, tol: 8, label: 'bust over waist' },
+  // The verticals relate too, and breaking one is what still split the torso
+  // after the girths were coupled: an apex that cannot sit between the nape
+  // and the waist has nowhere to go. The chart's own spread across eleven
+  // sizes is 4 cm for the first and 1 cm for the second, so the tolerance is
+  // wider than the spread and still far inside the degenerate cases, which
+  // miss by 13 and 19 cm.
+  { of: 'frontLengthFromCBNP', from: 'bustHeightFromCBNP', by: 24, tol: 6,
+    label: 'front length over bust height' },
+  { of: 'backLength', from: 'bustHeightFromCBNP', by: 11, tol: 6,
+    label: 'back length over bust height' },
+];
+
+export function relationNotes(M) {
+  const out = [];
+  for (const r of CHART_RELATIONS) {
+    const got = M[r.of] - M[r.from];
+    if (Math.abs(got - r.by) > r.tol) {
+      out.push(`${r.label} is ${got.toFixed(1)} cm where the size chart has ${r.by}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * What the coupled fields become when `key` moves from `was` to `value`.
+ *
+ * `was` is passed in rather than read from `M`, because the control writes
+ * the new value into `M` BEFORE the edit-finished handler runs -- reading it
+ * there gives a delta of zero every time, which is how the first version of
+ * this quietly did nothing.
+ */
+const COUPLINGS = {
+  // a graded chart moves the girths together ...
+  bust: ['underBust', 'waist', 'lowHip'],
+  // ... and the verticals together with the nape, so moving the back length
+  // or the bust height does not leave the apex stranded
+  backLength: ['bustHeightFromCBNP', 'frontLengthFromCBNP'],
+  // and NOT bustHeightFromCBNP -> frontLengthFromCBNP, however tempting the
+  // symmetry looks: the generator reads those two only as their difference
+  // (the apex-to-waist arc), so carrying one with the other leaves the body
+  // identical and makes the control inert -- measured at 0 changed pixels,
+  // twice, which is the same fault as the breadth pairs had.
+};
+
+export function coupledEdit(M, key, value, was) {
+  const out = {};
+  const follows = COUPLINGS[key];
+  if (!follows) return out;
+  // A graded chart moves the girths together, so the bust carries the others
+  // with it and a person's own deviation from the relation is PRESERVED --
+  // which a snap to the chart's exact difference would destroy. Editing a
+  // carried field afterwards simply sets it; nothing snaps back.
+  const d = value - was;
+  if (!d) return out;
+  for (const key2 of follows) out[key2] = +(M[key2] + d).toFixed(1);
+  return out;
+}
+
+export function measurementRanges() {
+  const r1 = (v) => +v.toFixed(1);
+  const lo0 = STATURE_RANGE[0] / DEFAULT_BODY.height;
+  const hi0 = STATURE_RANGE[1] / DEFAULT_BODY.height;
+  const R = { height: [...STATURE_RANGE] };
+  SIZE_CHART.keys.forEach((key, i) => {
+    const col = SIZE_CHART.rows.map((row) => row[i]);
+    const lo = Math.min(...col), hi = Math.max(...col);
+    R[key] = CHART_LENGTHS.includes(key)
+      ? [r1(lo * lo0), r1(hi * hi0)]
+      : [r1(lo - (hi - lo) * CHART_MARGIN), r1(hi + (hi - lo) * CHART_MARGIN)];
+  });
+  for (const key of SCALED_LENGTHS) {
+    R[key] = [r1(DEFAULT_BODY[key] * lo0), r1(DEFAULT_BODY[key] * hi0)];
+  }
+  for (const [key, [a, b]] of Object.entries(SPREAD_GIRTHS)) {
+    R[key] = [r1(DEFAULT_BODY[key] * a), r1(DEFAULT_BODY[key] * b)];
+  }
+  // How much neck to carry above the nape is a modelling choice, not a
+  // measurement of a person, and 0 (no neck above the nape) has to stay
+  // reachable -- so this one keeps its stated range.
+  R.neckHeight = [0, 20];
+  // Breadth and depth: 0 keeps the default proportion, and the upper bound is
+  // geometry rather than a survey -- a closed loop of girth G cannot be wider
+  // than G / 2.
+  R.hipWidth = [0, r1(R.lowHip[1] / 2)];
+  R.hipThickness = [0, r1(R.lowHip[1] / 2)];
+  R.waistWidth = [0, r1(R.waist[1] / 2)];
+  R.waistThickness = [0, r1(R.waist[1] / 2)];
+  return R;
+}
+
 export function standardSize(index) {
   const row = SIZE_CHART.rows[clamp(index, 0, SIZE_CHART.rows.length - 1)];
   const out = {};
@@ -347,18 +484,42 @@ export class Body {
     };
     this.bustProjection = 3.5 * hf;
 
-    if (!this.girthScale) {
-      this.girthScale = { lowHip: 1, highHip: 1, waist: 1, underBust: 1, chest: 1, neck: 1 };
-    }
+    // Reset, every build. These scales used to be created once and then
+    // carried from one body to the next, which made build() a function of its
+    // HISTORY as well as its measurements: the same measurements gave a
+    // different body depending on what had been built before, and one extreme
+    // value left every later body deformed (`todos/body-measurements-spec.md`
+    // section 2 has the measurement -- bust apex 22.1 cm, then 4.9 cm for the
+    // same numbers). The calibration below now starts from 1 and iterates
+    // until it has converged, so the starting point no longer matters.
+    this.girthScale = { lowHip: 1, highHip: 1, waist: 1, underBust: 1, chest: 1, neck: 1 };
     const G = this.girthScale;
     // A measured breadth and depth fix the ASPECT of a ring; the girth still
     // fixes its size. Giving all three over-determines the ellipse, so girth
     // wins and measure() reports the breadth and depth actually achieved, which
     // is where you see the disagreement.
-    const ratioOf = (key, fallback) => {
+    const ratioOf = (key, fallback, girth, n) => {
       const w = { lowHip: M.hipWidth, waist: M.waistWidth }[key] || 0;
       const d = { lowHip: M.hipThickness, waist: M.waistThickness }[key] || 0;
-      return (w > 0 && d > 0) ? w / d : fallback;
+      if (w > 0 && d > 0) return w / d;
+      // ONE HALF OF A PAIR IS ENOUGH. The girth already fixes the size of the
+      // ring, so a breadth on its own fixes the aspect too: find the ratio
+      // whose ring is that wide (or that deep) at this girth. It used to take
+      // both halves, which made a single measurement inert -- 3 changed
+      // pixels, measured in three sweeps (`todos/body-measurements-spec.md`
+      // section 4 question 5). Width grows with the ratio and depth shrinks,
+      // so plain bisection is enough.
+      if (w > 0 || d > 0) {
+        let lo = 0.5, hi = 4;
+        for (let i = 0; i < 30; i++) {
+          const mid = (lo + hi) / 2;
+          const ax = axesFor(girth, mid, n);
+          const got = w > 0 ? 2 * ax.a : 2 * ax.b;
+          if (w > 0 ? got < w : got > d) lo = mid; else hi = mid;
+        }
+        return (lo + hi) / 2;
+      }
+      return fallback;
     };
     const setRings = () => {
       // Derive into a LOCAL copy. Writing the derived heights back onto
@@ -414,8 +575,8 @@ export class Body {
           underBust: M.underBust, bust: ribAtBustGirth, chest: chestGirth,
           // the neck narrows a little going up from the nape
           neck: M.neckCircumference, neckTop: M.neckCircumference * 0.93 }[key];
-        const { a, b } = axesFor(girth * (G[key] === undefined ? 1 : G[key]),
-          ratioOf(key, RATIO[key]), n);
+        const scaled = girth * (G[key] === undefined ? 1 : G[key]);
+        const { a, b } = axesFor(scaled, ratioOf(key, RATIO[key], scaled, n), n);
         return { key, y, a, b };
       });
       this.ys = this.rings.map((r) => r.y);
@@ -502,11 +663,33 @@ export class Body {
     const targets = { lowHip: M.lowHip, waist: M.waist,
       underBust: M.underBust, neck: M.neckCircumference };
     for (const k2 of ENVELOPE_RINGS) delete G[k2];     // these are not girth-driven
-    for (let round = 0; round < 3; round++) {
+    // Iterate until the rings read what the tape asked for, rather than a
+    // fixed three rounds: three was enough from the warm start of a body that
+    // was already close, and is not enough from a cold one. CALIBRATION_TOL
+    // is the residual that counts as converged and CALIBRATION_ROUNDS the cap,
+    // so a body that cannot be reached stops rather than spinning -- and says
+    // so through `unmet` below.
+    this.calibrationRounds = 0;
+    for (let round = 0; round < CALIBRATION_ROUNDS; round++) {
+      const got = {};
+      let worst = 0;
       for (const key of Object.keys(targets)) {
-        const got = this.girthAt(this.vOfY(this.heights[key]), 200);
-        if (got > 1) G[key] *= targets[key] / got;
+        got[key] = this.girthAt(this.vOfY(this.heights[key]), 200);
+        worst = Math.max(worst, Math.abs(got[key] - targets[key]));
       }
+      // Converged: stop BEFORE touching anything, so the body that is kept is
+      // the one that was just measured and `unmet` still describes it.
+      if (round > 0 && worst <= CALIBRATION_TOL) break;
+      for (const key of Object.keys(targets)) {
+        if (got[key] > 1) G[key] *= targets[key] / got[key];
+      }
+      this.calibrationRounds = round + 1;
+      // `unmet` describes the body that comes out, not the rounds on the way
+      // to it: a residual the next round fixes is not a measurement that was
+      // missed. Every solve in this loop runs again on the next round, and
+      // the loop only ends through the check above or the round cap, so the
+      // entries kept are always the last ones written.
+      this.unmet = [];
       setRings();
       solve('backLength', neckFloor(), 80 * hf,
         () => this.arcLength(0.5, NAPE_V, this.vOfY(0)), M.backLength,
@@ -519,6 +702,21 @@ export class Body {
         (v) => { this.bustProjection = v; }, 18);
     }
 
+    // Breadths and depths are not reached through `solve()` -- the girth sets
+    // the ring's size and they only set its aspect -- so their residuals were
+    // reaching nobody: at a 98 cm hip, a width asked as 49, 55 or 73 cm all
+    // came out 44.4 and said nothing (`todos/body-measurements-todo.md` item
+    // 13). A loop of a given girth can only be so wide.
+    {
+      const A = this.measure();
+      for (const key of ['hipWidth', 'hipThickness', 'waistWidth', 'waistThickness']) {
+        const asked = M[key];
+        if (asked > 0 && Math.abs(A[key] - asked) > 0.15) {
+          this.unmet.push({ measurement: key, asked, got: A[key], errorCm: A[key] - asked });
+        }
+      }
+    }
+
     const notes = [];
     if (this.clamped && this.clamped.length) {
       notes.push(`ring heights clamped (${[...new Set(this.clamped)].join(', ')})`);
@@ -529,6 +727,13 @@ export class Body {
     }
     this.warning = notes.length
       ? `these measurements do not fit together: ${notes.join('; ')}` : null;
+    // Kept apart from `warning` on purpose: a measurement the solver could
+    // not reach is a failure, and a body that differs from the size chart is
+    // only unusual -- which is the premise of the project, so it must not be
+    // reported in the same voice.
+    this.relations = relationNotes(M);
+    this.advisory = this.relations.length
+      ? `unusual for a size chart: ${this.relations.join('; ')}` : null;
 
     this.derived = {
       chestGirth, highHipGirth, bustProjection: this.bustProjection,
